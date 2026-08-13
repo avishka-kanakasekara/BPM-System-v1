@@ -56,7 +56,9 @@ class TestBudgetValidation:
             cost_centre="CC001",
         )
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         assert result.budget_validation is not None
@@ -81,7 +83,9 @@ class TestBudgetValidation:
             cost_centre="CC001",
         )
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         assert result.budget_validation is not None
@@ -105,7 +109,9 @@ class TestBudgetValidation:
             currency="USD",
         )
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         assert result.budget_validation is not None
@@ -129,7 +135,9 @@ class TestBudgetValidation:
             currency="USD",
         )
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         assert result.budget_validation is not None
@@ -152,7 +160,9 @@ class TestBudgetValidation:
             currency="USD",
         )
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         assert result.budget_validation is not None
@@ -175,7 +185,9 @@ class TestBudgetValidation:
             currency="EUR",
         )
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         assert result.budget_validation is not None
@@ -192,7 +204,9 @@ class TestBudgetValidation:
 
         requirement = _requirement(evaluation_timestamp)
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result.budget_validation is not None
         assert result.budget_validation.validity_period_valid is True
@@ -208,7 +222,9 @@ class TestBudgetValidation:
 
         requirement = _requirement(evaluation_timestamp)
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result.budget_validation is not None
         assert result.budget_validation.validity_period_valid is False
@@ -231,7 +247,9 @@ class TestBudgetValidation:
             currency="USD",
         )
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         assert result.budget_validation is not None
@@ -255,7 +273,9 @@ class TestBudgetValidation:
             currency="USD",
         )
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         assert result.budget_validation is not None
@@ -271,7 +291,9 @@ class TestBudgetValidation:
 
         requirement = _requirement(evaluation_timestamp, currency="USD")
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         # BUDGET should not return eligible candidates like HUMAN strategy
@@ -287,7 +309,9 @@ class TestBudgetValidation:
 
         requirement = _requirement(evaluation_timestamp, currency="USD")
         
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
         
         assert result is not None
         # BUDGET validation should not include score breakdown

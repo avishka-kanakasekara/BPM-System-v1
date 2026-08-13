@@ -67,6 +67,7 @@ class ResourceAllocationService:
                 try:
                     human_result = await self.human_strategy.process_requirement(
                         requirement=request.human_requirements,
+                        tenant_id=request.metadata.tenant_id,
                         evaluation_timestamp=evaluation_timestamp,
                     )
                 except Exception as exc:
@@ -82,6 +83,7 @@ class ResourceAllocationService:
                 try:
                     budget_result = await self.budget_strategy.process_requirement(
                         requirement=request.budget_requirements,
+                        tenant_id=request.metadata.tenant_id,
                         evaluation_timestamp=evaluation_timestamp,
                     )
                 except Exception as exc:

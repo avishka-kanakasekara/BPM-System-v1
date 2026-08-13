@@ -31,19 +31,19 @@ class HumanResourceStrategy(ResourceStrategy):
     async def process_requirement(
         self,
         requirement: HumanResourceRequirement,
+        tenant_id: UUID,
         evaluation_timestamp: datetime,
     ) -> RequirementResult:
         """Process a HUMAN resource requirement.
-        
+
         Pipeline:
         1. Retrieve candidates (tenant-scoped only)
         2. Evaluate eligibility (hard rules)
         3. Rank eligible resources (deterministic scoring)
         4. Return results
         """
-        # Step 1: Retrieve candidates
         candidates = await self.retriever.retrieve_human_candidates(
-            tenant_id=requirement.requester_id,  # Use requester's tenant
+            tenant_id=tenant_id,
             evaluation_timestamp=evaluation_timestamp,
         )
         
