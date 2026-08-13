@@ -60,7 +60,9 @@ class TestServiceExclusions:
             process_stage="resource_allocation",
         )
 
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
 
         excluded = result.excluded_resources
         assert len(excluded) == 1
@@ -93,7 +95,9 @@ class TestServiceExclusions:
             process_stage="resource_allocation",
         )
 
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
 
         assert len(result.eligible_candidates) == 0
         assert len(result.excluded_resources) > 0
@@ -124,7 +128,9 @@ class TestServiceExclusions:
             process_stage="resource_allocation",
         )
 
-        result = await strategy.process_requirement(requirement, evaluation_timestamp)
+        result = await strategy.process_requirement(
+            requirement, get_requester_id(), evaluation_timestamp
+        )
 
         assert len(result.eligible_candidates) == 0
         assert len(result.excluded_resources) == 0
