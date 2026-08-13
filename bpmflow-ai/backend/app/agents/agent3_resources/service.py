@@ -16,15 +16,14 @@ from .schemas import (
 from .strategies.human import HumanResourceStrategy
 from .strategies.budget import BudgetResourceStrategy
 from .gaps import GapDetector
-from .explainer_template import TemplateExplainer
+from .explainer_template import TemplateExplainer, ExplanationContext
 from .constants import MessageType
 from .failures import (
     detect_invalid_request,
-    detect_human_failure,
-    detect_budget_failure,
     build_failed_recommendation,
     build_resource_lookup_failure,
-    FailureSpec,
+    build_internal_error_failure,
+    is_resource_lookup_error,
 )
 
 
@@ -46,8 +45,8 @@ class ResourceAllocationService:
     ) -> AllocationRecommendation:
         """Process a resource allocation request.
 
-        Every domain-level failure is returned as a schema-valid FAILED
-        recommendation. This method never raises unhandled exceptions.
+        Business constraint outcomes return PENDING_HUMAN_APPROVAL.
+        Technical failures return FAILED. This method never raises.
         """
         response_metadata: Optional[AgentMessageMetadata] = None
 
@@ -61,11 +60,7 @@ class ResourceAllocationService:
 
             invalid_request = detect_invalid_request(request, evaluation_timestamp)
             if invalid_request is not None:
-                return build_failed_recommendation(
-                    request.metadata,
-                    response_metadata,
-                    invalid_request,
-                )
+                return build_failed_recommendation(response_metadata, invalid_request)
 
             human_result = None
             if request.human_requirements is not None:
@@ -75,19 +70,12 @@ class ResourceAllocationService:
                         evaluation_timestamp=evaluation_timestamp,
                     )
                 except Exception as exc:
-                    return build_resource_lookup_failure(
-                        request.metadata,
-                        response_metadata,
-                        str(exc),
-                    )
-
-                human_failure = detect_human_failure(human_result)
-                if human_failure is not None:
-                    return build_failed_recommendation(
-                        request.metadata,
-                        response_metadata,
-                        human_failure,
-                    )
+                    if is_resource_lookup_error(exc):
+                        return build_resource_lookup_failure(
+                            response_metadata,
+                            str(exc),
+                        )
+                    return build_internal_error_failure(response_metadata)
 
             budget_result = None
             if request.budget_requirements is not None:
@@ -97,70 +85,60 @@ class ResourceAllocationService:
                         evaluation_timestamp=evaluation_timestamp,
                     )
                 except Exception as exc:
-                    return build_resource_lookup_failure(
-                        request.metadata,
-                        response_metadata,
-                        str(exc),
-                    )
+                    if is_resource_lookup_error(exc):
+                        return build_resource_lookup_failure(
+                            response_metadata,
+                            str(exc),
+                        )
+                    return build_internal_error_failure(response_metadata)
 
-                budget_failure = detect_budget_failure(budget_result)
-                if budget_failure is not None:
-                    return build_failed_recommendation(
-                        request.metadata,
-                        response_metadata,
-                        budget_failure,
-                    )
-
-            return self._build_success_recommendation(
-                request_metadata=request.metadata,
+            return self._build_business_recommendation(
                 response_metadata=response_metadata,
                 human_result=human_result,
                 budget_result=budget_result,
             )
-        except Exception as exc:
+        except Exception:
             if response_metadata is None:
                 response_metadata = self._build_response_metadata(request.metadata)
-            return build_resource_lookup_failure(
-                request.metadata,
-                response_metadata,
-                str(exc),
-            )
+            return build_internal_error_failure(response_metadata)
 
-    def _build_success_recommendation(
+    def _build_business_recommendation(
         self,
-        request_metadata: AgentMessageMetadata,
         response_metadata: AgentMessageMetadata,
         human_result,
         budget_result,
     ) -> AllocationRecommendation:
-        """Build a successful PENDING_HUMAN_APPROVAL recommendation."""
+        """Build a completed business recommendation, including constraint outcomes."""
         resource_gaps = []
         alternatives = []
         limitations = []
 
-        if human_result and len(human_result.eligible_candidates) == 0:
-            gap = self.gap_detector.detect_human_resource_gap(human_result)
-            if gap:
-                resource_gaps.append(gap)
-                alternatives = self.gap_detector.generate_alternatives(
-                    resource_type=human_result.resource_type,
-                )
-                limitations.append("No eligible HUMAN resources found for this requirement")
+        if human_result is not None:
+            human_gaps, human_alternatives, human_limitations = (
+                self.gap_detector.analyze_human_constraint(human_result)
+            )
+            resource_gaps.extend(human_gaps)
+            alternatives.extend(human_alternatives)
+            limitations.extend(human_limitations)
+
+        if budget_result is not None:
+            budget_gaps, budget_limitations = self.gap_detector.analyze_budget_constraint(
+                budget_result
+            )
+            resource_gaps.extend(budget_gaps)
+            limitations.extend(budget_limitations)
 
         confidence = self._calculate_confidence(human_result, budget_result)
-        explanation_context = AllocationRecommendation.model_construct(
-            metadata=response_metadata,
-            status=RecommendationStatus.PENDING_HUMAN_APPROVAL,
-            human_requirement_result=human_result,
-            budget_requirement_result=budget_result,
-            resource_gaps=resource_gaps,
-            alternatives=alternatives,
-            explanation="",
-            requires_human_approval=True,
-            confidence=confidence,
-            limitations=limitations,
+        explanation = self.explainer.generate_explanation(
+            ExplanationContext(
+                human_requirement_result=human_result,
+                budget_requirement_result=budget_result,
+                resource_gaps=resource_gaps,
+                alternatives=alternatives,
+                limitations=limitations,
+                confidence=confidence,
+            )
         )
-        explanation = self.explainer.generate_explanation(explanation_context)
 
         return AllocationRecommendation(
             metadata=response_metadata,
@@ -171,6 +149,7 @@ class ResourceAllocationService:
             alternatives=alternatives,
             explanation=explanation,
             requires_human_approval=True,
+            manual_intervention_required=False,
             confidence=confidence,
             limitations=limitations,
         )

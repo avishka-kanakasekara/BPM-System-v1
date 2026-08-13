@@ -1,12 +1,11 @@
 """Integration tests for Agent 3 Resource Allocation."""
 
 import pytest
+from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
 pytestmark = pytest.mark.anyio
-
-from app.tests.conftest import utc_datetime
 
 from app.agents.agent3_resources import (
     ResourceAllocationService,
@@ -27,6 +26,26 @@ from app.agents.agent3_resources import (
 )
 
 
+def _task_deadline(evaluation_timestamp):
+    return evaluation_timestamp + timedelta(days=150)
+
+
+def _human_resource(evaluation_timestamp, **overrides):
+    return create_human_evidence(
+        tenant_id=get_requester_id(),
+        reference_timestamp=evaluation_timestamp,
+        **overrides,
+    )
+
+
+def _budget_resource(evaluation_timestamp, **overrides):
+    return create_budget_evidence(
+        tenant_id=get_requester_id(),
+        reference_timestamp=evaluation_timestamp,
+        **overrides,
+    )
+
+
 class TestAgent3Integration:
     """Integration tests for complete Agent 3 pipeline."""
 
@@ -36,8 +55,8 @@ class TestAgent3Integration:
         service = ResourceAllocationService(repository)
         
         # Add multiple human resources
-        resource1 = create_human_evidence(
-            tenant_id=get_requester_id(),
+        resource1 = _human_resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             name="Senior Developer",
             is_active=True,
@@ -48,11 +67,10 @@ class TestAgent3Integration:
             current_workload=Decimal("30"),
             max_workload=Decimal("100"),
         )
-        resource1.available_from = utc_datetime(2025, 12, 1)  # Before deadline
         repository.add_human_resource(resource1)
-        
-        resource2 = create_human_evidence(
-            tenant_id=get_requester_id(),
+
+        resource2 = _human_resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_2(),
             name="Junior Developer",
             is_active=True,
@@ -63,7 +81,6 @@ class TestAgent3Integration:
             current_workload=Decimal("50"),
             max_workload=Decimal("100"),
         )
-        resource2.available_from = utc_datetime(2025, 12, 1)  # Before deadline
         repository.add_human_resource(resource2)
         
         # Create request
@@ -82,7 +99,7 @@ class TestAgent3Integration:
             preferred_skills=["fastapi"],
             required_authority="senior",
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("20"),
             process_stage="resource_allocation",
         )
@@ -110,8 +127,8 @@ class TestAgent3Integration:
         
         # Add budget resource
         repository.add_budget_resource(
-            create_budget_evidence(
-                tenant_id=get_requester_id(),
+            _budget_resource(
+                evaluation_timestamp,
                 name="Team Budget 2026",
                 available_balance=Decimal("50000"),
                 currency="USD",
@@ -134,7 +151,7 @@ class TestAgent3Integration:
             currency="USD",
             cost_centre="CC001",
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             process_stage="resource_allocation",
         )
         
@@ -157,19 +174,18 @@ class TestAgent3Integration:
         service = ResourceAllocationService(repository)
         
         # Add resources
-        human_resource = create_human_evidence(
-            tenant_id=get_requester_id(),
+        human_resource = _human_resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             is_active=True,
             roles=["developer"],
             mandatory_skills=["python"],
         )
-        human_resource.available_from = utc_datetime(2025, 12, 1)
         repository.add_human_resource(human_resource)
-        
+
         repository.add_budget_resource(
-            create_budget_evidence(
-                tenant_id=get_requester_id(),
+            _budget_resource(
+                evaluation_timestamp,
                 available_balance=Decimal("10000"),
                 currency="USD",
             )
@@ -186,7 +202,7 @@ class TestAgent3Integration:
         human_req = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -196,7 +212,7 @@ class TestAgent3Integration:
             required_amount=Decimal("5000"),
             currency="USD",
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             process_stage="resource_allocation",
         )
         
@@ -213,18 +229,17 @@ class TestAgent3Integration:
         assert recommendation.budget_requirement_result is not None
         assert recommendation.explanation is not None
 
-    async def test_end_to_end_no_eligible_returns_failed(self, evaluation_timestamp):
-        """Test end-to-end failure when only ineligible resources exist."""
+    async def test_end_to_end_gap_detection_and_alternatives(self, evaluation_timestamp):
+        """Test end-to-end gap detection with alternatives."""
         repository = InMemoryResourceRepository()
         service = ResourceAllocationService(repository)
 
-        repository.add_human_resource(
-            create_human_evidence(
-                tenant_id=get_requester_id(),
-                resource_id=get_resource_id_1(),
-                is_active=False,
-            )
+        resource = _human_resource(
+            evaluation_timestamp,
+            resource_id=get_resource_id_1(),
+            is_active=False,
         )
+        repository.add_human_resource(resource)
 
         metadata = AgentMessageMetadata(
             correlation_id=uuid4(),
@@ -237,7 +252,7 @@ class TestAgent3Integration:
         human_req = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -249,10 +264,11 @@ class TestAgent3Integration:
 
         recommendation = await service.process_allocation_request(request, evaluation_timestamp)
 
-        assert recommendation.status == RecommendationStatus.FAILED
-        assert recommendation.error_code == "NO_ELIGIBLE_CANDIDATES"
-        assert recommendation.retryable is True
-        assert recommendation.resource_gaps == []
+        assert recommendation.status == RecommendationStatus.PENDING_HUMAN_APPROVAL
+        assert len(recommendation.resource_gaps) > 0
+        assert len(recommendation.alternatives) > 0
+        assert len(recommendation.limitations) > 0
+        assert "Suggested Alternatives" in recommendation.explanation
 
     async def test_end_to_end_message_contract_preservation(self, evaluation_timestamp):
         """Test that message contract is preserved through pipeline."""
@@ -264,8 +280,8 @@ class TestAgent3Integration:
         task_id = uuid4()
         
         repository.add_human_resource(
-            create_human_evidence(
-                tenant_id=get_requester_id(),
+            _human_resource(
+                evaluation_timestamp,
                 resource_id=get_resource_id_1(),
             )
         )
@@ -281,7 +297,7 @@ class TestAgent3Integration:
         human_req = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )

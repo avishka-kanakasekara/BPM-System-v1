@@ -11,6 +11,7 @@ from .constants import (
     ExclusionReason,
     RecommendationStatus,
     GapAlternativeType,
+    GapType,
     MessageType,
     SCHEMA_VERSION,
     AGENT_3_SENDER,
@@ -310,7 +311,8 @@ class RequirementResult(BaseModel):
 # ============================================================================
 
 class ResourceGap(BaseModel):
-    """Detected resource gap."""
+    """Detected resource gap from a completed business analysis."""
+    gap_type: GapType
     resource_type: ResourceType
     gap_description: str
     eligible_count: int = 0
@@ -347,19 +349,12 @@ class AllocationRecommendation(BaseModel):
     alternatives: List[ResourceAlternative] = Field(default_factory=list)
     explanation: str = ""
     requires_human_approval: bool = True
+    manual_intervention_required: bool = False
     confidence: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
     limitations: List[str] = Field(default_factory=list)
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     retryable: Optional[bool] = None
-
-    @field_validator("requires_human_approval")
-    @classmethod
-    def human_approval_always_required(cls, v: bool) -> bool:
-        """Agent 3 must always require human approval."""
-        if not v:
-            raise ValueError("Agent 3 must always require human approval")
-        return v
 
     @field_validator("status")
     @classmethod
@@ -386,6 +381,14 @@ class AllocationRecommendation(BaseModel):
                 raise ValueError("Successful recommendation requires confidence")
             if not self.requires_human_approval:
                 raise ValueError("Successful recommendation requires human approval")
+            if self.manual_intervention_required:
+                raise ValueError(
+                    "Successful recommendation must not require manual intervention"
+                )
+            if self.error_code or self.error_message or self.retryable is not None:
+                raise ValueError(
+                    "Successful recommendation must not include technical error fields"
+                )
         elif self.status == RecommendationStatus.FAILED:
             if not self.error_code or not self.error_code.strip():
                 raise ValueError("FAILED recommendation requires error_code")
@@ -393,4 +396,26 @@ class AllocationRecommendation(BaseModel):
                 raise ValueError("FAILED recommendation requires error_message")
             if self.retryable is None:
                 raise ValueError("FAILED recommendation requires retryable")
+            if self.requires_human_approval:
+                raise ValueError(
+                    "FAILED recommendation must not require human approval"
+                )
+            if not self.manual_intervention_required:
+                raise ValueError(
+                    "FAILED recommendation requires manual intervention"
+                )
+            if self.human_requirement_result is not None:
+                raise ValueError(
+                    "FAILED recommendation must not include human requirement results"
+                )
+            if self.budget_requirement_result is not None:
+                raise ValueError(
+                    "FAILED recommendation must not include budget requirement results"
+                )
+            if self.resource_gaps or self.alternatives:
+                raise ValueError(
+                    "FAILED recommendation must not include business gap payloads"
+                )
+            if self.confidence is not None:
+                raise ValueError("FAILED recommendation must not include confidence")
         return self

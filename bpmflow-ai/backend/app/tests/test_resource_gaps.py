@@ -10,6 +10,7 @@ from app.agents.agent3_resources import (
     RequirementResult,
     ResourceType,
     GapAlternativeType,
+    GapType,
 )
 
 
@@ -30,7 +31,7 @@ class TestResourceGaps:
         
         assert gap is not None
         assert gap.resource_type == ResourceType.HUMAN
-        assert gap.eligible_count == 0
+        assert gap.gap_type == GapType.NO_ELIGIBLE_HUMAN
 
     def test_no_gap_when_eligible_candidates_exist(self):
         """Test that no gap is detected when eligible candidates exist."""

@@ -1,22 +1,32 @@
-"""Failure detection and FAILED recommendation construction for Agent 3."""
+"""Technical failure detection and FAILED recommendation construction."""
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Type, Tuple
 
-from .constants import ExclusionReason, FailureErrorCode, FAILURE_RETRYABLE
+from .constants import FailureErrorCode, FAILURE_RETRYABLE, ResourceLookupError
 from .schemas import (
     AllocationRequest,
     AllocationRecommendation,
     AgentMessageMetadata,
-    RequirementResult,
     RecommendationStatus,
+)
+
+RESOURCE_LOOKUP_EXCEPTIONS: Tuple[Type[BaseException], ...] = (
+    ResourceLookupError,
+    ConnectionError,
+    OSError,
+)
+
+INTERNAL_ERROR_MESSAGE = (
+    "An internal processing error occurred. "
+    "Reference the correlation ID for audit and support."
 )
 
 
 @dataclass(frozen=True)
 class FailureSpec:
-    """Describes a plan-level allocation failure."""
+    """Describes a technical failure preventing analysis completion."""
     error_code: FailureErrorCode
     error_message: str
 
@@ -53,92 +63,11 @@ def detect_invalid_request(
     return None
 
 
-def _all_have_exclusion_reason(
-    excluded_resources,
-    reason: ExclusionReason,
-) -> bool:
-    """Return True when every excluded resource includes the given reason."""
-    if not excluded_resources:
-        return False
-    return all(
-        any(entry.reason == reason for entry in resource.exclusion_reasons)
-        for resource in excluded_resources
-    )
-
-
-def detect_human_failure(
-    human_result: Optional[RequirementResult],
-) -> Optional[FailureSpec]:
-    """Detect plan-level HUMAN allocation failures."""
-    if human_result is None or human_result.eligible_candidates:
-        return None
-
-    excluded = human_result.excluded_resources
-
-    if _all_have_exclusion_reason(excluded, ExclusionReason.MISSING_REQUIRED_EVIDENCE):
-        return FailureSpec(
-            error_code=FailureErrorCode.MISSING_REQUIRED_EVIDENCE,
-            error_message=(
-                "All candidates lack required availability or workload evidence; "
-                "no candidate can be ranked"
-            ),
-        )
-
-    if _all_have_exclusion_reason(
-        excluded,
-        ExclusionReason.SEGREGATION_OF_DUTIES_VIOLATION,
-    ):
-        return FailureSpec(
-            error_code=FailureErrorCode.SOD_CONFLICT_UNRESOLVED,
-            error_message=(
-                "Segregation-of-duties conflict with no alternative candidate available"
-            ),
-        )
-
-    return FailureSpec(
-        error_code=FailureErrorCode.NO_ELIGIBLE_CANDIDATES,
-        error_message=(
-            "No eligible HUMAN candidates remain after eligibility filtering"
-        ),
-    )
-
-
-def detect_budget_failure(
-    budget_result: Optional[RequirementResult],
-) -> Optional[FailureSpec]:
-    """Detect plan-level BUDGET validation failures."""
-    if budget_result is None:
-        return None
-
-    validation = budget_result.budget_validation
-    if validation is None:
-        return FailureSpec(
-            error_code=FailureErrorCode.BUDGET_UNAVAILABLE,
-            error_message="No budget resource available for validation",
-        )
-
-    checks = (
-        validation.sufficient_balance,
-        validation.cost_centre_match,
-        validation.currency_match,
-        validation.validity_period_valid,
-        validation.within_authorization_limit,
-    )
-    if not all(checks):
-        return FailureSpec(
-            error_code=FailureErrorCode.BUDGET_UNAVAILABLE,
-            error_message="Budget validation failed with no feasible fallback",
-        )
-
-    return None
-
-
 def build_failed_recommendation(
-    request_metadata: AgentMessageMetadata,
     response_metadata: AgentMessageMetadata,
     failure: FailureSpec,
 ) -> AllocationRecommendation:
-    """Build a schema-valid FAILED recommendation without success payload."""
+    """Build a schema-valid FAILED recommendation without business payload."""
     return AllocationRecommendation(
         metadata=response_metadata,
         status=RecommendationStatus.FAILED,
@@ -147,9 +76,10 @@ def build_failed_recommendation(
         resource_gaps=[],
         alternatives=[],
         explanation="",
-        requires_human_approval=True,
+        requires_human_approval=False,
+        manual_intervention_required=True,
         confidence=None,
-        limitations=[failure.error_message],
+        limitations=[],
         error_code=failure.error_code.value,
         error_message=failure.error_message,
         retryable=failure.retryable,
@@ -157,7 +87,6 @@ def build_failed_recommendation(
 
 
 def build_resource_lookup_failure(
-    request_metadata: AgentMessageMetadata,
     response_metadata: AgentMessageMetadata,
     detail: str,
 ) -> AllocationRecommendation:
@@ -166,4 +95,20 @@ def build_resource_lookup_failure(
         error_code=FailureErrorCode.RESOURCE_LOOKUP_FAILED,
         error_message=f"Resource lookup failed: {detail}",
     )
-    return build_failed_recommendation(request_metadata, response_metadata, failure)
+    return build_failed_recommendation(response_metadata, failure)
+
+
+def build_internal_error_failure(
+    response_metadata: AgentMessageMetadata,
+) -> AllocationRecommendation:
+    """Build a FAILED recommendation for unexpected internal errors."""
+    failure = FailureSpec(
+        error_code=FailureErrorCode.INTERNAL_ERROR,
+        error_message=INTERNAL_ERROR_MESSAGE,
+    )
+    return build_failed_recommendation(response_metadata, failure)
+
+
+def is_resource_lookup_error(exc: BaseException) -> bool:
+    """Return True when an exception represents a resource lookup failure."""
+    return isinstance(exc, RESOURCE_LOOKUP_EXCEPTIONS)

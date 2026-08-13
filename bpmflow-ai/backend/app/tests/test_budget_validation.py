@@ -1,11 +1,10 @@
 """Tests for BUDGET validation strategy."""
 
 import pytest
+from datetime import timedelta
 from decimal import Decimal
 
 pytestmark = pytest.mark.anyio
-
-from app.tests.conftest import utc_datetime
 
 from app.agents.agent3_resources import (
     BudgetResourceStrategy,
@@ -18,6 +17,23 @@ from app.agents.agent3_resources import (
 )
 
 
+def _budget(evaluation_timestamp, **overrides):
+    return create_budget_evidence(
+        tenant_id=get_requester_id(),
+        reference_timestamp=evaluation_timestamp,
+        **overrides,
+    )
+
+
+def _requirement(evaluation_timestamp, **overrides):
+    return create_budget_requirement(
+        tenant_id=get_tenant_a_id(),
+        requester_id=get_requester_id(),
+        reference_timestamp=evaluation_timestamp,
+        **overrides,
+    )
+
+
 class TestBudgetValidation:
     """Test BUDGET validation checks."""
 
@@ -26,16 +42,15 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),  # Use requester_id as tenant for lookup
+        budget = _budget(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             available_balance=Decimal("10000"),
         )
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),  # Use consistent requester_id
+
+        requirement = _requirement(
+            evaluation_timestamp,
             required_amount=Decimal("5000"),
             currency="USD",
             cost_centre="CC001",
@@ -52,16 +67,15 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
+        budget = _budget(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             available_balance=Decimal("1000"),
         )
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             required_amount=Decimal("5000"),
             currency="USD",
             cost_centre="CC001",
@@ -78,16 +92,15 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
+        budget = _budget(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             cost_centre="CC001",
         )
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             cost_centre="CC001",
             currency="USD",
         )
@@ -103,16 +116,15 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
+        budget = _budget(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             cost_centre="CC001",
         )
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             cost_centre="CC002",
             currency="USD",
         )
@@ -128,16 +140,15 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
+        budget = _budget(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             currency="USD",
         )
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             currency="USD",
         )
         
@@ -152,16 +163,15 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
+        budget = _budget(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             currency="USD",
         )
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             currency="EUR",
         )
         
@@ -176,19 +186,11 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
-            resource_id=get_resource_id_1(),
-        )
-        # Manually set valid_until to a future date
-        from datetime import timedelta
+        budget = _budget(evaluation_timestamp, resource_id=get_resource_id_1())
         budget.valid_until = evaluation_timestamp + timedelta(days=365)
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
-        )
+
+        requirement = _requirement(evaluation_timestamp)
         
         result = await strategy.process_requirement(requirement, evaluation_timestamp)
         
@@ -200,19 +202,11 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
-            resource_id=get_resource_id_1(),
-        )
-        # Manually set valid_until to a past date
-        from datetime import timedelta
+        budget = _budget(evaluation_timestamp, resource_id=get_resource_id_1())
         budget.valid_until = evaluation_timestamp - timedelta(days=30)
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
-        )
+
+        requirement = _requirement(evaluation_timestamp)
         
         result = await strategy.process_requirement(requirement, evaluation_timestamp)
         
@@ -224,16 +218,15 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
+        budget = _budget(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             authorization_limit=Decimal("10000"),
         )
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             required_amount=Decimal("5000"),
             currency="USD",
         )
@@ -249,16 +242,15 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
+        budget = _budget(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             authorization_limit=Decimal("3000"),
         )
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             required_amount=Decimal("5000"),
             currency="USD",
         )
@@ -274,17 +266,10 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
-            resource_id=get_resource_id_1(),
-        )
+        budget = _budget(evaluation_timestamp, resource_id=get_resource_id_1())
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
-            currency="USD",
-        )
+
+        requirement = _requirement(evaluation_timestamp, currency="USD")
         
         result = await strategy.process_requirement(requirement, evaluation_timestamp)
         
@@ -297,17 +282,10 @@ class TestBudgetValidation:
         repository = InMemoryResourceRepository()
         strategy = BudgetResourceStrategy(repository)
         
-        budget = create_budget_evidence(
-            tenant_id=get_requester_id(),
-            resource_id=get_resource_id_1(),
-        )
+        budget = _budget(evaluation_timestamp, resource_id=get_resource_id_1())
         repository.add_budget_resource(budget)
-        
-        requirement = create_budget_requirement(
-            tenant_id=get_tenant_a_id(),
-            requester_id=get_requester_id(),
-            currency="USD",
-        )
+
+        requirement = _requirement(evaluation_timestamp, currency="USD")
         
         result = await strategy.process_requirement(requirement, evaluation_timestamp)
         

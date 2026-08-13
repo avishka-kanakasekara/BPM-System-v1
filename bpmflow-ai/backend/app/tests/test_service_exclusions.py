@@ -1,12 +1,11 @@
 """Tests for multiple exclusion reasons per resource."""
 
 import pytest
-from uuid import uuid4
+from datetime import timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 pytestmark = pytest.mark.anyio
-
-from app.tests.conftest import utc_datetime
 
 from app.agents.agent3_resources import (
     HumanResourceStrategy,
@@ -23,6 +22,18 @@ from app.agents.agent3_resources import (
 )
 
 
+def _task_deadline(evaluation_timestamp):
+    return evaluation_timestamp + timedelta(days=150)
+
+
+def _human_resource(evaluation_timestamp, **overrides):
+    return create_human_evidence(
+        tenant_id=get_requester_id(),
+        reference_timestamp=evaluation_timestamp,
+        **overrides,
+    )
+
+
 class TestServiceExclusions:
     """Test exclusion behavior at the HUMAN strategy layer."""
 
@@ -31,21 +42,20 @@ class TestServiceExclusions:
         repository = InMemoryResourceRepository()
         strategy = HumanResourceStrategy(repository)
 
-        resource = create_human_evidence(
-            tenant_id=get_requester_id(),
+        resource = _human_resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             is_active=False,
             roles=["wrong_role"],
             evidence_age_days=100,
         )
-        resource.available_from = utc_datetime(2025, 12, 1)
         repository.add_human_resource(resource)
 
         requirement = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             required_roles=["developer"],
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -68,8 +78,8 @@ class TestServiceExclusions:
         strategy = HumanResourceStrategy(repository)
 
         repository.add_human_resource(
-            create_human_evidence(
-                tenant_id=get_requester_id(),
+            _human_resource(
+                evaluation_timestamp,
                 resource_id=get_resource_id_1(),
                 is_active=False,
             )
@@ -78,7 +88,7 @@ class TestServiceExclusions:
         requirement = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -96,6 +106,7 @@ class TestServiceExclusions:
         repository.add_human_resource(
             create_human_evidence(
                 tenant_id=get_tenant_b_id(),
+                reference_timestamp=evaluation_timestamp,
                 resource_id=get_resource_id_1(),
                 is_active=True,
                 roles=["developer"],
@@ -108,7 +119,7 @@ class TestServiceExclusions:
             required_roles=["developer"],
             mandatory_skills=["python"],
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )

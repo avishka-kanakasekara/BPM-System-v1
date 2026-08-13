@@ -18,6 +18,7 @@ from app.agents.agent3_resources import (
     get_resource_id_2,
     get_resource_id_3,
 )
+from app.agents.agent3_resources.fixtures import FIXTURE_REFERENCE_TIMESTAMP
 
 UTC = timezone.utc
 
@@ -48,7 +49,7 @@ def requester_id():
 @pytest.fixture
 def evaluation_timestamp():
     """Fixed evaluation timestamp for deterministic behavior."""
-    return utc_datetime(2026, 1, 1, 12, 0, 0)
+    return FIXTURE_REFERENCE_TIMESTAMP
 
 
 @pytest.fixture
@@ -60,12 +61,12 @@ def repository():
 
 
 @pytest.fixture
-def populated_repository(tenant_a_id, repository):
+def populated_repository(tenant_a_id, repository, evaluation_timestamp):
     """Repository populated with test data."""
-    # Add some human resources
     repository.add_human_resource(
         create_human_evidence(
             tenant_id=tenant_a_id,
+            reference_timestamp=evaluation_timestamp,
             resource_id=get_resource_id_1(),
             name="Active Employee",
             is_active=True,
@@ -77,10 +78,11 @@ def populated_repository(tenant_a_id, repository):
             max_workload=Decimal("100"),
         )
     )
-    
+
     repository.add_human_resource(
         create_human_evidence(
             tenant_id=tenant_a_id,
+            reference_timestamp=evaluation_timestamp,
             resource_id=get_resource_id_2(),
             name="Inactive Employee",
             is_active=False,
@@ -90,16 +92,16 @@ def populated_repository(tenant_a_id, repository):
             max_workload=Decimal("100"),
         )
     )
-    
-    # Add budget resource
+
     repository.add_budget_resource(
         create_budget_evidence(
             tenant_id=tenant_a_id,
+            reference_timestamp=evaluation_timestamp,
             name="Team Budget",
             available_balance=Decimal("10000"),
             currency="USD",
             cost_centre="CC001",
         )
     )
-    
+
     return repository

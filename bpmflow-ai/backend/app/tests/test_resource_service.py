@@ -1,13 +1,11 @@
 """Tests for resource allocation service orchestration."""
 
 import pytest
-from datetime import timezone
+from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
 pytestmark = pytest.mark.anyio
-
-from app.tests.conftest import utc_datetime
 
 from app.agents.agent3_resources import (
     ResourceAllocationService,
@@ -28,6 +26,18 @@ from app.agents.agent3_resources import (
 )
 
 
+def _task_deadline(evaluation_timestamp):
+    return evaluation_timestamp + timedelta(days=150)
+
+
+def _human_resource(evaluation_timestamp, **overrides):
+    return create_human_evidence(
+        tenant_id=get_requester_id(),
+        reference_timestamp=evaluation_timestamp,
+        **overrides,
+    )
+
+
 class TestResourceService:
     """Test resource allocation service orchestration."""
 
@@ -37,9 +47,8 @@ class TestResourceService:
         service = ResourceAllocationService(repository)
         
         # Add eligible human resource
-        from datetime import timedelta
-        resource = create_human_evidence(
-            tenant_id=get_requester_id(),  # Use requester_id for consistency
+        resource = _human_resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             is_active=True,
             roles=["developer"],
@@ -49,8 +58,6 @@ class TestResourceService:
             current_workload=Decimal("30"),
             max_workload=Decimal("100"),
         )
-        # Set available_from to be before the task deadline
-        resource.available_from = utc_datetime(2026, 5, 1)
         repository.add_human_resource(resource)
         
         # Create request
@@ -69,7 +76,7 @@ class TestResourceService:
             preferred_skills=["fastapi"],
             required_authority="senior",
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -91,18 +98,17 @@ class TestResourceService:
         assert recommendation.explanation is not None
         assert recommendation.confidence > Decimal("0")
 
-    async def test_service_no_eligible_human_returns_failed(self, evaluation_timestamp):
-        """Test service returns FAILED when no eligible HUMAN resources exist."""
+    async def test_service_no_eligible_human_creates_gap(self, evaluation_timestamp):
+        """Test service path when no eligible HUMAN resources exist."""
         repository = InMemoryResourceRepository()
         service = ResourceAllocationService(repository)
 
-        repository.add_human_resource(
-            create_human_evidence(
-                tenant_id=get_requester_id(),
-                resource_id=get_resource_id_1(),
-                is_active=False,
-            )
+        resource = _human_resource(
+            evaluation_timestamp,
+            resource_id=get_resource_id_1(),
+            is_active=False,
         )
+        repository.add_human_resource(resource)
 
         metadata = AgentMessageMetadata(
             correlation_id=uuid4(),
@@ -115,7 +121,7 @@ class TestResourceService:
         human_req = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -127,11 +133,11 @@ class TestResourceService:
 
         recommendation = await service.process_allocation_request(request, evaluation_timestamp)
 
-        assert recommendation.status == RecommendationStatus.FAILED
-        assert recommendation.error_code == "NO_ELIGIBLE_CANDIDATES"
-        assert recommendation.retryable is True
-        assert recommendation.human_requirement_result is None
-        assert recommendation.resource_gaps == []
+        assert recommendation.status == RecommendationStatus.PENDING_HUMAN_APPROVAL
+        assert len(recommendation.resource_gaps) > 0
+        assert len(recommendation.alternatives) > 0
+        assert len(recommendation.limitations) > 0
+        assert recommendation.human_requirement_result.eligible_candidates == []
 
     async def test_service_budget_validation(self, evaluation_timestamp):
         """Test service budget validation."""
@@ -142,6 +148,7 @@ class TestResourceService:
         repository.add_budget_resource(
             create_budget_evidence(
                 tenant_id=get_requester_id(),
+                reference_timestamp=evaluation_timestamp,
                 available_balance=Decimal("10000"),
                 currency="USD",
                 cost_centre="CC001",
@@ -162,7 +169,7 @@ class TestResourceService:
             currency="USD",
             cost_centre="CC001",
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             process_stage="resource_allocation",
         )
         
@@ -196,7 +203,7 @@ class TestResourceService:
         human_req = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -215,11 +222,10 @@ class TestResourceService:
         repository = InMemoryResourceRepository()
         service = ResourceAllocationService(repository)
 
-        resource = create_human_evidence(
-            tenant_id=get_requester_id(),
+        resource = _human_resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
         )
-        resource.available_from = utc_datetime(2025, 12, 1)
         repository.add_human_resource(resource)
 
         metadata = AgentMessageMetadata(
@@ -233,7 +239,7 @@ class TestResourceService:
         human_req = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -254,12 +260,11 @@ class TestResourceService:
         service = ResourceAllocationService(repository)
         
         repository.add_human_resource(
-            create_human_evidence(
-                tenant_id=get_requester_id(),
+            _human_resource(
+                evaluation_timestamp,
                 resource_id=get_resource_id_1(),
             )
         )
-        repository._human_resources[-1].available_from = utc_datetime(2025, 12, 1)
         
         metadata = AgentMessageMetadata(
             correlation_id=uuid4(),
@@ -272,7 +277,7 @@ class TestResourceService:
         human_req = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -297,6 +302,7 @@ class TestResourceService:
         repository.add_human_resource(
             create_human_evidence(
                 tenant_id=get_tenant_a_id(),
+                reference_timestamp=evaluation_timestamp,
                 resource_id=get_resource_id_1(),
             )
         )
@@ -313,7 +319,7 @@ class TestResourceService:
         human_req = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=get_requester_id(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=_task_deadline(evaluation_timestamp),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -325,6 +331,6 @@ class TestResourceService:
         
         recommendation = await service.process_allocation_request(request, evaluation_timestamp)
 
-        assert recommendation.status == RecommendationStatus.FAILED
-        assert recommendation.error_code == "NO_ELIGIBLE_CANDIDATES"
-        assert recommendation.human_requirement_result is None
+        assert recommendation.status == RecommendationStatus.PENDING_HUMAN_APPROVAL
+        assert len(recommendation.human_requirement_result.eligible_candidates) == 0
+        assert len(recommendation.resource_gaps) > 0

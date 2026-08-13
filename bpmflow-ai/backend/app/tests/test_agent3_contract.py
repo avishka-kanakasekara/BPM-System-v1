@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from app.tests.conftest import utc_datetime
+from app.agents.agent3_resources.fixtures import FIXTURE_REFERENCE_TIMESTAMP
 from app.agents.agent3_resources import (
     AgentMessageMetadata,
     HumanResourceRequirement,
@@ -79,7 +79,7 @@ def _sample_ranked_candidate(**overrides):
         ),
         "current_workload_percentage": Decimal("50"),
         "projected_workload_percentage": Decimal("60"),
-        "available_from": utc_datetime(2026, 1, 1),
+        "available_from": FIXTURE_REFERENCE_TIMESTAMP,
         "evidence_refs": {"availability": {}, "workload": {}},
     }
     base.update(overrides)
@@ -123,7 +123,10 @@ class TestAgent3Contract:
                 tenant_id=uuid4(),
                 message_type=MessageType.RESOURCE_ALLOCATION_REQUEST,
             ),
-            human_requirements=create_human_requirement(tenant_id=uuid4()),
+            human_requirements=create_human_requirement(
+                tenant_id=uuid4(),
+                reference_timestamp=evaluation_timestamp,
+            ),
         )
 
         recommendation = await service.process_allocation_request(request, evaluation_timestamp)
@@ -169,8 +172,8 @@ class TestAgent3Contract:
                 **_successful_recommendation_kwargs(confidence=Decimal("1.1")),
             )
 
-    def test_pending_human_approval_always_requires_human_approval(self):
-        with pytest.raises(ValueError, match="Agent 3 must always require human approval"):
+    def test_pending_human_approval_requires_human_approval(self):
+        with pytest.raises(ValidationError, match="Successful recommendation requires human approval"):
             AllocationRecommendation(
                 metadata=_metadata(),
                 **_successful_recommendation_kwargs(requires_human_approval=False),
@@ -182,6 +185,7 @@ class TestAgent3Contract:
                 metadata=_metadata(),
                 status=RecommendationStatus.FAILED,
                 requires_human_approval=True,
+                manual_intervention_required=True,
                 explanation="Should not satisfy FAILED contract alone",
                 confidence=Decimal("0.5"),
             )
@@ -189,14 +193,16 @@ class TestAgent3Contract:
         failed = AllocationRecommendation(
             metadata=_metadata(),
             status=RecommendationStatus.FAILED,
-            requires_human_approval=True,
+            requires_human_approval=False,
+            manual_intervention_required=True,
             explanation="",
-            error_code="PIPELINE_ERROR",
-            error_message="Allocation pipeline failed",
+            error_code="INTERNAL_ERROR",
+            error_message="An internal processing error occurred.",
             retryable=True,
         )
         assert failed.status == RecommendationStatus.FAILED
-        assert failed.error_code == "PIPELINE_ERROR"
+        assert failed.requires_human_approval is False
+        assert failed.manual_intervention_required is True
 
     def test_ranked_human_candidate_requires_available_from(self):
         with pytest.raises(ValidationError):
@@ -233,7 +239,7 @@ class TestAgent3Contract:
                     authority_match=Decimal("1.0"),
                     total_score=Decimal("0.85"),
                 ),
-                available_from=utc_datetime(2026, 1, 1),
+                available_from=FIXTURE_REFERENCE_TIMESTAMP,
                 evidence_refs={"availability": {}, "workload": {}},
             )
 
@@ -244,10 +250,14 @@ class TestAgent3Contract:
 
         resource = create_human_evidence(
             tenant_id=uuid4(),
+            reference_timestamp=evaluation_timestamp,
         )
         resource.evidence_references = {"source": "partial_fixture"}
 
-        requirement = create_human_requirement(tenant_id=uuid4())
+        requirement = create_human_requirement(
+            tenant_id=uuid4(),
+            reference_timestamp=evaluation_timestamp,
+        )
         is_eligible, exclusions = evaluator.evaluate_eligibility(resource, requirement)
 
         assert not is_eligible
@@ -294,7 +304,7 @@ class TestAgent3Contract:
             preferred_skills=["fastapi"],
             required_authority="senior",
             requester_id=uuid4(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=FIXTURE_REFERENCE_TIMESTAMP,
             estimated_effort_hours=Decimal("40"),
             process_stage="resource_allocation",
         )
@@ -309,7 +319,7 @@ class TestAgent3Contract:
             currency="USD",
             cost_centre="CC001",
             requester_id=uuid4(),
-            task_deadline=utc_datetime(2026, 6, 1),
+            task_deadline=FIXTURE_REFERENCE_TIMESTAMP,
             process_stage="resource_allocation",
         )
 
@@ -328,7 +338,7 @@ class TestAgent3Contract:
             metadata=metadata,
             human_requirements=HumanResourceRequirement(
                 requester_id=uuid4(),
-                task_deadline=utc_datetime(2026, 6, 1),
+                task_deadline=FIXTURE_REFERENCE_TIMESTAMP,
                 estimated_effort_hours=Decimal("40"),
                 process_stage="resource_allocation",
             ),
@@ -336,7 +346,7 @@ class TestAgent3Contract:
                 required_amount=Decimal("5000"),
                 currency="USD",
                 requester_id=uuid4(),
-                task_deadline=utc_datetime(2026, 6, 1),
+                task_deadline=FIXTURE_REFERENCE_TIMESTAMP,
                 process_stage="resource_allocation",
             ),
         )

@@ -2,7 +2,7 @@
 
 import pytest
 from decimal import Decimal
-from datetime import datetime
+from datetime import timedelta
 
 from app.agents.agent3_resources import (
     HumanResourceRanker,
@@ -16,6 +16,22 @@ from app.agents.agent3_resources import (
 )
 
 
+def _resource(evaluation_timestamp, **overrides):
+    return create_human_evidence(
+        tenant_id=get_tenant_a_id(),
+        reference_timestamp=evaluation_timestamp,
+        **overrides,
+    )
+
+
+def _requirement(evaluation_timestamp, **overrides):
+    return create_human_requirement(
+        tenant_id=get_tenant_a_id(),
+        reference_timestamp=evaluation_timestamp,
+        **overrides,
+    )
+
+
 class TestRanking:
     """Test deterministic scoring formula."""
 
@@ -23,8 +39,8 @@ class TestRanking:
         """Test that exact weighted formula is correct."""
         ranker = HumanResourceRanker()
         
-        resource = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+        resource = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             roles=["developer"],
             mandatory_skills=["python"],
@@ -33,9 +49,9 @@ class TestRanking:
             current_workload=Decimal("30"),
             max_workload=Decimal("100"),
         )
-        
-        requirement = create_human_requirement(
-            tenant_id=get_tenant_a_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             required_roles=["developer"],
             mandatory_skills=["python"],
             preferred_skills=["fastapi"],
@@ -59,12 +75,8 @@ class TestRanking:
         """Test that every score factor is within 0-1."""
         ranker = HumanResourceRanker()
         
-        resource = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
-            resource_id=get_resource_id_1(),
-        )
-        
-        requirement = create_human_requirement(tenant_id=get_tenant_a_id())
+        resource = _resource(evaluation_timestamp, resource_id=get_resource_id_1())
+        requirement = _requirement(evaluation_timestamp)
         
         breakdown = ranker._calculate_score_breakdown(resource, requirement)
         
@@ -80,23 +92,22 @@ class TestRanking:
         ranker = HumanResourceRanker()
         
         # Resource with preferred skills
-        resource_with_prefs = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+        resource_with_prefs = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             mandatory_skills=["python"],
             preferred_skills=["fastapi", "docker"],
         )
-        
-        # Resource without preferred skills
-        resource_without_prefs = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+
+        resource_without_prefs = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_2(),
             mandatory_skills=["python"],
             preferred_skills=[],
         )
-        
-        requirement = create_human_requirement(
-            tenant_id=get_tenant_a_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             mandatory_skills=["python"],
             preferred_skills=["fastapi", "docker"],
         )
@@ -111,21 +122,21 @@ class TestRanking:
         """Test tie-breaking: lower projected workload first."""
         ranker = HumanResourceRanker()
         
-        resource1 = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+        resource1 = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             current_workload=Decimal("40"),
             max_workload=Decimal("100"),
         )
-        
-        resource2 = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+
+        resource2 = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_2(),
             current_workload=Decimal("60"),
             max_workload=Decimal("100"),
         )
-        
-        requirement = create_human_requirement(tenant_id=get_tenant_a_id())
+
+        requirement = _requirement(evaluation_timestamp)
         
         ranked = ranker.rank_candidates([resource1, resource2], requirement)
         
@@ -137,25 +148,23 @@ class TestRanking:
         """Test tie-breaking: earlier availability first."""
         ranker = HumanResourceRanker()
         
-        resource1 = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+        resource1 = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             current_workload=Decimal("50"),
             max_workload=Decimal("100"),
         )
-        # Manually set available_from
-        from datetime import timedelta
         resource1.available_from = evaluation_timestamp - timedelta(days=30)
-        
-        resource2 = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+
+        resource2 = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_2(),
             current_workload=Decimal("50"),
             max_workload=Decimal("100"),
         )
         resource2.available_from = evaluation_timestamp + timedelta(days=15)
-        
-        requirement = create_human_requirement(tenant_id=get_tenant_a_id())
+
+        requirement = _requirement(evaluation_timestamp)
         
         ranked = ranker.rank_candidates([resource1, resource2], requirement)
         
@@ -167,24 +176,23 @@ class TestRanking:
         """Test tie-breaking: stable resource ID as final tie-breaker."""
         ranker = HumanResourceRanker()
         
-        resource1 = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+        resource1 = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             current_workload=Decimal("50"),
             max_workload=Decimal("100"),
         )
-        from datetime import timedelta
         resource1.available_from = evaluation_timestamp - timedelta(days=30)
-        
-        resource2 = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+
+        resource2 = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_2(),
             current_workload=Decimal("50"),
             max_workload=Decimal("100"),
         )
         resource2.available_from = evaluation_timestamp - timedelta(days=30)
-        
-        requirement = create_human_requirement(tenant_id=get_tenant_a_id())
+
+        requirement = _requirement(evaluation_timestamp)
         
         ranked = ranker.rank_candidates([resource1, resource2], requirement)
         
@@ -198,13 +206,10 @@ class TestRanking:
         
         # Only pass eligible resources to ranker
         eligible_resources = [
-            create_human_evidence(
-                tenant_id=get_tenant_a_id(),
-                resource_id=get_resource_id_1(),
-            ),
+            _resource(evaluation_timestamp, resource_id=get_resource_id_1()),
         ]
-        
-        requirement = create_human_requirement(tenant_id=get_tenant_a_id())
+
+        requirement = _requirement(evaluation_timestamp)
         
         ranked = ranker.rank_candidates(eligible_resources, requirement)
         
@@ -216,12 +221,8 @@ class TestRanking:
         """Test that ranking returns complete score breakdown."""
         ranker = HumanResourceRanker()
         
-        resource = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
-            resource_id=get_resource_id_1(),
-        )
-        
-        requirement = create_human_requirement(tenant_id=get_tenant_a_id())
+        resource = _resource(evaluation_timestamp, resource_id=get_resource_id_1())
+        requirement = _requirement(evaluation_timestamp)
         
         ranked = ranker.rank_candidates([resource], requirement)
         
@@ -239,22 +240,22 @@ class TestRanking:
         ranker = HumanResourceRanker()
         
         # Create resources with different skill coverage
-        resource1 = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+        resource1 = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_1(),
             mandatory_skills=["python"],
             preferred_skills=["fastapi"],
         )
-        
-        resource2 = create_human_evidence(
-            tenant_id=get_tenant_a_id(),
+
+        resource2 = _resource(
+            evaluation_timestamp,
             resource_id=get_resource_id_2(),
             mandatory_skills=["python"],
             preferred_skills=[],
         )
-        
-        requirement = create_human_requirement(
-            tenant_id=get_tenant_a_id(),
+
+        requirement = _requirement(
+            evaluation_timestamp,
             mandatory_skills=["python"],
             preferred_skills=["fastapi"],
         )

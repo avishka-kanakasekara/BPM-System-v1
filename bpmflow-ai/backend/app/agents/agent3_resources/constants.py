@@ -46,6 +46,16 @@ class GapAlternativeType(str, Enum):
     RECRUITMENT_ESCALATION = "RECRUITMENT_ESCALATION"
 
 
+class GapType(str, Enum):
+    """Business constraint gap types for completed analyses."""
+    NO_ELIGIBLE_HUMAN = "NO_ELIGIBLE_HUMAN"
+    MISSING_REQUIRED_EVIDENCE = "MISSING_REQUIRED_EVIDENCE"
+    SOD_CONFLICT_UNRESOLVED = "SOD_CONFLICT_UNRESOLVED"
+    BUDGET_UNAVAILABLE = "BUDGET_UNAVAILABLE"
+    WORKLOAD_CAPACITY = "WORKLOAD_CAPACITY"
+    UNAVAILABLE_RESOURCES = "UNAVAILABLE_RESOURCES"
+
+
 class MessageType(str, Enum):
     """Message types for inter-agent communication."""
     RESOURCE_ALLOCATION_REQUEST = "RESOURCE_ALLOCATION_REQUEST"
@@ -53,23 +63,21 @@ class MessageType(str, Enum):
 
 
 class FailureErrorCode(str, Enum):
-    """Plan-level failure codes returned on FAILED recommendations."""
-    NO_ELIGIBLE_CANDIDATES = "NO_ELIGIBLE_CANDIDATES"
-    MISSING_REQUIRED_EVIDENCE = "MISSING_REQUIRED_EVIDENCE"
-    RESOURCE_LOOKUP_FAILED = "RESOURCE_LOOKUP_FAILED"
-    BUDGET_UNAVAILABLE = "BUDGET_UNAVAILABLE"
-    SOD_CONFLICT_UNRESOLVED = "SOD_CONFLICT_UNRESOLVED"
+    """Technical failure codes returned when analysis cannot complete."""
     INVALID_REQUEST = "INVALID_REQUEST"
+    RESOURCE_LOOKUP_FAILED = "RESOURCE_LOOKUP_FAILED"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
 FAILURE_RETRYABLE: dict[FailureErrorCode, bool] = {
-    FailureErrorCode.NO_ELIGIBLE_CANDIDATES: True,
-    FailureErrorCode.MISSING_REQUIRED_EVIDENCE: True,
-    FailureErrorCode.RESOURCE_LOOKUP_FAILED: True,
-    FailureErrorCode.BUDGET_UNAVAILABLE: True,
-    FailureErrorCode.SOD_CONFLICT_UNRESOLVED: False,
     FailureErrorCode.INVALID_REQUEST: False,
+    FailureErrorCode.RESOURCE_LOOKUP_FAILED: True,
+    FailureErrorCode.INTERNAL_ERROR: True,
 }
+
+
+class ResourceLookupError(Exception):
+    """Raised when repository or database retrieval fails."""
 
 
 # Scoring formula weights (must sum to 1.0)

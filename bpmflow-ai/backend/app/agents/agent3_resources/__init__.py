@@ -5,6 +5,7 @@ from .constants import (
     ExclusionReason,
     RecommendationStatus,
     GapAlternativeType,
+    GapType,
     MessageType,
     SCORING_WEIGHTS,
     MAX_EVIDENCE_AGE_DAYS,
@@ -13,6 +14,7 @@ from .constants import (
     AGENT_4_RECEIVER,
     FailureErrorCode,
     FAILURE_RETRYABLE,
+    ResourceLookupError,
 )
 from .schemas import (
     AgentMessageMetadata,
@@ -40,15 +42,16 @@ from .retrieval import CandidateRetriever
 from .eligibility import EligibilityEvaluator
 from .ranking import HumanResourceRanker
 from .gaps import GapDetector
-from .explainer_template import TemplateExplainer
+from .explainer_template import TemplateExplainer, ExplanationContext
 from .service import ResourceAllocationService
 from .strategies import ResourceStrategy, HumanResourceStrategy, BudgetResourceStrategy
 from .failures import (
     FailureSpec,
     detect_invalid_request,
-    detect_human_failure,
-    detect_budget_failure,
     build_failed_recommendation,
+    build_resource_lookup_failure,
+    build_internal_error_failure,
+    is_resource_lookup_error,
 )
 from .fixtures import (
     create_human_evidence,
@@ -69,6 +72,7 @@ __all__ = [
     "ExclusionReason",
     "RecommendationStatus",
     "GapAlternativeType",
+    "GapType",
     "MessageType",
     "SCORING_WEIGHTS",
     "MAX_EVIDENCE_AGE_DAYS",
@@ -77,6 +81,7 @@ __all__ = [
     "AGENT_4_RECEIVER",
     "FailureErrorCode",
     "FAILURE_RETRYABLE",
+    "ResourceLookupError",
     # Schemas
     "AgentMessageMetadata",
     "HumanResourceRequirement",
@@ -106,12 +111,14 @@ __all__ = [
     "HumanResourceRanker",
     "GapDetector",
     "TemplateExplainer",
+    "ExplanationContext",
     "ResourceAllocationService",
     "FailureSpec",
     "detect_invalid_request",
-    "detect_human_failure",
-    "detect_budget_failure",
     "build_failed_recommendation",
+    "build_resource_lookup_failure",
+    "build_internal_error_failure",
+    "is_resource_lookup_error",
     # Strategies
     "ResourceStrategy",
     "HumanResourceStrategy",
