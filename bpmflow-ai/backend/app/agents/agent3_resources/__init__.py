@@ -65,6 +65,17 @@ from .fixtures import (
     get_resource_id_2,
     get_resource_id_3,
 )
+from .repositories import (
+    RecommendationWriteRepository,
+    PersistenceError,
+    PersistenceValidationError,
+    PersistenceConflictError,
+    PersistenceLookupError,
+    PersistenceTransactionError,
+    MIGRATION_0004_FILENAME,
+    WRITE_PATH_TABLES,
+    AGENT3_ALLOWED_RECOMMENDATION_STATUSES,
+)
 
 __all__ = [
     # Constants
@@ -134,4 +145,14 @@ __all__ = [
     "get_resource_id_1",
     "get_resource_id_2",
     "get_resource_id_3",
+    # Write repository
+    "RecommendationWriteRepository",
+    "PersistenceError",
+    "PersistenceValidationError",
+    "PersistenceConflictError",
+    "PersistenceLookupError",
+    "PersistenceTransactionError",
+    "MIGRATION_0004_FILENAME",
+    "WRITE_PATH_TABLES",
+    "AGENT3_ALLOWED_RECOMMENDATION_STATUSES",
 ]
