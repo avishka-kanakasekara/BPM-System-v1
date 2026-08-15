@@ -1,0 +1,40 @@
+# FastAPI and ASGI server
+fastapi
+uvicorn[standard]
+
+# Database
+sqlalchemy>=2.0
+alembic
+asyncpg
+
+# Pydantic and validation
+pydantic>=2
+pydantic-settings
+
+# LLM
+google-genai
+
+# Caching / message broker
+redis
+
+# Email templates
+jinja2
+
+# Analytics and process mining
+pandas
+numpy
+pm4py
+
+# Information retrieval
+rank-bm25
+pgvector
+
+# Environment
+python-dotenv
+
+# HTTP client
+httpx
+
+# Testing
+pytest
+pytest-asyncio

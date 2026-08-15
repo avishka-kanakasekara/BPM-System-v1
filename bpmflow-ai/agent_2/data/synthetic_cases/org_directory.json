@@ -1,0 +1,91 @@
+{
+  "_comment": "# MOCK: Stand-in directory for Agent 3 (Workforce & Resource Allocation Agent), which does not exist yet.",
+  "organization": "Acme Global Procurement",
+  "version": "1.0.0",
+  "users": [
+    {
+      "id": "usr-req-001",
+      "name": "Alice Johnson",
+      "email": "alice.johnson@acmeglobal.com",
+      "role": "requester",
+      "department": "Engineering"
+    },
+    {
+      "id": "usr-req-002",
+      "name": "Bob Smith",
+      "email": "bob.smith@acmeglobal.com",
+      "role": "requester",
+      "department": "Marketing"
+    },
+    {
+      "id": "usr-req-003",
+      "name": "Carol Williams",
+      "email": "carol.williams@acmeglobal.com",
+      "role": "requester",
+      "department": "Sales"
+    },
+    {
+      "id": "usr-emp-001",
+      "name": "David Brown",
+      "email": "david.brown@acmeglobal.com",
+      "role": "assigned_employee",
+      "department": "Procurement Operations"
+    },
+    {
+      "id": "usr-emp-002",
+      "name": "Eva Davis",
+      "email": "eva.davis@acmeglobal.com",
+      "role": "assigned_employee",
+      "department": "Procurement Operations"
+    },
+    {
+      "id": "usr-mgr-001",
+      "name": "Frank Miller",
+      "email": "frank.miller@acmeglobal.com",
+      "role": "manager",
+      "department": "Engineering Management"
+    },
+    {
+      "id": "usr-mgr-002",
+      "name": "Grace Wilson",
+      "email": "grace.wilson@acmeglobal.com",
+      "role": "manager",
+      "department": "Marketing Management"
+    },
+    {
+      "id": "usr-fin-001",
+      "name": "Henry Taylor",
+      "email": "henry.taylor@acmeglobal.com",
+      "role": "finance_officer",
+      "department": "Finance & Accounting"
+    },
+    {
+      "id": "usr-fin-002",
+      "name": "Irene Anderson",
+      "email": "irene.anderson@acmeglobal.com",
+      "role": "finance_officer",
+      "department": "Finance & Accounting"
+    },
+    {
+      "id": "usr-pro-001",
+      "name": "Jack Thomas",
+      "email": "jack.thomas@acmeglobal.com",
+      "role": "procurement_officer",
+      "department": "Global Sourcing"
+    },
+    {
+      "id": "usr-pro-002",
+      "name": "Karen Martinez",
+      "email": "karen.martinez@acmeglobal.com",
+      "role": "procurement_officer",
+      "department": "Global Sourcing"
+    },
+    {
+      "id": "usr-esc-001",
+      "name": "Laura White (Director)",
+      "email": "laura.white@acmeglobal.com",
+      "role": "escalation_contact",
+      "department": "Executive Leadership"
+    }
+  ]
+}
