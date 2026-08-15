@@ -1,15 +1,17 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import ConfigDict
 from dotenv import load_dotenv
 import os
+from typing import Optional
 
 load_dotenv()
 
 
 class Settings(BaseSettings):
     # Supabase Configuration
-    SUPABASE_URL: str = os.getenv("SUPABASE_URL")
-    SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY")
-    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_ANON_KEY: Optional[str] = None
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
     
     # Database Configuration
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
@@ -25,9 +27,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = ConfigDict(env_file=".env", case_sensitive=True)
 
 
 settings = Settings()

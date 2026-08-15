@@ -1,22 +1,25 @@
 """API contract tests for Agent 3 FastAPI endpoints.
 
-These tests verify the API contract for Agent 3 endpoints:
-- POST /agent3/allocations returns 201 with persisted result
-- GET /agent3/recommendations/{recommendation_id} returns 200 with summary
-- GET /agent3/recommendations/by-correlation/{correlation_id} returns 200 with summary
-- Business gap recommendations return 201 (not 403/422)
-- Failed recommendations persist and return defined behavior
-- Service and repository are called exactly once
-- IDs and correlation IDs are preserved
+These tests verify the API contract matches the specification.
 """
 
+import os
 import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
-from uuid import UUID, uuid4
+from typing import Optional, Set
+from uuid import uuid4, UUID
 
-from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
+from httpx import AsyncClient, ASGITransport
+
+# Set minimal environment variables for config
+os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
+
+from app.api.v1.routes_agent3 import router
 
 from app.agents.agent3_resources.schemas import (
     AllocationRequest,
