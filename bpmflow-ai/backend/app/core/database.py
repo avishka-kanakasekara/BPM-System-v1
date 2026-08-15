@@ -1,37 +1,187 @@
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+"""Shared database engine and session factory for Agent 3 and other agents.
+
+This module provides lazy database initialization to ensure:
+- No connection at import time
+- Single shared engine across all agents
+- Proper session lifecycle management
+- Engine disposal on application shutdown
+
+The engine is created lazily on first access to avoid immediate database
+connections during import, which is important for testing and startup.
+"""
+
+from __future__ import annotations
+
+import os
+from contextlib import asynccontextmanager
+from typing import Optional
+
+from dotenv import load_dotenv
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
-import os
-from dotenv import load_dotenv
 
 load_dotenv()
 
 # Database URL from environment variable
 # Convert to async format for asyncpg
-DATABASE_URL = os.getenv("DATABASE_URL").replace("postgresql://", "postgresql+asyncpg://")
+_DATABASE_URL = os.getenv("DATABASE_URL")
+if _DATABASE_URL and _DATABASE_URL.startswith("postgresql://"):
+    _DATABASE_URL = _DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 
-# Create async engine
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=True,  # Set to False in production
-    poolclass=NullPool,  # Use NullPool for serverless environments like Supabase
-)
-
-# Create async session factory
-AsyncSessionLocal = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+# Global engine and session factory (initialized lazily)
+_engine: Optional[AsyncEngine] = None
+_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
 
 # Base class for models
 Base = declarative_base()
 
 
-# Dependency to get database session
-async def get_db():
-    async with AsyncSessionLocal() as session:
+def get_database_url() -> str:
+    """Get the database URL from environment.
+
+    Returns:
+        The database URL in asyncpg format
+
+    Raises:
+        ValueError: If DATABASE_URL is not configured
+    """
+    if not _DATABASE_URL:
+        raise ValueError("DATABASE_URL environment variable is not configured")
+    return _DATABASE_URL
+
+
+def get_engine() -> AsyncEngine:
+    """Get or create the shared async engine (lazy initialization).
+
+    This function creates the engine on first call and reuses it for
+    subsequent calls. This ensures no database connection is made at
+    import time.
+
+    Returns:
+        The shared async engine
+
+    Raises:
+        ValueError: If DATABASE_URL is not configured
+    """
+    global _engine, _session_factory
+
+    if _engine is None:
+        database_url = get_database_url()
+        _engine = create_async_engine(
+            database_url,
+            echo=False,  # Set to False in production
+            poolclass=NullPool,  # Use NullPool for serverless environments like Supabase
+        )
+
+        # Create session factory with the engine
+        _session_factory = async_sessionmaker(
+            _engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+
+    return _engine
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Get or create the shared session factory (lazy initialization).
+
+    Returns:
+        The shared async session factory
+
+    Raises:
+        ValueError: If DATABASE_URL is not configured
+    """
+    global _session_factory
+
+    if _session_factory is None:
+        # Ensure engine is created first
+        get_engine()
+
+    return _session_factory
+
+
+async def dispose_engine() -> None:
+    """Dispose the shared engine and session factory.
+
+    This should be called during application shutdown to properly
+    close all database connections.
+    """
+    global _engine, _session_factory
+
+    if _engine is not None:
+        await _engine.dispose()
+        _engine = None
+        _session_factory = None
+
+
+@asynccontextmanager
+async def get_session():
+    """Context manager for getting a database session with proper cleanup.
+
+    This context manager:
+    - Creates a session from the shared session factory
+    - Yields the session for use
+    - Closes the session in the finally block
+    - Rolls back on error if the session is still active
+
+    Yields:
+        AsyncSession: The database session
+    """
+    session_factory = get_session_factory()
+    async with session_factory() as session:
         try:
             yield session
         finally:
             await session.close()
+
+
+# ============================================================================
+# FastAPI Dependency
+# ============================================================================
+
+
+async def get_db():
+    """FastAPI dependency to get a database session.
+
+    This dependency provides a database session with proper lifecycle
+    management. The session is automatically closed after the request.
+
+    Yields:
+        AsyncSession: The database session
+    """
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+
+# ============================================================================
+# Application Lifespan Support
+# ============================================================================
+
+
+async def init_db() -> None:
+    """Initialize the database engine (called during application startup).
+
+    This function can be called during FastAPI lifespan startup to
+    pre-initialize the engine, ensuring it's ready for the first request.
+    """
+    get_engine()
+
+
+async def close_db() -> None:
+    """Close the database engine (called during application shutdown).
+
+    This function should be called during FastAPI lifespan shutdown
+    to properly dispose of the engine and close all connections.
+    """
+    await dispose_engine()

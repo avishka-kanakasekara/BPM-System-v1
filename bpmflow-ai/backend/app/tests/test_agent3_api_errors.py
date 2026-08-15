@@ -3,6 +3,7 @@
 These tests verify HTTP error mapping and error response sanitization.
 """
 
+import os
 import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -11,6 +12,12 @@ from uuid import uuid4, UUID
 
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
+
+# Set minimal environment variables for config
+os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
 from app.api.v1.routes_agent3 import router
 from app.agents.agent3_resources.api_dependencies import (

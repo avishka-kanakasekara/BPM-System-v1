@@ -3,10 +3,11 @@
 This module provides dependency contracts for FastAPI routes that ensure:
 - Trusted tenant context from verified authentication (not request body)
 - Proper dependency injection for services and repositories
-- Fail-closed behavior until production auth is wired
+- Production wiring with real Supabase JWT verification
 - Test-friendly override mechanisms
 
-Production authentication/JWT wiring is pending group coordination.
+Production authentication uses verified Supabase JWT tokens with JWKS verification.
+Tenant ID is extracted from app_metadata.tenant_id (administratively controlled).
 """
 
 from __future__ import annotations
@@ -16,6 +17,10 @@ from typing import Optional, Set
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+
+from app.core.security import VerifiedPrincipal, get_verified_principal
+from app.core.database import get_session_factory
 
 
 # ============================================================================
@@ -36,7 +41,7 @@ class Agent3RequestContext:
         - tenant_id MUST come from verified auth context, never request body
         - Request body tenant_id must match this tenant_id (403 if mismatch)
         - requester_id is never used as tenant scope
-        - Production auth/JWT wiring is pending group coordination
+        - tenant_id comes from app_metadata.tenant_id (administratively controlled)
     """
 
     def __init__(
@@ -62,29 +67,41 @@ class RequestContextProtocol(ABC):
 
 
 # ============================================================================
-# Production Placeholder (Fails Closed)
+# Production Request Context Provider
 # ============================================================================
 
 
 class ProductionRequestContextProvider(RequestContextProtocol):
-    """Production request context provider - fails closed until wired.
+    """Production request context provider using verified Supabase JWT.
 
-    This is a placeholder that returns HTTP 503 until group coordination
-    completes the production authentication/JWT wiring.
+    This provider:
+    - Uses verified principal from Supabase JWT verification
+    - Extracts tenant_id from app_metadata.tenant_id
+    - Maps verified claims to Agent3RequestContext
+    - Fails closed on any verification error
 
     Tests should override this with a synthetic context provider.
     """
 
+    def __init__(self, principal: VerifiedPrincipal):
+        """Initialize with verified principal.
+
+        Args:
+            principal: The verified principal from JWT verification
+        """
+        self._principal = principal
+
     async def get_context(self) -> Agent3RequestContext:
-        """Fail closed - production auth not yet wired."""
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "AUTH_NOT_CONFIGURED",
-                "message": "Authentication context not available. "
-                "Production JWT wiring is pending group coordination.",
-                "retryable": False,
-            },
+        """Get the trusted request context from verified principal.
+
+        Returns:
+            Agent3RequestContext with verified tenant and actor information
+        """
+        return Agent3RequestContext(
+            tenant_id=self._principal.tenant_id,
+            actor_id=self._principal.user_id,
+            roles=set(self._principal.roles),
+            correlation_id=None,  # Correlation ID is request-specific, not from auth
         )
 
 
@@ -94,27 +111,29 @@ class ProductionRequestContextProvider(RequestContextProtocol):
 
 
 async def get_request_context(
-    context_provider: RequestContextProtocol = Depends(
-        lambda: ProductionRequestContextProvider()
-    ),
+    principal: VerifiedPrincipal = Depends(get_verified_principal),
 ) -> Agent3RequestContext:
-    """FastAPI dependency to get trusted request context.
+    """FastAPI dependency to get trusted request context from verified JWT.
 
     This dependency:
-    - Returns verified tenant_id from authentication context
-    - Fails closed with HTTP 503 until production auth is wired
+    - Verifies JWT signature and claims via get_verified_principal
+    - Extracts tenant_id from app_metadata.tenant_id
+    - Returns Agent3RequestContext with verified tenant and actor information
     - Tests must override with a synthetic context provider
 
     Args:
-        context_provider: The context provider (injected, overrideable in tests)
+        principal: The verified principal from JWT verification
 
     Returns:
         Agent3RequestContext with verified tenant and actor information
 
     Raises:
-        HTTPException: 503 if production auth is not configured
+        HTTPException: 401 if token is invalid/expired
+        HTTPException: 403 if tenant claim is missing/invalid
+        HTTPException: 503 if JWKS fetch fails
     """
-    return await context_provider.get_context()
+    provider = ProductionRequestContextProvider(principal)
+    return await provider.get_context()
 
 
 # ============================================================================
@@ -172,96 +191,78 @@ class ReadRepositoryProtocol(ABC):
 
 
 # ============================================================================
-# Production Service Placeholders (Fail Closed)
-# ============================================================================
-
-
-class UnavailableAllocationService(AllocationServiceProtocol):
-    """Placeholder allocation service - fails closed."""
-
-    async def process_allocation_request(self, request, evaluation_timestamp: Optional):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "SERVICE_UNAVAILABLE",
-                "message": "Allocation service not configured.",
-                "retryable": False,
-            },
-        )
-
-
-class UnavailablePersistenceService(PersistenceProtocol):
-    """Placeholder persistence service - fails closed."""
-
-    async def persist_allocation_result(
-        self, request, recommendation, evaluation_timestamp
-    ) -> UUID:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "PERSISTENCE_UNAVAILABLE",
-                "message": "Persistence service not configured.",
-                "retryable": False,
-            },
-        )
-
-
-class UnavailableReadRepository(ReadRepositoryProtocol):
-    """Placeholder read repository - fails closed."""
-
-    async def get_recommendation(self, tenant_id: UUID, recommendation_id: UUID):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "REPOSITORY_UNAVAILABLE",
-                "message": "Read repository not configured.",
-                "retryable": False,
-            },
-        )
-
-    async def get_latest_recommendation_by_correlation_id(
-        self, tenant_id: UUID, correlation_id: UUID
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error_code": "REPOSITORY_UNAVAILABLE",
-                "message": "Read repository not configured.",
-                "retryable": False,
-            },
-        )
-
-
-# ============================================================================
-# Service Dependency Functions
+# Production Service Dependencies
 # ============================================================================
 
 
 async def get_allocation_service(
-    service: AllocationServiceProtocol = Depends(lambda: UnavailableAllocationService()),
 ) -> AllocationServiceProtocol:
-    """FastAPI dependency to get allocation service.
+    """FastAPI dependency to get the real allocation service.
 
-    Tests should override with the real ResourceAllocationService.
+    This dependency:
+    - Imports ResourceAllocationService lazily (not at import time)
+    - Returns the real service for production use
+    - Tests should override with a fake service
+
+    Returns:
+        ResourceAllocationService instance
     """
-    return service
+    from app.agents.agent3_resources.service import ResourceAllocationService
+    from app.agents.agent3_resources.repositories.postgres_resource_repository import (
+        PostgresResourceRepository,
+    )
+
+    # Get session factory lazily
+    session_factory = get_session_factory()
+
+    # Create resource repository with session factory
+    resource_repository = PostgresResourceRepository(session_factory)
+
+    # Create and return allocation service
+    return ResourceAllocationService(resource_repository)
 
 
 async def get_persistence_service(
-    service: PersistenceProtocol = Depends(lambda: UnavailablePersistenceService()),
 ) -> PersistenceProtocol:
-    """FastAPI dependency to get persistence service.
+    """FastAPI dependency to get the real persistence service.
 
-    Tests should override with the real RecommendationWriteRepository.
+    This dependency:
+    - Imports RecommendationWriteRepository lazily (not at import time)
+    - Returns the real repository for production use
+    - Tests should override with a fake service
+
+    Returns:
+        RecommendationWriteRepository instance
     """
-    return service
+    from app.agents.agent3_resources.repositories.recommendation_repository import (
+        RecommendationWriteRepository,
+    )
+
+    # Get session factory lazily
+    session_factory = get_session_factory()
+
+    # Create and return write repository
+    return RecommendationWriteRepository(session_factory)
 
 
 async def get_read_repository(
-    repository: ReadRepositoryProtocol = Depends(lambda: UnavailableReadRepository()),
 ) -> ReadRepositoryProtocol:
-    """FastAPI dependency to get read repository.
+    """FastAPI dependency to get the real read repository.
 
-    Tests should override with the real RecommendationWriteRepository.
+    This dependency:
+    - Imports RecommendationWriteRepository lazily (not at import time)
+    - Returns the real repository for production use
+    - Tests should override with a fake repository
+
+    Returns:
+        RecommendationWriteRepository instance (has read methods)
     """
-    return repository
+    from app.agents.agent3_resources.repositories.recommendation_repository import (
+        RecommendationWriteRepository,
+    )
+
+    # Get session factory lazily
+    session_factory = get_session_factory()
+
+    # Create and return repository (has both read and write methods)
+    return RecommendationWriteRepository(session_factory)

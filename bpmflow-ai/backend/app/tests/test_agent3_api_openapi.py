@@ -1,15 +1,22 @@
-"""OpenAPI schema verification tests for Agent 3 FastAPI endpoints.
+"""API OpenAPI schema tests for Agent 3 FastAPI endpoints.
 
-These tests verify that the generated OpenAPI schema is correct and complete.
+These tests verify the OpenAPI schema is correctly generated.
 """
 
+import os
 import pytest
-from typing import Set
+
+# Set minimal environment variables for config
+os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
+
+from app.api.v1.routes_agent3 import router
 from uuid import uuid4, UUID
 
 from fastapi import FastAPI
 
-from app.api.v1.routes_agent3 import router
 from app.agents.agent3_resources.api_dependencies import (
     Agent3RequestContext,
     RequestContextProtocol,
