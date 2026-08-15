@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from uuid import UUID, uuid4
 
 from .constants import (
@@ -49,6 +49,9 @@ _AWARE_DATETIME_FIELDS = (
 
 class AgentMessageMetadata(BaseModel):
     """Metadata for inter-agent messages."""
+
+    model_config = ConfigDict(extra="forbid")
+
     message_id: UUID = Field(default_factory=uuid4)
     schema_version: str = SCHEMA_VERSION
     correlation_id: UUID
@@ -72,6 +75,9 @@ class AgentMessageMetadata(BaseModel):
 
 class HumanResourceRequirement(BaseModel):
     """Requirements for HUMAN resource allocation."""
+
+    model_config = ConfigDict(extra="forbid")
+
     resource_type: Literal[ResourceType.HUMAN] = ResourceType.HUMAN
     required_roles: List[str] = Field(default_factory=list)
     mandatory_skills: List[str] = Field(default_factory=list)
@@ -90,6 +96,9 @@ class HumanResourceRequirement(BaseModel):
 
 class BudgetResourceRequirement(BaseModel):
     """Requirements for BUDGET resource validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
     resource_type: Literal[ResourceType.BUDGET] = ResourceType.BUDGET
     required_amount: Decimal = Field(ge=Decimal("0"))
     currency: str
@@ -106,6 +115,9 @@ class BudgetResourceRequirement(BaseModel):
 
 class AllocationRequest(BaseModel):
     """Main allocation request from Agent 4."""
+
+    model_config = ConfigDict(extra="forbid")
+
     metadata: AgentMessageMetadata
     human_requirements: Optional[HumanResourceRequirement] = None
     budget_requirements: Optional[BudgetResourceRequirement] = None
