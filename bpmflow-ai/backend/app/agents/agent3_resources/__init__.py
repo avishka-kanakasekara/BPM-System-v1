@@ -54,6 +54,14 @@ from .llm_explainer import (
     build_user_prompt,
     LLMExplanationError,
 )
+from .runtime_config import (
+    Agent3LLMConfig,
+    get_agent3_llm_config,
+    get_shared_openai_client,
+    close_agent3_llm_runtime,
+    reset_agent3_llm_runtime,
+    set_openai_client_factory,
+)
 from .service import ResourceAllocationService
 from .strategies import ResourceStrategy, HumanResourceStrategy, BudgetResourceStrategy
 from .failures import (
@@ -143,6 +151,12 @@ __all__ = [
     "sanitize_explanation_context",
     "build_user_prompt",
     "LLMExplanationError",
+    "Agent3LLMConfig",
+    "get_agent3_llm_config",
+    "get_shared_openai_client",
+    "close_agent3_llm_runtime",
+    "reset_agent3_llm_runtime",
+    "set_openai_client_factory",
     "ResourceAllocationService",
     "FailureSpec",
     "detect_invalid_request",

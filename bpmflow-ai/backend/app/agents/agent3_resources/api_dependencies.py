@@ -201,6 +201,7 @@ async def get_allocation_service(
 
     This dependency:
     - Imports ResourceAllocationService lazily (not at import time)
+    - Wires optional LLM explanation generator based on Agent 3 runtime config
     - Returns the real service for production use
     - Tests should override with a fake service
 
@@ -211,6 +212,14 @@ async def get_allocation_service(
     from app.agents.agent3_resources.repositories.postgres_resource_repository import (
         PostgresResourceRepository,
     )
+    from app.agents.agent3_resources.runtime_config import (
+        get_agent3_llm_config,
+        get_shared_openai_client,
+    )
+    from app.agents.agent3_resources.llm_explainer import (
+        OpenAIExplanationGenerator,
+        ResilientFallbackExplainer,
+    )
 
     # Get session factory lazily
     session_factory = get_session_factory()
@@ -218,8 +227,29 @@ async def get_allocation_service(
     # Create resource repository with session factory
     resource_repository = PostgresResourceRepository(session_factory)
 
-    # Create and return allocation service
-    return ResourceAllocationService(resource_repository)
+    try:
+        config = get_agent3_llm_config()
+    except Exception:
+        config = None
+
+    if config and config.enabled:
+        client = get_shared_openai_client(config)
+        if client is not None:
+            generator = OpenAIExplanationGenerator(
+                client=client,
+                model=config.model,
+                timeout=config.timeout_seconds,
+                max_output_tokens=config.max_output_tokens,
+                temperature=config.temperature,
+            )
+            explainer = ResilientFallbackExplainer(enabled=True, llm_generator=generator)
+        else:
+            explainer = ResilientFallbackExplainer(enabled=False)
+    else:
+        explainer = ResilientFallbackExplainer(enabled=False)
+
+    # Create and return allocation service with explainer
+    return ResourceAllocationService(resource_repository, explainer=explainer)
 
 
 async def get_persistence_service(
