@@ -40,6 +40,10 @@ def pytest_configure(config):
         "markers",
         "integration: Agent 3 PostgreSQL integration tests requiring AGENT3_TEST_DATABASE_URL",
     )
+    config.addinivalue_line(
+        "markers",
+        "live: Live authenticated API end-to-end tests requiring AGENT3_TEST_* env vars",
+    )
 
 
 @pytest.fixture(scope="session")

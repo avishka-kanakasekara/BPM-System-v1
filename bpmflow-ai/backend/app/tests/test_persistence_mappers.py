@@ -1,5 +1,6 @@
 """Unit tests for write-path mappers (domain ↔ database)."""
 
+import json
 import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -26,6 +27,7 @@ from app.agents.agent3_resources.repositories.write_mappers import (
     map_row_to_evidence_link,
     validate_timezone_aware,
     generate_idempotency_key,
+    _to_jsonb,
 )
 from app.agents.agent3_resources.repositories.persistence_exceptions import PersistenceValidationError
 from app.agents.agent3_resources.schemas import (
@@ -556,6 +558,257 @@ class TestReadBackMapping:
         assert len(exclusion["reasons"]) == 2
         assert exclusion["reasons"][0]["reason_code"] == "INACTIVE_RESOURCE"
         assert exclusion["reasons"][1]["reason_code"] == "REQUIRED_ROLE_MISSING"
+
+
+class TestJSONBConversion:
+    """Tests for _to_jsonb helper function."""
+
+    def test_to_jsonb_empty_list(self) -> None:
+        """Test that empty list converts to JSON string '[]'."""
+        result = _to_jsonb([])
+        assert result == "[]"
+        assert isinstance(result, str)
+
+    def test_to_jsonb_non_empty_list(self) -> None:
+        """Test that non-empty list converts to JSON string."""
+        result = _to_jsonb([1, 2, 3])
+        assert result == "[1, 2, 3]"
+        assert isinstance(result, str)
+
+    def test_to_jsonb_dict(self) -> None:
+        """Test that dict converts to JSON string."""
+        result = _to_jsonb({"key": "value", "number": 42})
+        assert result == '{"key": "value", "number": 42}'
+        assert isinstance(result, str)
+
+    def test_to_jsonb_nested_structure(self) -> None:
+        """Test that nested structures convert correctly."""
+        result = _to_jsonb({"list": [1, 2], "nested": {"key": "value"}})
+        assert result == '{"list": [1, 2], "nested": {"key": "value"}}'
+        assert isinstance(result, str)
+
+    def test_to_jsonb_rejects_pre_serialized_string(self) -> None:
+        """Test that pre-serialized JSON string is rejected to prevent double-encoding."""
+        import pytest
+        with pytest.raises(ValueError, match="Pre-serialized JSON string rejected"):
+            _to_jsonb('{"already": "json"}')
+
+    def test_to_jsonb_decimal_precision_preserved(self) -> None:
+        """Test that high-precision Decimal converts to string without precision loss."""
+        high_precision = Decimal("1234567890123456.78")
+        result = _to_jsonb({"amount": high_precision})
+        assert result == '{"amount": "1234567890123456.78"}'
+        # Parse back to verify precision
+        parsed = json.loads(result)
+        assert parsed["amount"] == "1234567890123456.78"
+
+    def test_to_jsonb_score_decimal_precision(self) -> None:
+        """Test that score Decimal values retain exact decimal text."""
+        score = Decimal("0.875")
+        result = _to_jsonb({"score": score})
+        assert result == '{"score": "0.875"}'
+        parsed = json.loads(result)
+        assert parsed["score"] == "0.875"
+
+    def test_to_jsonb_uuid_conversion(self) -> None:
+        """Test that UUID values convert to string."""
+        test_uuid = uuid4()
+        result = _to_jsonb({"id": test_uuid})
+        assert str(test_uuid) in result
+        assert isinstance(result, str)
+        parsed = json.loads(result)
+        assert parsed["id"] == str(test_uuid)
+
+    def test_to_jsonb_aware_datetime_conversion(self) -> None:
+        """Test that timezone-aware datetime converts to ISO format."""
+        dt = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        result = _to_jsonb({"timestamp": dt})
+        assert "2026-01-01T12:00:00" in result
+        assert isinstance(result, str)
+        parsed = json.loads(result)
+        assert parsed["timestamp"] == "2026-01-01T12:00:00+00:00"
+
+    def test_to_jsonb_rejects_naive_datetime(self) -> None:
+        """Test that naive datetime is rejected."""
+        import pytest
+        naive_dt = datetime(2026, 1, 1, 12, 0)  # No timezone
+        with pytest.raises(ValueError, match="Naive datetime.*not JSON-serializable"):
+            _to_jsonb({"timestamp": naive_dt})
+
+    def test_to_jsonb_limitations_empty_list(self) -> None:
+        """Test that empty limitations list converts correctly for FAILED recommendations."""
+        result = _to_jsonb([])
+        assert result == "[]"
+        parsed = json.loads(result)
+        assert parsed == []
+
+    def test_to_jsonb_limitations_with_values(self) -> None:
+        """Test that limitations with values convert correctly."""
+        result = _to_jsonb(["limit1", "limit2"])
+        assert result == '["limit1", "limit2"]'
+        parsed = json.loads(result)
+        assert parsed == ["limit1", "limit2"]
+
+    def test_to_jsonb_parse_roundtrip(self) -> None:
+        """Test that parsing produced JSON returns expected structure."""
+        original = {"key": "value", "number": 42, "decimal": Decimal("10.50")}
+        result = _to_jsonb(original)
+        parsed = json.loads(result)
+        assert parsed["key"] == "value"
+        assert parsed["number"] == 42
+        assert parsed["decimal"] == "10.50"
+
+    def test_to_jsonb_enum_conversion(self) -> None:
+        """Test that Enum values convert to their value."""
+        from app.agents.agent3_resources.schemas import ResourceType
+        result = _to_jsonb({"type": ResourceType.HUMAN})
+        assert result == '{"type": "HUMAN"}'
+        parsed = json.loads(result)
+        assert parsed["type"] == "HUMAN"
+
+
+class TestMapperJSONBParameters:
+    """Tests that mapper parameters used with CAST(... AS jsonb) are JSON strings."""
+
+    def test_request_payload_is_json_string(self) -> None:
+        """Test that request_payload from mapper is a JSON string."""
+        metadata = AgentMessageMetadata(
+            correlation_id=uuid4(),
+            process_instance_id=uuid4(),
+            task_id=uuid4(),
+            tenant_id=uuid4(),
+            message_type="RESOURCE_ALLOCATION_REQUEST",
+        )
+        request = AllocationRequest(
+            metadata=metadata,
+            human_requirements=HumanResourceRequirement(
+                resource_type=ResourceType.HUMAN,
+                requester_id=uuid4(),
+                task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                estimated_effort_hours=Decimal("10"),
+                process_stage="resource_allocation",
+            ),
+            budget_requirements=None,
+        )
+        result = map_request_to_allocation_request(request, datetime(2026, 1, 1, tzinfo=timezone.utc))
+        assert isinstance(result["request_payload"], str)
+        # Verify it's valid JSON
+        parsed = json.loads(result["request_payload"])
+        assert "metadata" in parsed
+
+    def test_requirement_payload_is_json_string(self) -> None:
+        """Test that requirement_payload from mapper is a JSON string."""
+        requirement = HumanResourceRequirement(
+            resource_type=ResourceType.HUMAN,
+            requester_id=uuid4(),
+            task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            estimated_effort_hours=Decimal("10"),
+            process_stage="resource_allocation",
+        )
+        result = map_requirement_to_allocation_requirement(
+            requirement, uuid4(), uuid4(), 1
+        )
+        assert isinstance(result["requirement_payload"], str)
+        parsed = json.loads(result["requirement_payload"])
+        assert parsed["resource_type"] == "HUMAN"
+
+    def test_limitations_is_json_string(self) -> None:
+        """Test that limitations from mapper is a JSON string."""
+        metadata = AgentMessageMetadata(
+            correlation_id=uuid4(),
+            process_instance_id=uuid4(),
+            task_id=uuid4(),
+            tenant_id=uuid4(),
+            message_type="RESOURCE_ALLOCATION_RESPONSE",
+        )
+        recommendation = AllocationRecommendation(
+            metadata=metadata,
+            status=RecommendationStatus.FAILED,
+            requires_human_approval=False,
+            manual_intervention_required=True,
+            explanation="",
+            confidence=None,
+            error_code="TEST",
+            error_message="Test error",
+            retryable=False,
+            limitations=["limit1", "limit2"],
+        )
+        result = map_recommendation_to_allocation_recommendation(
+            recommendation, uuid4(), uuid4(), 1
+        )
+        assert isinstance(result["limitations"], str)
+        parsed = json.loads(result["limitations"])
+        assert parsed == ["limit1", "limit2"]
+
+    def test_validation_payload_is_json_string(self) -> None:
+        """Test that validation_payload from mapper is a JSON string."""
+        validation = BudgetValidationChecks(
+            resource_id=uuid4(),
+            name="Test Budget",
+            sufficient_balance=True,
+            cost_centre_match=True,
+            currency_match=True,
+            validity_period_valid=True,
+            within_authorization_limit=True,
+            available_balance=Decimal("1000"),
+            required_amount=Decimal("500"),
+        )
+        result = map_budget_validation_to_budget_validation_result(
+            validation, uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
+        )
+        assert isinstance(result["validation_payload"], str)
+        parsed = json.loads(result["validation_payload"])
+        assert parsed["sufficient_balance"] is True
+
+
+class TestRequirementResultResourceType:
+    """Tests for RequirementResult resource_type field."""
+
+    def test_human_requirement_result_with_resource_type(self) -> None:
+        """Test that HUMAN RequirementResult validates with resource_type."""
+        from app.agents.agent3_resources.schemas import RequirementResult, ResourceType
+
+        result = RequirementResult(
+            resource_type=ResourceType.HUMAN,
+            eligible_candidates=[],
+            excluded_resources=[],
+            budget_validation=None,
+        )
+        assert result.resource_type == ResourceType.HUMAN
+
+    def test_budget_requirement_result_with_resource_type(self) -> None:
+        """Test that BUDGET RequirementResult validates with resource_type."""
+        from app.agents.agent3_resources.schemas import RequirementResult, ResourceType, BudgetValidationChecks
+
+        result = RequirementResult(
+            resource_type=ResourceType.BUDGET,
+            eligible_candidates=[],
+            excluded_resources=[],
+            budget_validation=BudgetValidationChecks(
+                resource_id=uuid4(),
+                name="Test Budget",
+                sufficient_balance=True,
+                cost_centre_match=True,
+                currency_match=True,
+                validity_period_valid=True,
+                within_authorization_limit=True,
+                available_balance=Decimal("1000"),
+                required_amount=Decimal("500"),
+            ),
+        )
+        assert result.resource_type == ResourceType.BUDGET
+
+    def test_requirement_result_without_resource_type_raises(self) -> None:
+        """Test that RequirementResult without resource_type raises validation error."""
+        from app.agents.agent3_resources.schemas import RequirementResult
+        import pytest
+
+        with pytest.raises(Exception):  # Pydantic validation error
+            RequirementResult(
+                eligible_candidates=[],
+                excluded_resources=[],
+                budget_validation=None,
+            )
 
     def test_map_row_to_exclusion_with_reasons_empty(self) -> None:
         """Test mapping empty rows returns empty dict."""

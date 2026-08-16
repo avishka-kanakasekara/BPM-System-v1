@@ -48,6 +48,7 @@ from .write_mappers import (
 from .write_table_mapping import (
     SQL_SELECT_REQUEST_BY_IDEMPOTENCY,
     SQL_SELECT_RECOMMENDATION_ID_BY_REQUEST,
+    SQL_SELECT_REQUIREMENTS,
     SQL_SELECT_NEXT_RECOMMENDATION_VERSION,
     SQL_INSERT_ALLOCATION_REQUEST,
     SQL_INSERT_ALLOCATION_REQUIREMENT,
@@ -100,6 +101,7 @@ class RecommendationWriteRepository:
         request: AllocationRequest,
         recommendation: AllocationRecommendation,
         evaluation_timestamp: datetime,
+        allow_versioning: bool = False,
     ) -> UUID:
         """Persist a complete allocation result atomically.
 
@@ -107,6 +109,9 @@ class RecommendationWriteRepository:
             request: The allocation request
             recommendation: The allocation recommendation
             evaluation_timestamp: The evaluation timestamp
+            allow_versioning: If True, allow creating a new recommendation version
+                when one already exists for the same request. If False (default),
+                raises PersistenceConflictError when a recommendation exists.
 
         Returns:
             The recommendation_id
@@ -114,29 +119,31 @@ class RecommendationWriteRepository:
         Raises:
             PersistenceValidationError: If validation fails
             PersistenceTransactionError: If transaction fails
-            PersistenceConflictError: If idempotency conflict
+            PersistenceConflictError: If idempotency conflict and allow_versioning=False
         """
         validate_timezone_aware(evaluation_timestamp, "evaluation_timestamp")
 
         async with self._transaction() as session:
-            # Check for idempotency
+            # Check for idempotency - reuse existing request if present
             request_row = await self._check_idempotency(
                 session,
                 request.metadata.tenant_id,
                 request.metadata.correlation_id,
             )
             if request_row:
-                # Request already exists, check for existing recommendation
+                # Request already exists
+                request_id = request_row["id"]
+                # Check for existing recommendation
                 existing_rec_id = await self._get_existing_recommendation(
                     session,
                     request.metadata.tenant_id,
-                    request_row["id"],
+                    request_id,
                 )
-                if existing_rec_id:
+                if existing_rec_id and not allow_versioning:
                     raise PersistenceConflictError(
-                        f"Recommendation already exists for correlation_id {request.metadata.correlation_id}"
+                        f"Recommendation already exists for correlation_id {request.metadata.correlation_id}. "
+                        f"Use allow_versioning=True to create a new version."
                     )
-                request_id = request_row["id"]
             else:
                 # Insert new request
                 request_id = await self._insert_request(
@@ -169,29 +176,57 @@ class RecommendationWriteRepository:
                 recommendation_id,
             )
 
-            # Insert requirements
-            requirement_ids = {}
-            sequence = 1
-            if request.human_requirements:
-                human_req_id = await self._insert_requirement(
+            # Insert or reuse requirements
+            # If reusing an existing request AND existing recommendation (versioning), load existing requirements
+            # If new request OR first recommendation for existing request, insert requirements normally
+            if request_row and existing_rec_id:
+                # Reuse existing requirements for versioning
+                requirement_ids = await self._get_existing_requirements(
                     session,
-                    request.human_requirements,
-                    request_id,
                     request.metadata.tenant_id,
-                    sequence,
+                    request_id,
                 )
-                requirement_ids["human"] = human_req_id
-                sequence += 1
+                # Validate compatibility with incoming result (using lowercase keys)
+                if request.human_requirements and "human" not in requirement_ids:
+                    raise PersistenceValidationError(
+                        f"Request has human_requirements but no HUMAN requirement exists for request_id {request_id}"
+                    )
+                if request.budget_requirements and "budget" not in requirement_ids:
+                    raise PersistenceValidationError(
+                        f"Request has budget_requirements but no BUDGET requirement exists for request_id {request_id}"
+                    )
+                if not request.human_requirements and "human" in requirement_ids:
+                    raise PersistenceValidationError(
+                        f"Request has no human_requirements but HUMAN requirement exists for request_id {request_id}"
+                    )
+                if not request.budget_requirements and "budget" in requirement_ids:
+                    raise PersistenceValidationError(
+                        f"Request has no budget_requirements but BUDGET requirement exists for request_id {request_id}"
+                    )
+            else:
+                # Insert requirements for new request or first recommendation for existing request
+                requirement_ids = {}
+                sequence = 1
+                if request.human_requirements:
+                    human_req_id = await self._insert_requirement(
+                        session,
+                        request.human_requirements,
+                        request_id,
+                        request.metadata.tenant_id,
+                        sequence,
+                    )
+                    requirement_ids["human"] = human_req_id
+                    sequence += 1
 
-            if request.budget_requirements:
-                budget_req_id = await self._insert_requirement(
-                    session,
-                    request.budget_requirements,
-                    request_id,
-                    request.metadata.tenant_id,
-                    sequence,
-                )
-                requirement_ids["budget"] = budget_req_id
+                if request.budget_requirements:
+                    budget_req_id = await self._insert_requirement(
+                        session,
+                        request.budget_requirements,
+                        request_id,
+                        request.metadata.tenant_id,
+                        sequence,
+                    )
+                    requirement_ids["budget"] = budget_req_id
 
             # Insert candidates (only for business recommendations)
             if recommendation.human_requirement_result:
@@ -280,7 +315,25 @@ class RecommendationWriteRepository:
                 },
             )
             row = result.fetchone()
-            return dict(row._mapping) if row else None
+            if not row:
+                return None
+
+            # Map database columns to API field names
+            mapping = dict(row._mapping)
+            return {
+                "recommendation_id": mapping["id"],
+                "tenant_id": mapping["tenant_id"],
+                "correlation_id": mapping["correlation_id"],
+                "status": mapping["status"],
+                "persisted_at": mapping["created_at"],
+                "explanation": mapping.get("explanation", ""),
+                "confidence": mapping.get("confidence"),
+                "requires_human_approval": mapping.get("requires_human_approval", True),
+                "manual_intervention_required": mapping.get("manual_intervention_required", False),
+                "error_code": mapping.get("error_code"),
+                "error_message": mapping.get("error_message"),
+                "retryable": mapping.get("retryable"),
+            }
 
     async def get_latest_recommendation_by_correlation_id(
         self,
@@ -305,7 +358,25 @@ class RecommendationWriteRepository:
                 },
             )
             row = result.fetchone()
-            return dict(row._mapping) if row else None
+            if not row:
+                return None
+
+            # Map database columns to API field names
+            mapping = dict(row._mapping)
+            return {
+                "recommendation_id": mapping["id"],
+                "tenant_id": mapping["tenant_id"],
+                "correlation_id": mapping["correlation_id"],
+                "status": mapping["status"],
+                "persisted_at": mapping["created_at"],
+                "explanation": mapping.get("explanation", ""),
+                "confidence": mapping.get("confidence"),
+                "requires_human_approval": mapping.get("requires_human_approval", True),
+                "manual_intervention_required": mapping.get("manual_intervention_required", False),
+                "error_code": mapping.get("error_code"),
+                "error_message": mapping.get("error_message"),
+                "retryable": mapping.get("retryable"),
+            }
 
     async def mark_previous_recommendation_superseded(
         self,
@@ -366,6 +437,60 @@ class RecommendationWriteRepository:
         )
         row = result.fetchone()
         return row[0] if row else None
+
+    async def _get_existing_requirements(
+        self,
+        session: AsyncSession,
+        tenant_id: UUID,
+        request_id: UUID,
+    ) -> Dict[str, UUID]:
+        """Load existing requirement IDs for a request, mapped by resource_type.
+
+        Args:
+            session: The database session
+            tenant_id: The tenant ID
+            request_id: The request ID
+
+        Returns:
+            Dict mapping resource_type (e.g., "human", "budget") to requirement_id
+
+        Raises:
+            PersistenceValidationError: If requirement structure is incompatible
+        """
+        result = await session.execute(
+            text(SQL_SELECT_REQUIREMENTS),
+            {
+                "tenant_id": tenant_id,
+                "request_id": request_id,
+            },
+        )
+        rows = result.fetchall()
+        requirement_ids = {}
+        seen_types = set()
+
+        for row in rows:
+            req_id = row[0]
+            resource_type = row[1]  # Database string value like "HUMAN" or "BUDGET"
+
+            # Convert to lowercase for consistent mapping
+            resource_type_lower = resource_type.lower()
+
+            # Reject duplicate rows for one resource type
+            if resource_type_lower in seen_types:
+                raise PersistenceValidationError(
+                    f"Duplicate requirement rows found for resource_type {resource_type} for request_id {request_id}"
+                )
+            seen_types.add(resource_type_lower)
+
+            # Reject unexpected resource types
+            if resource_type_lower not in ("human", "budget"):
+                raise PersistenceValidationError(
+                    f"Unexpected resource_type {resource_type} for request_id {request_id}"
+                )
+
+            requirement_ids[resource_type_lower] = req_id
+
+        return requirement_ids
 
     async def _insert_request(
         self,
@@ -582,7 +707,7 @@ class RecommendationWriteRepository:
             request_id,
             requirement_id or uuid4(),
             tenant_id,
-            uuid4(),  # resource_id placeholder
+            validation.resource_id,  # Use actual resource_id from validation
         )
         await session.execute(
             text(SQL_INSERT_BUDGET_VALIDATION),

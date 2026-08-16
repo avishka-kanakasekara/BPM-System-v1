@@ -313,9 +313,9 @@ async def get_recommendation_by_correlation(
 
         # Convert repository dict to summary response
         return RecommendationSummary(
-            recommendation_id=UUID(result["recommendation_id"]),
-            tenant_id=UUID(result["tenant_id"]),
-            correlation_id=UUID(result["correlation_id"]),
+            recommendation_id=result["recommendation_id"],
+            tenant_id=result["tenant_id"],
+            correlation_id=result["correlation_id"],
             status=result["status"],
             persisted_at=result["persisted_at"],
             explanation=result.get("explanation", ""),
@@ -395,9 +395,9 @@ async def get_recommendation(
 
         # Convert repository dict to summary response
         return RecommendationSummary(
-            recommendation_id=UUID(result["recommendation_id"]),
-            tenant_id=UUID(result["tenant_id"]),
-            correlation_id=UUID(result["correlation_id"]),
+            recommendation_id=result["recommendation_id"],
+            tenant_id=result["tenant_id"],
+            correlation_id=result["correlation_id"],
             status=result["status"],
             persisted_at=result["persisted_at"],
             explanation=result.get("explanation", ""),

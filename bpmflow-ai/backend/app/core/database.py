@@ -16,7 +16,6 @@ import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -26,13 +25,8 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
 
-load_dotenv()
-
 # Database URL from environment variable
-# Convert to async format for asyncpg
-_DATABASE_URL = os.getenv("DATABASE_URL")
-if _DATABASE_URL and _DATABASE_URL.startswith("postgresql://"):
-    _DATABASE_URL = _DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+# Convert to async format for asyncpg (done lazily in get_database_url)
 
 # Global engine and session factory (initialized lazily)
 _engine: Optional[AsyncEngine] = None
@@ -51,9 +45,15 @@ def get_database_url() -> str:
     Raises:
         ValueError: If DATABASE_URL is not configured
     """
-    if not _DATABASE_URL:
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
         raise ValueError("DATABASE_URL environment variable is not configured")
-    return _DATABASE_URL
+
+    # Convert to async format for asyncpg
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace("postgresql://", "postgresql+asyncpg://")
+
+    return database_url
 
 
 def get_engine() -> AsyncEngine:
@@ -77,6 +77,7 @@ def get_engine() -> AsyncEngine:
             database_url,
             echo=False,  # Set to False in production
             poolclass=NullPool,  # Use NullPool for serverless environments like Supabase
+            connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0},
         )
 
         # Create session factory with the engine
