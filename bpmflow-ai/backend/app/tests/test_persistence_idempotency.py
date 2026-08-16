@@ -26,11 +26,12 @@ from app.agents.agent3_resources.schemas import (
 class FakeAsyncSession:
     """Fake AsyncSession for idempotency testing."""
 
-    def __init__(self, existing_request=None, existing_recommendation=None):
+    def __init__(self, existing_request=None, existing_recommendation=None, existing_requirements=None):
         self.committed = False
         self.rolled_back = False
         self.existing_request = existing_request
         self.existing_recommendation = existing_recommendation
+        self.existing_requirements = existing_requirements  # List of (id, resource_type, sequence_order)
         self.executed_statements = []
 
     async def __aenter__(self):
@@ -48,7 +49,7 @@ class FakeAsyncSession:
     async def execute(self, statement, params=None):
         self.executed_statements.append((statement, params))
         result = MagicMock()
-        
+
         # Return existing request/recommendation if set
         if "SELECT id, tenant_id, correlation_id" in str(statement):
             if self.existing_request:
@@ -72,9 +73,16 @@ class FakeAsyncSession:
                 result.fetchone.return_value = row
             else:
                 result.fetchone.return_value = None
+        elif "SELECT id, resource_type, sequence_order" in str(statement) and "allocation_requirements" in str(statement):
+            if self.existing_requirements:
+                # Return existing requirements as tuples (id, resource_type, sequence_order)
+                result.fetchall.return_value = self.existing_requirements
+            else:
+                result.fetchall.return_value = []
         else:
             result.fetchone.return_value = None
-        
+            result.fetchall.return_value = []
+
         return result
 
 
@@ -176,22 +184,53 @@ class TestIdempotency:
         """Test that duplicate request with existing recommendation raises conflict."""
         existing_request_id = uuid4()
         existing_recommendation_id = uuid4()
-        
+
         fake_session = FakeAsyncSession(
             existing_request=(existing_request_id, sample_request.metadata.tenant_id, sample_request.metadata.correlation_id),
             existing_recommendation=(existing_recommendation_id,),
         )
         session_factory = FakeSessionFactory(fake_session)
         repository = RecommendationWriteRepository(session_factory)
-        
+
         evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
-        
+
         with pytest.raises(PersistenceConflictError, match="Recommendation already exists"):
             asyncio.run(repository.persist_allocation_result(
                 sample_request,
                 sample_recommendation,
                 evaluation_timestamp,
             ))
+
+    def test_duplicate_request_with_allow_versioning_succeeds(
+        self,
+        sample_request: AllocationRequest,
+        sample_recommendation: AllocationRecommendation,
+    ) -> None:
+        """Test that duplicate request with allow_versioning=True allows versioning."""
+        existing_request_id = uuid4()
+        existing_recommendation_id = uuid4()
+        existing_human_req_id = uuid4()
+
+        fake_session = FakeAsyncSession(
+            existing_request=(existing_request_id, sample_request.metadata.tenant_id, sample_request.metadata.correlation_id),
+            existing_recommendation=(existing_recommendation_id,),
+            existing_requirements=[(existing_human_req_id, "HUMAN", 1)],  # Existing HUMAN requirement
+        )
+        session_factory = FakeSessionFactory(fake_session)
+        repository = RecommendationWriteRepository(session_factory)
+
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+        # Should succeed with allow_versioning=True
+        asyncio.run(repository.persist_allocation_result(
+            sample_request,
+            sample_recommendation,
+            evaluation_timestamp,
+            allow_versioning=True,
+        ))
+
+        assert fake_session.committed
+        assert not fake_session.rolled_back
 
     def test_duplicate_request_without_recommendation_reuses_request(
         self,

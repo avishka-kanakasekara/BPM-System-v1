@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -36,6 +37,64 @@ def validate_timezone_aware(value: datetime, field_name: str) -> datetime:
     return value
 
 
+class _JSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder for PostgreSQL JSONB binding with decimal-safe serialization.
+
+    Pydantic model_dump(mode="json") returns Python native types (Decimal, UUID, datetime).
+    This encoder converts them to JSON-compatible types without precision loss:
+    - Decimal: converted to string (preserves monetary/score precision)
+    - UUID: converted to string
+    - datetime: converted to ISO 8601 string (rejects naive datetimes)
+    - Enum: converted to value
+    """
+
+    def default(self, o: Any) -> Any:
+        if isinstance(o, Decimal):
+            return str(o)
+        if isinstance(o, UUID):
+            return str(o)
+        if isinstance(o, datetime):
+            if o.tzinfo is None or o.tzinfo.utcoffset(o) is None:
+                raise ValueError(f"Naive datetime {o} is not JSON-serializable. Use timezone-aware datetime.")
+            return o.isoformat()
+        if hasattr(o, 'value'):  # Enum-like types
+            return o.value
+        return super().default(o)
+
+
+def _to_jsonb(value: Any) -> str:
+    """Convert a structured Python/Pydantic value to a JSON string for PostgreSQL JSONB binding.
+
+    This helper serializes structured values (dict, list, etc.) exactly once into a JSON string
+    for textual SQL using CAST(:parameter AS jsonb). It rejects pre-serialized JSON strings
+    to prevent double-encoding ambiguity.
+
+    Args:
+        value: Structured Python/Pydantic value (dict, list, etc.) from model_dump(mode="json")
+
+    Returns:
+        JSON string representation of the value
+
+    Raises:
+        ValueError: If value is a pre-serialized JSON string (ambiguous input)
+        ValueError: If value contains non-serializable types (e.g., naive datetime)
+
+    Examples:
+        >>> _to_jsonb([])
+        '[]'
+        >>> _to_jsonb({'key': 'value'})
+        '{"key": "value"}'
+        >>> _to_jsonb('{"already": "json"}')
+        ValueError: Pre-serialized JSON string rejected. Pass structured Python values only.
+    """
+    if isinstance(value, str):
+        raise ValueError(
+            "Pre-serialized JSON string rejected. Pass structured Python values (dict, list) "
+            'from Pydantic model_dump(mode="json") instead.'
+        )
+    return json.dumps(value, cls=_JSONEncoder)
+
+
 def generate_idempotency_key(request: AllocationRequest) -> str:
     """Generate a deterministic idempotency key from request metadata."""
     # Use correlation_id + tenant_id + message hash for idempotency
@@ -58,7 +117,7 @@ def map_request_to_allocation_request(
         "evaluation_timestamp": evaluation_timestamp,
         "process_instance_id": request.metadata.process_instance_id,
         "task_id": request.metadata.task_id,
-        "request_payload": request.model_dump(mode="json"),
+        "request_payload": _to_jsonb(request.model_dump(mode="json")),
         "request_schema_version": SCHEMA_VERSION,
     }
 
@@ -82,7 +141,7 @@ def map_requirement_to_allocation_requirement(
         "task_deadline": requirement.task_deadline,
         "process_stage": requirement.process_stage,
         "estimated_effort_hours": getattr(requirement, "estimated_effort_hours", None),
-        "requirement_payload": requirement.model_dump(mode="json"),
+        "requirement_payload": _to_jsonb(requirement.model_dump(mode="json")),
     }
 
 
@@ -173,7 +232,7 @@ def map_recommendation_to_allocation_recommendation(
         "error_code": recommendation.error_code,
         "error_message": recommendation.error_message,
         "retryable": recommendation.retryable,
-        "limitations": recommendation.limitations or [],
+        "limitations": _to_jsonb(recommendation.limitations or []),
         "supersedes_recommendation_id": supersedes_recommendation_id,
         "response_schema_version": SCHEMA_VERSION,
     }
@@ -315,7 +374,7 @@ def map_budget_validation_to_budget_validation_result(
         "within_authorization_limit": validation.within_authorization_limit,
         "available_balance": validation.available_balance,
         "required_amount": validation.required_amount,
-        "validation_payload": validation.model_dump(mode="json"),
+        "validation_payload": _to_jsonb(validation.model_dump(mode="json")),
     }
 
 

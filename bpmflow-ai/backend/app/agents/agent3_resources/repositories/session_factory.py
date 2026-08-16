@@ -29,6 +29,7 @@ def create_async_session_factory(
         normalize_async_database_url(database_url),
         echo=echo,
         poolclass=NullPool,
+        connect_args={"statement_cache_size": 0, "prepared_statement_cache_size": 0},
     )
     factory = async_sessionmaker(
         engine,

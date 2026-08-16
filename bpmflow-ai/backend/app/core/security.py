@@ -165,7 +165,10 @@ def _get_jwks_url(supabase_url: str) -> str:
     Returns:
         The JWKS endpoint URL
     """
-    return f"{supabase_url.rstrip('/')}/.well-known/jwks.json"
+    base_url = supabase_url.rstrip("/")
+    if base_url.endswith("/auth/v1"):
+        return f"{base_url}/.well-known/jwks.json"
+    return f"{base_url}/auth/v1/.well-known/jwks.json"
 
 
 def _get_expected_issuer(supabase_url: str) -> str:
@@ -177,7 +180,10 @@ def _get_expected_issuer(supabase_url: str) -> str:
     Returns:
         The expected issuer string
     """
-    return f"{supabase_url.rstrip('/')}/auth/v1"
+    base_url = supabase_url.rstrip("/")
+    if base_url.endswith("/auth/v1"):
+        return base_url
+    return f"{base_url}/auth/v1"
 
 
 async def verify_supabase_token(token: str) -> VerifiedPrincipal:

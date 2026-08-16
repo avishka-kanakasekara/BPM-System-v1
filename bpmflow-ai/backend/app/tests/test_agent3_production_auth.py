@@ -24,6 +24,7 @@ from cryptography.hazmat.backends import default_backend
 import base64
 import json
 
+import httpx
 from fastapi import HTTPException, Request, status, Depends
 from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
@@ -155,10 +156,16 @@ class TestJWKSURLConstruction:
     """Tests for JWKS URL construction."""
 
     def test_jwks_url_construction(self, mock_supabase_url):
-        """Test JWKS URL is constructed correctly."""
+        """Test JWKS URL is constructed correctly with /auth/v1 prefix."""
         with patch.object(settings, "SUPABASE_URL", mock_supabase_url):
             url = _get_jwks_url(mock_supabase_url)
-            assert url == f"{mock_supabase_url}/.well-known/jwks.json"
+            assert url == f"{mock_supabase_url}/auth/v1/.well-known/jwks.json"
+
+    def test_jwks_url_construction_with_existing_auth_v1(self):
+        """Test JWKS URL handles SUPABASE_URL that already includes /auth/v1."""
+        url_with_prefix = "https://test-project.supabase.co/auth/v1"
+        url = _get_jwks_url(url_with_prefix)
+        assert url == "https://test-project.supabase.co/auth/v1/.well-known/jwks.json"
 
     def test_expected_issuer_construction(self, mock_supabase_url):
         """Test expected issuer is constructed correctly."""
@@ -179,7 +186,7 @@ def sign_jwt(payload, private_key):
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption()
     )
-    
+
     token = jwt.encode(
         payload,
         private_pem,
@@ -195,37 +202,67 @@ class TestJWKSCache:
     @pytest.mark.asyncio
     async def test_jwks_cache_fetches_and_caches(self, test_jwks):
         """Test JWKS cache fetches and caches JWKS."""
-        # Simplified test - verify cache logic exists
         cache = JWKSCache(ttl_seconds=300)
-        assert cache is not None
+        mock_response = MagicMock()
+        mock_response.json.return_value = test_jwks
+        mock_response.raise_for_status.return_value = None
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_response
+
+            res1 = await cache.get_jwks("https://test.supabase.co/auth/v1/.well-known/jwks.json")
+            res2 = await cache.get_jwks("https://test.supabase.co/auth/v1/.well-known/jwks.json")
+
+            assert res1 == test_jwks
+            assert res2 == test_jwks
+            assert mock_get.call_count == 1
 
     @pytest.mark.asyncio
     async def test_jwks_cache_expires_after_ttl(self, test_jwks):
         """Test JWKS cache expires after TTL."""
-        # Simplified test - verify cache TTL logic exists
         cache = JWKSCache(ttl_seconds=0)
-        assert cache is not None
+        mock_response = MagicMock()
+        mock_response.json.return_value = test_jwks
+        mock_response.raise_for_status.return_value = None
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_response
+
+            await cache.get_jwks("https://test.supabase.co/auth/v1/.well-known/jwks.json")
+            await cache.get_jwks("https://test.supabase.co/auth/v1/.well-known/jwks.json")
+
+            assert mock_get.call_count == 2
 
     @pytest.mark.asyncio
     async def test_jwks_cache_handles_http_error(self):
-        """Test JWKS cache handles HTTP errors gracefully."""
-        # Simplified test - verify error handling exists
+        """Test JWKS cache maps httpx.HTTPError to 503 without leaking details."""
         cache = JWKSCache()
-        assert cache is not None
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            req = httpx.Request("GET", "https://test.supabase.co/auth/v1/.well-known/jwks.json")
+            resp = httpx.Response(404, request=req)
+            mock_get.side_effect = httpx.HTTPStatusError("404 Not Found", request=req, response=resp)
 
-    @pytest.mark.asyncio
-    async def test_jwks_cache_handles_empty_response(self):
-        """Test JWKS cache handles empty JWKS response."""
-        # Simplified test - verify empty JWKS handling exists
-        cache = JWKSCache()
-        assert cache is not None
+            with pytest.raises(HTTPException) as exc_info:
+                await cache.get_jwks("https://test.supabase.co/auth/v1/.well-known/jwks.json")
+
+            assert exc_info.value.status_code == 503
+            detail = exc_info.value.detail
+            assert detail["error_code"] == "JWKS_FETCH_FAILED"
+            assert "https://" not in str(detail)
 
     @pytest.mark.asyncio
     async def test_jwks_cache_handles_malformed_response(self):
-        """Test JWKS cache handles malformed JWKS response."""
-        # Simplified test - verify malformed JWKS handling exists
+        """Test JWKS cache handles malformed JSON response gracefully."""
         cache = JWKSCache()
-        assert cache is not None
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_response
+
+            with pytest.raises(Exception):
+                await cache.get_jwks("https://test.supabase.co/auth/v1/.well-known/jwks.json")
 
 
 # ============================================================================

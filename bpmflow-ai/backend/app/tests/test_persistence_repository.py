@@ -47,6 +47,8 @@ class FakeAsyncSession:
         self.rolled_back = False
         self.executed_statements: List[tuple] = []
         self._results: Dict[str, Any] = {}
+        self._query_sequence: List[Any] = []  # Sequence of results for different queries
+        self._query_index = 0
 
     async def __aenter__(self):
         return self
@@ -64,18 +66,37 @@ class FakeAsyncSession:
         self.executed_statements.append((statement, params))
         result = MagicMock()
         
-        # Return proper row object with _mapping attribute
-        fetchone_result = self._results.get("fetchone")
-        if fetchone_result is not None:
-            if isinstance(fetchone_result, tuple):
-                # Convert tuple to row-like object
-                row = MagicMock()
-                row._mapping = {f"col_{i}": val for i, val in enumerate(fetchone_result)}
-                result.fetchone.return_value = row
+        # Use query sequence if available (for versioning tests with multiple queries)
+        if self._query_sequence and self._query_index < len(self._query_sequence):
+            query_result = self._query_sequence[self._query_index]
+            self._query_index += 1
+
+            if isinstance(query_result, dict) and "fetchone" in query_result:
+                result.fetchone.return_value = query_result["fetchone"]
+            elif isinstance(query_result, dict) and "fetchall" in query_result:
+                result.fetchall.return_value = query_result["fetchall"]
             else:
-                result.fetchone.return_value = fetchone_result
+                result.fetchone.return_value = query_result
+                result.fetchall.return_value = []
         else:
-            result.fetchone.return_value = None
+            # Fall back to _results for backward compatibility
+            fetchone_result = self._results.get("fetchone")
+            if fetchone_result is not None:
+                if isinstance(fetchone_result, tuple):
+                    row = MagicMock()
+                    row._mapping = {f"col_{i}": val for i, val in enumerate(fetchone_result)}
+                    result.fetchone.return_value = row
+                else:
+                    result.fetchone.return_value = fetchone_result
+            else:
+                result.fetchone.return_value = None
+
+            fetchall_result = self._results.get("fetchall")
+            if fetchall_result is not None:
+                result.fetchall.return_value = fetchall_result
+            else:
+                result.fetchall.return_value = []
+
         return result
 
 
@@ -266,9 +287,9 @@ class TestRecommendationWriteRepository:
         fake_session._results["fetchone"] = row
         
         result = asyncio.run(repository.get_recommendation(tenant_id, recommendation_id))
-        
+
         assert result is not None
-        assert result["id"] == recommendation_id
+        assert result["recommendation_id"] == recommendation_id
         assert result["status"] == "PENDING_HUMAN_APPROVAL"
 
     def test_get_latest_recommendation_by_correlation_id(
@@ -457,6 +478,127 @@ class TestRecommendationWriteRepository:
         
         # Check that gap and alternative inserts were called
         assert fake_session.committed
+
+    def test_get_recommendation_maps_database_columns_to_api_fields(
+        self,
+        repository: RecommendationWriteRepository,
+        fake_session: FakeAsyncSession,
+    ) -> None:
+        """Test that get_recommendation maps database columns to API field names correctly."""
+        tenant_id = uuid4()
+        recommendation_id = uuid4()
+        correlation_id = uuid4()
+        created_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+        # Mock database row with column names from SQL_SELECT_RECOMMENDATION_HEADER
+        fake_session._results["fetchone"] = MagicMock(_mapping={
+            "id": recommendation_id,
+            "tenant_id": tenant_id,
+            "request_id": uuid4(),
+            "correlation_id": correlation_id,
+            "recommendation_version": 1,
+            "status": "PENDING_HUMAN_APPROVAL",
+            "requires_human_approval": True,
+            "manual_intervention_required": False,
+            "explanation": "Test explanation",
+            "confidence": Decimal("0.85"),
+            "error_code": None,
+            "error_message": None,
+            "retryable": None,
+            "limitations": [],
+            "response_schema_version": "1.0",
+            "created_at": created_at,
+        })
+
+        result = asyncio.run(repository.get_recommendation(tenant_id, recommendation_id))
+
+        assert result is not None
+        # Verify database column 'id' maps to API field 'recommendation_id'
+        assert result["recommendation_id"] == recommendation_id
+        # Verify database column 'created_at' maps to API field 'persisted_at'
+        assert result["persisted_at"] == created_at
+        assert result["tenant_id"] == tenant_id
+        assert result["correlation_id"] == correlation_id
+        assert result["status"] == "PENDING_HUMAN_APPROVAL"
+        assert result["explanation"] == "Test explanation"
+        assert result["confidence"] == Decimal("0.85")
+        assert result["requires_human_approval"] is True
+        assert result["manual_intervention_required"] is False
+
+    def test_get_recommendation_returns_none_when_not_found(
+        self,
+        repository: RecommendationWriteRepository,
+        fake_session: FakeAsyncSession,
+    ) -> None:
+        """Test that get_recommendation returns None when row not found."""
+        tenant_id = uuid4()
+        recommendation_id = uuid4()
+
+        fake_session._results["fetchone"] = None
+
+        result = asyncio.run(repository.get_recommendation(tenant_id, recommendation_id))
+
+        assert result is None
+
+    def test_get_latest_recommendation_by_correlation_id_maps_database_columns_to_api_fields(
+        self,
+        repository: RecommendationWriteRepository,
+        fake_session: FakeAsyncSession,
+    ) -> None:
+        """Test that get_latest_recommendation_by_correlation_id maps database columns to API field names correctly."""
+        tenant_id = uuid4()
+        correlation_id = uuid4()
+        recommendation_id = uuid4()
+        created_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+        # Mock database row with column names from SQL_SELECT_LATEST_RECOMMENDATION_HEADER
+        fake_session._results["fetchone"] = MagicMock(_mapping={
+            "id": recommendation_id,
+            "tenant_id": tenant_id,
+            "request_id": uuid4(),
+            "correlation_id": correlation_id,
+            "recommendation_version": 1,
+            "status": "GENERATED",
+            "requires_human_approval": False,
+            "manual_intervention_required": False,
+            "explanation": "Latest explanation",
+            "confidence": Decimal("0.90"),
+            "error_code": None,
+            "error_message": None,
+            "retryable": None,
+            "limitations": [],
+            "response_schema_version": "1.0",
+            "created_at": created_at,
+        })
+
+        result = asyncio.run(repository.get_latest_recommendation_by_correlation_id(tenant_id, correlation_id))
+
+        assert result is not None
+        # Verify database column 'id' maps to API field 'recommendation_id'
+        assert result["recommendation_id"] == recommendation_id
+        # Verify database column 'created_at' maps to API field 'persisted_at'
+        assert result["persisted_at"] == created_at
+        assert result["tenant_id"] == tenant_id
+        assert result["correlation_id"] == correlation_id
+        assert result["status"] == "GENERATED"
+        assert result["explanation"] == "Latest explanation"
+        assert result["confidence"] == Decimal("0.90")
+        assert result["requires_human_approval"] is False
+
+    def test_get_latest_recommendation_by_correlation_id_returns_none_when_not_found(
+        self,
+        repository: RecommendationWriteRepository,
+        fake_session: FakeAsyncSession,
+    ) -> None:
+        """Test that get_latest_recommendation_by_correlation_id returns None when row not found."""
+        tenant_id = uuid4()
+        correlation_id = uuid4()
+
+        fake_session._results["fetchone"] = None
+
+        result = asyncio.run(repository.get_latest_recommendation_by_correlation_id(tenant_id, correlation_id))
+
+        assert result is None
 
     def test_persist_allocation_result_with_budget_validation(
         self,
