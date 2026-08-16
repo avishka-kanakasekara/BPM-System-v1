@@ -43,6 +43,17 @@ from .eligibility import EligibilityEvaluator
 from .ranking import HumanResourceRanker
 from .gaps import GapDetector
 from .explainer_template import TemplateExplainer, ExplanationContext
+from .llm_explainer import (
+    ExplanationGenerator,
+    TemplateExplainerAdapter,
+    OpenAIExplanationGenerator,
+    ResilientFallbackExplainer,
+    LLMOutputValidator,
+    SanitizedExplanationInput,
+    sanitize_explanation_context,
+    build_user_prompt,
+    LLMExplanationError,
+)
 from .service import ResourceAllocationService
 from .strategies import ResourceStrategy, HumanResourceStrategy, BudgetResourceStrategy
 from .failures import (
@@ -123,6 +134,15 @@ __all__ = [
     "GapDetector",
     "TemplateExplainer",
     "ExplanationContext",
+    "ExplanationGenerator",
+    "TemplateExplainerAdapter",
+    "OpenAIExplanationGenerator",
+    "ResilientFallbackExplainer",
+    "LLMOutputValidator",
+    "SanitizedExplanationInput",
+    "sanitize_explanation_context",
+    "build_user_prompt",
+    "LLMExplanationError",
     "ResourceAllocationService",
     "FailureSpec",
     "detect_invalid_request",
