@@ -3,6 +3,7 @@ import { isValidUUID } from '../utils/metadata';
 import { isPersistedAllocationResponse } from '../api/validateAgent3Response';
 
 export const allocationRequestPath = '/agent3/allocations/new';
+export const recommendationLookupPath = '/agent3/recommendations/lookup';
 export const recommendationPath = (id: string) => `/agent3/recommendations/${id}`;
 export interface RecommendationNavigationState { persistedResponse: PersistedAllocationResponse }
 
