@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useLocation, useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { getRecommendationById } from '../api/agent3Api';
 import type { Agent3ClientError } from '../api/normalizeAgent3Error';
 import { FullRecommendation, RecommendationErrorState, RecommendationLoadingState, SummaryRecommendation } from '../components/RecommendationPresentation';
-import { allocationRequestPath, getRecommendationNavigationResponse, recommendationLookupPath } from '../navigation/recommendationNavigation';
+import { Agent3SectionNavigation } from '../components/Agent3SectionNavigation';
+import { getRecommendationNavigationResponse } from '../navigation/recommendationNavigation';
 import type { RecommendationSummary } from '../types/agent3Api';
 import { isValidUUID } from '../utils/metadata';
 
@@ -35,5 +36,5 @@ export default function RecommendationResultPage() {
   else if (state.kind === 'loading') content = <RecommendationLoadingState />;
   else if (state.kind === 'summary') content = <SummaryRecommendation summary={state.value} />;
   else content = <RecommendationErrorState title={state.title} message={state.message} />;
-  return <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900"><div className="mx-auto max-w-6xl"><nav aria-label="Agent 3 recommendation navigation" className="mb-6 flex flex-wrap gap-4 text-sm"><Link className="font-medium text-indigo-700 underline focus:ring-2 focus:ring-indigo-500" to={allocationRequestPath}>New allocation request</Link><Link className="font-medium text-indigo-700 underline focus:ring-2 focus:ring-indigo-500" to={recommendationLookupPath}>Recommendation lookup</Link></nav>{content}</div></main>;
+  return <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900"><div className="mx-auto max-w-6xl space-y-6"><Agent3SectionNavigation />{content}</div></main>;
 }

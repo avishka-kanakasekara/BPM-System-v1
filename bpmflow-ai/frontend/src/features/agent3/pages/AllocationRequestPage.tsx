@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { submitAllocationRequest } from '../api/agent3Api';
 import type { Agent3ClientError } from '../api/normalizeAgent3Error';
 import { getAgent3Session } from '../auth/agent3Session';
 import { FormErrorSummary } from '../components/FormErrorSummary';
-import { getProvidedWorkflowContext, recommendationLookupPath, recommendationPath } from '../navigation/recommendationNavigation';
+import { Agent3SectionNavigation } from '../components/Agent3SectionNavigation';
+import { getProvidedWorkflowContext, recommendationPath } from '../navigation/recommendationNavigation';
 import { createMessageMetadata, generateCorrelationId, generateWorkflowId } from '../utils/metadata';
 import { emptyBudgetDraft, emptyHumanDraft, type AllocationMode, type BudgetDraft, type FieldErrors, type HumanDraft, validateBudgetDraft, validateHumanDraft } from '../validation/allocationValidation';
 
@@ -83,9 +84,9 @@ export default function AllocationRequestPage() {
   }
 
   if (sessionStatus === 'loading') return <main className="min-h-screen bg-slate-50 p-6"><p role="status" className="mx-auto max-w-3xl text-slate-600">Verifying authenticated session…</p></main>;
-  if (sessionStatus === 'error' || !sessionState) return <main className="min-h-screen bg-slate-50 p-6"><section role="alert" className="mx-auto max-w-3xl rounded-xl border border-red-200 bg-white p-6"><h1 className="text-2xl font-bold text-slate-900">Authentication required</h1><p className="mt-2 text-slate-600">A valid managed session is required before an allocation request can be created.</p></section></main>;
+  if (sessionStatus === 'error' || !sessionState) return <main className="min-h-screen bg-slate-50 p-6"><section role="alert" className="mx-auto max-w-3xl rounded-xl border border-red-200 bg-white p-6"><h1 className="text-2xl font-bold text-slate-900">Authentication required</h1><p className="mt-2 text-slate-600">A valid managed session is required before an allocation request can be created. Sign in through the application authentication flow.</p></section></main>;
   return <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900"><div className="mx-auto max-w-4xl space-y-6">
-    <header><p className="text-sm font-semibold uppercase tracking-wide text-indigo-600">Agent 3</p><h1 className="mt-1 text-3xl font-bold">Create allocation request</h1><p className="mt-2 text-slate-500">Authenticated tenant context verified.</p><Link className="mt-2 inline-block text-indigo-700 underline focus:ring-2 focus:ring-indigo-500" to={recommendationLookupPath}>Look up a recommendation</Link>{!workflow.current && <p className="ml-3 mt-2 inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">Standalone demo mode</p>}</header>
+    <Agent3SectionNavigation /><header><p className="text-sm font-semibold uppercase tracking-wide text-indigo-600">Agent 3</p><h1 className="mt-1 text-3xl font-bold">Create allocation request</h1><p className="mt-2 text-slate-500">Authenticated tenant context verified.</p>{!workflow.current && <p className="mt-2 inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">Standalone demo mode</p>}</header>
     <FormErrorSummary ref={errorSummaryRef} errors={errors} />
     {submitError && <section role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800"><p>{submitError.message}</p>{(submitError.retryable || submitError.conflict) && <p className="mt-2 font-mono text-sm">Correlation ID: {correlationId.current}</p>}{submitError.retryable && <p className="mt-2 text-sm">Your correlation ID and draft have been preserved. Submit again when ready.</p>}</section>}
     <form onSubmit={submit} aria-busy={submitting} className="space-y-6">
