@@ -65,7 +65,8 @@ export function preserveCorrelationId(correlationId: string): string {
 /**
  * Generate a workflow ID (process_instance_id or task_id).
  *
- * IMPORTANT: In production, these should come from trusted workflow context.
+ * IMPORTANT: Browser-provided IDs are format-validated only. Production trust
+ * requires workflow context supplied or verified by the backend.
  * Random generation is only for standalone/demo scenarios.
  *
  * @returns A workflow ID UUID
@@ -75,17 +76,17 @@ export function generateWorkflowId(): string {
 }
 
 /**
- * Use a trusted workflow ID if provided, otherwise generate a demo fallback.
+ * Use an application-supplied workflow ID if provided, otherwise generate a demo fallback.
  *
- * @param trustedId - The trusted workflow ID from context (optional)
- * @returns The trusted ID if provided, otherwise a generated demo ID
+ * @param providedId - The application-supplied workflow ID (optional)
+ * @returns The format-validated ID if provided, otherwise a generated demo ID
  */
-export function useWorkflowId(trustedId: string | null): string {
-  if (trustedId) {
-    if (!isValidUUID(trustedId)) {
-      throw new Error(`Invalid workflow ID: ${trustedId}`);
+export function useProvidedWorkflowId(providedId: string | null): string {
+  if (providedId) {
+    if (!isValidUUID(providedId)) {
+      throw new Error(`Invalid workflow ID: ${providedId}`);
     }
-    return trustedId;
+    return providedId;
   }
   
   // Demo fallback - explicitly marked
@@ -132,8 +133,8 @@ export function createMessageMetadata(params: MessageMetadataParams) {
   }
 
   // Use workflow IDs with demo fallback
-  const finalProcessInstanceId = useWorkflowId(processInstanceId);
-  const finalTaskId = useWorkflowId(taskId);
+  const finalProcessInstanceId = useProvidedWorkflowId(processInstanceId);
+  const finalTaskId = useProvidedWorkflowId(taskId);
 
   return {
     message_id: generateUUID(),

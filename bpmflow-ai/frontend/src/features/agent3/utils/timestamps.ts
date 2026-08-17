@@ -54,15 +54,13 @@ export function localDateTimeToISO8601(
     throw new Error('datetime-local value is required');
   }
 
-  const date = new Date(localDateTime);
-  
-  if (isNaN(date.getTime())) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(localDateTime);
+  if (!match) {
     throw new Error(`Invalid datetime-local value: ${localDateTime}`);
   }
-
-  // Apply timezone offset
-  const utcDate = new Date(date.getTime() - timezoneOffset * 60000);
-  
+  const [, year, month, day, hour, minute, second = '0'] = match;
+  const utcDate = new Date(Date.UTC(+year, +month - 1, +day, +hour, +minute, +second) + timezoneOffset * 60000);
+  if (utcDate.getUTCFullYear() !== +year && timezoneOffset === 0) throw new Error(`Invalid datetime-local value: ${localDateTime}`);
   return utcDate.toISOString();
 }
 
