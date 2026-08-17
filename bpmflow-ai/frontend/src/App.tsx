@@ -6,6 +6,7 @@ import ExceptionView from './pages/ExceptionView'
 import AuditTraceView from './pages/AuditTraceView'
 import AllocationRequestPage from './features/agent3/pages/AllocationRequestPage'
 import RecommendationResultPage from './features/agent3/pages/RecommendationResultPage'
+import RecommendationLookupPage from './features/agent3/pages/RecommendationLookupPage'
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
           <Route path="/exceptions" element={<ExceptionView />} />
           <Route path="/audit" element={<AuditTraceView />} />
           <Route path="/agent3/allocations/new" element={<AllocationRequestPage />} />
+          <Route path="/agent3/recommendations/lookup" element={<RecommendationLookupPage />} />
           <Route path="/agent3/recommendations/:recommendationId" element={<RecommendationResultPage />} />
         </Routes>
       </div>

@@ -1,24 +1,39 @@
-import { useState } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
-import { Agent3StatusBadge } from '../components/Agent3StatusBadge';
-import { getRecommendationNavigationResponse } from '../navigation/recommendationNavigation';
-import { formatTimestampToLocal } from '../utils/timestamps';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useLocation, useParams } from 'react-router-dom';
+import { getRecommendationById } from '../api/agent3Api';
+import type { Agent3ClientError } from '../api/normalizeAgent3Error';
+import { FullRecommendation, RecommendationErrorState, RecommendationLoadingState, SummaryRecommendation } from '../components/RecommendationPresentation';
+import { allocationRequestPath, getRecommendationNavigationResponse, recommendationLookupPath } from '../navigation/recommendationNavigation';
+import type { RecommendationSummary } from '../types/agent3Api';
+import { isValidUUID } from '../utils/metadata';
+
+function safeError(error: unknown): { title: string; message: string } {
+  const value = error as Partial<Agent3ClientError>;
+  if (value.kind === 'authentication') return { title: 'Authentication required', message: 'Your session is unavailable or expired. Sign in before retrieving this recommendation.' };
+  if (value.kind === 'authorization') return { title: 'Access unavailable', message: 'You are not authorized to view this recommendation.' };
+  if (value.kind === 'not_found') return { title: 'Recommendation unavailable', message: 'The recommendation was not found or is not available to this tenant.' };
+  if (value.kind === 'unavailable') return { title: 'Service unavailable', message: 'The recommendation service is temporarily unavailable.' };
+  return { title: 'Recommendation unavailable', message: 'The recommendation could not be loaded safely.' };
+}
 
 export default function RecommendationResultPage() {
   const { recommendationId = '' } = useParams(); const location = useLocation();
-  const [copyStatus, setCopyStatus] = useState('');
-  const response = getRecommendationNavigationResponse(location.state, recommendationId);
-  if (!response || response.recommendation_id !== recommendationId) return <main className="min-h-screen bg-slate-50 p-6"><section className="mx-auto max-w-3xl rounded-xl border border-slate-200 bg-white p-6"><h1 className="text-2xl font-bold text-slate-900">Recommendation summary unavailable</h1><p className="mt-3 text-slate-600">This page was opened without the short-lived submission result. Only summary retrieval is available, and the detailed GET-based view arrives in Phase 5D.</p><dl className="mt-5"><dt className="text-sm font-medium text-slate-500">Recommendation ID</dt><dd className="mt-1 break-all font-mono text-slate-900">{recommendationId}</dd></dl></section></main>;
-  const copy = async () => {
-    try {
-      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
-      await navigator.clipboard.writeText(response.correlation_id);
-      setCopyStatus('Correlation ID copied.');
-    } catch {
-      setCopyStatus('Unable to copy the correlation ID. Select and copy it manually.');
-    }
-  };
-  return <main className="min-h-screen bg-slate-50 p-6"><section className="mx-auto max-w-3xl rounded-xl border border-slate-200 bg-white p-6 shadow-sm"><p className="text-sm font-semibold uppercase tracking-wide text-indigo-600">Persisted Agent 3 result</p><h1 className="mt-1 text-2xl font-bold text-slate-900">Allocation recommendation</h1><div className="mt-4"><Agent3StatusBadge status={response.recommendation_status} /></div>
-    <dl className="mt-6 grid gap-5 sm:grid-cols-2"><div><dt className="text-sm text-slate-500">Recommendation ID</dt><dd className="break-all font-mono text-sm">{response.recommendation_id}</dd></div><div><dt className="text-sm text-slate-500">Correlation ID</dt><dd className="break-all font-mono text-sm">{response.correlation_id}</dd><button type="button" onClick={copy} className="mt-2 rounded border border-indigo-600 px-3 py-1 text-sm font-medium text-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">Copy correlation ID</button><p aria-live="polite" className="mt-2 text-sm text-slate-600">{copyStatus}</p></div><div><dt className="text-sm text-slate-500">Persisted</dt><dd>Yes (true)</dd></div><div><dt className="text-sm text-slate-500">Persisted at</dt><dd>{formatTimestampToLocal(response.persisted_at)}</dd></div><div><dt className="text-sm text-slate-500">Human approval required</dt><dd>{response.recommendation.requires_human_approval ? 'Yes' : 'No'}</dd></div>{response.recommendation_status === 'FAILED' && <div><dt className="text-sm text-slate-500">Technical failure</dt><dd className="font-medium text-red-700">Manual intervention required</dd></div>}</dl>
-    <p className="mt-6 rounded-lg bg-violet-50 p-4 text-violet-800">Full recommendation presentation will be available in the detailed result view.</p></section></main>;
+  const full = getRecommendationNavigationResponse(location.state, recommendationId);
+  const generation = useRef(0);
+  const [state, setState] = useState<{ kind: 'loading' } | { kind: 'summary'; value: RecommendationSummary } | { kind: 'error'; title: string; message: string }>({ kind: 'loading' });
+
+  useEffect(() => {
+    if (full) return;
+    if (!isValidUUID(recommendationId)) { setState({ kind: 'error', title: 'Invalid recommendation ID', message: 'Enter or open a valid recommendation UUID.' }); return; }
+    const request = ++generation.current; let active = true; setState({ kind: 'loading' });
+    getRecommendationById(recommendationId).then((value) => { if (active && request === generation.current) setState(value.recommendation_id === recommendationId ? { kind: 'summary', value } : { kind: 'error', title: 'Recommendation unavailable', message: 'The returned recommendation did not match the requested identifier.' }); }).catch((error) => { if (active && request === generation.current) setState({ kind: 'error', ...safeError(error) }); });
+    return () => { active = false; };
+  }, [full, recommendationId]);
+
+  let content;
+  if (full) content = <FullRecommendation response={full} />;
+  else if (state.kind === 'loading') content = <RecommendationLoadingState />;
+  else if (state.kind === 'summary') content = <SummaryRecommendation summary={state.value} />;
+  else content = <RecommendationErrorState title={state.title} message={state.message} />;
+  return <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900"><div className="mx-auto max-w-6xl"><nav aria-label="Agent 3 recommendation navigation" className="mb-6 flex flex-wrap gap-4 text-sm"><Link className="font-medium text-indigo-700 underline focus:ring-2 focus:ring-indigo-500" to={allocationRequestPath}>New allocation request</Link><Link className="font-medium text-indigo-700 underline focus:ring-2 focus:ring-indigo-500" to={recommendationLookupPath}>Recommendation lookup</Link></nav>{content}</div></main>;
 }
