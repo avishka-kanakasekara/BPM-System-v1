@@ -26,7 +26,7 @@ import {
   generateCorrelationId,
   preserveCorrelationId,
   generateWorkflowId,
-  useWorkflowId,
+  useProvidedWorkflowId,
   createMessageMetadata
 } from '../utils/metadata';
 
@@ -212,18 +212,18 @@ describe('Metadata Utilities', () => {
       expect(isValidUUID(workflowId)).toBe(true);
     });
 
-    it('should use trusted workflow IDs when provided', () => {
-      const workflowId = useWorkflowId('00000000-0000-0000-0000-000000000001');
+    it('should use application-supplied workflow IDs when provided', () => {
+      const workflowId = useProvidedWorkflowId('00000000-0000-0000-0000-000000000001');
       expect(workflowId).toBe('00000000-0000-0000-0000-000000000001');
     });
 
-    it('should generate demo fallback when no trusted ID provided', () => {
-      const workflowId = useWorkflowId(null);
+    it('should generate demo fallback when no supplied ID is provided', () => {
+      const workflowId = useProvidedWorkflowId(null);
       expect(isValidUUID(workflowId)).toBe(true);
     });
 
     it('should throw on invalid workflow IDs', () => {
-      expect(() => useWorkflowId('invalid')).toThrow('Invalid workflow ID');
+      expect(() => useProvidedWorkflowId('invalid')).toThrow('Invalid workflow ID');
     });
   });
 
