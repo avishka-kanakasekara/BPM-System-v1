@@ -9,24 +9,4 @@ const apiClient = axios.create({
   },
 })
 
-// Request interceptor
-apiClient.interceptors.request.use(
-  (config) => {
-    // You can add auth headers here if needed
-    return config
-  },
-  (error) => {
-    return Promise.reject(error)
-  }
-)
-
-// Response interceptor
-apiClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    console.error('API Error:', error)
-    return Promise.reject(error)
-  }
-)
-
 export default apiClient
