@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database.ids import parse_uuid
 from app.database.models import ProcessInstance, Task
 from app.llm.schemas import AgentMessage
 
@@ -47,30 +48,36 @@ async def perceive_context(
     """
     proc_id = message.process_id
     payload = message.payload or {}
-    task_id = payload.get("task_id", "")
+    nested = payload.get("parameters") or {}
+    task_id = payload.get("task_id") or nested.get("task_id") or ""
 
-    # Default fallback context
+    def _pick(key: str, default: str = "") -> str:
+        value = payload.get(key)
+        if value in (None, ""):
+            value = nested.get(key)
+        return default if value in (None, "") else value
+
     ctx = ProcessContext(
         process_id=proc_id,
         task_id=task_id or str(uuid.uuid4()),
-        process_title=f"Procurement Process ({proc_id})",
-        process_type=payload.get("process_type", "procurement"),
-        task_title=payload.get("task_title", "Process Task"),
-        task_type=payload.get("task_type", "AUTOMATED"),
-        assigned_role=payload.get("assigned_role", "manager"),
-        assigned_to=payload.get("assigned_to", "frank.miller@acmeglobal.com"),
-        priority=payload.get("priority", "MEDIUM"),
-        sla_hours=float(payload.get("sla_hours", 24.0)),
-        elapsed_hours=float(payload.get("elapsed_hours", 18.4)),
+        process_title=_pick("process_title", f"Procurement Process ({proc_id})"),
+        process_type=_pick("process_type", "procurement"),
+        task_title=_pick("task_title", "Process Task"),
+        task_type=_pick("task_type", payload.get("task_type") or "AUTOMATED"),
+        assigned_role=_pick("assigned_role", "manager"),
+        assigned_to=_pick("assigned_to", "") or _pick("recipient", ""),
+        priority=_pick("priority", "MEDIUM"),
+        sla_hours=float(_pick("sla_hours", 0.0) or nested.get("sla_hours") or 0.0),
+        elapsed_hours=float(_pick("elapsed_hours", 0.0) or nested.get("elapsed_hours") or 0.0),
         status="IN_PROGRESS",
-        department=payload.get("department", "Engineering"),
-        requester_email=payload.get("requester_email", "alice.johnson@acmeglobal.com"),
-        metadata=payload,
+        department=_pick("department", "Engineering"),
+        requester_email=_pick("requester_email", "") or "",
+        metadata={**nested, **payload},
     )
 
     if session is not None and proc_id:
         try:
-            proc_uuid = uuid.UUID(proc_id)
+            proc_uuid = parse_uuid(proc_id)
             stmt_p = select(ProcessInstance).where(ProcessInstance.id == proc_uuid)
             res_p = await session.execute(stmt_p)
             proc_row = res_p.scalar_one_or_none()
@@ -80,30 +87,34 @@ async def perceive_context(
                 ctx.process_type = proc_row.process_type
                 ctx.department = proc_row.department or ctx.department
                 ctx.status = proc_row.status
+                if proc_row.requester_id and not ctx.requester_email:
+                    ctx.requester_email = proc_row.requester_id
+                if proc_row.metadata_json:
+                    ctx.metadata = {**proc_row.metadata_json, **ctx.metadata}
 
-            if task_id:
-                try:
-                    task_uuid = uuid.UUID(task_id)
-                    stmt_t = select(Task).where(Task.id == task_uuid)
-                    res_t = await session.execute(stmt_t)
-                    task_row = res_t.scalar_one_or_none()
+            lookup_task_id = task_id or ctx.task_id
+            if lookup_task_id:
+                task_uuid = parse_uuid(lookup_task_id)
+                stmt_t = select(Task).where(Task.id == task_uuid)
+                res_t = await session.execute(stmt_t)
+                task_row = res_t.scalar_one_or_none()
 
-                    if task_row:
-                        ctx.task_title = task_row.title
-                        ctx.task_type = task_row.task_type
-                        ctx.assigned_role = task_row.assigned_role or ctx.assigned_role
-                        ctx.assigned_to = task_row.assigned_to or ctx.assigned_to
-                        ctx.priority = task_row.priority
-                        ctx.sla_hours = task_row.sla_hours or 24.0
+                if task_row:
+                    ctx.task_title = task_row.title
+                    ctx.task_type = task_row.task_type
+                    ctx.assigned_role = task_row.assigned_role or ctx.assigned_role
+                    ctx.assigned_to = task_row.assigned_to or ctx.assigned_to
+                    ctx.priority = task_row.priority
+                    ctx.sla_hours = task_row.sla_hours or ctx.sla_hours or 24.0
 
-                        if task_row.started_at:
-                            now = datetime.now(timezone.utc)
-                            ctx.elapsed_hours = round(
-                                (now - task_row.started_at).total_seconds() / 3600.0, 2
-                            )
-                except ValueError:
-                    pass
-        except ValueError:
+                    if task_row.started_at:
+                        now = datetime.now(timezone.utc)
+                        ctx.elapsed_hours = round(
+                            (now - task_row.started_at).total_seconds() / 3600.0, 2
+                        )
+        except Exception:
             pass
 
+    if not ctx.sla_hours:
+        ctx.sla_hours = 24.0
     return ctx

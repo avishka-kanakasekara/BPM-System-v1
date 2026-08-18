@@ -62,7 +62,7 @@ async def main():
         await conn.run_sync(Base.metadata.create_all)
 
     async_session = async_sessionmaker(engine, expire_on_commit=False)
-    client = GeminiClient(is_offline=True)
+    client = GeminiClient()
     agent = Agent2(gemini_client=client)
     jwt_token = auth.create_access_token({"sub": "agent_4", "role": "orchestrator"})
 

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database.ids import parse_uuid
 from app.database.models import ExecutionReceipt, OptimizationRecommendation, ProcessKPI, WorkflowEvent
 
 
@@ -78,8 +79,7 @@ class EpisodicMemory:
             return []
 
         try:
-            import uuid
-            proc_uuid = uuid.UUID(process_id)
+            proc_uuid = parse_uuid(process_id)
             stmt = (
                 select(ExecutionReceipt)
                 .where(ExecutionReceipt.process_id == proc_uuid)
@@ -142,15 +142,19 @@ class ProcessMemory:
                 kpi_row = res_kpi.scalar_one_or_none()
 
                 if kpi_row:
-                    evidence_results.append(
-                        f"Historical avg Manager Approval duration: {kpi_row.avg_task_duration_hours or 18.4:.1f} hours"
-                    )
-                    evidence_results.append(
-                        f"Process bottleneck: {kpi_row.bottleneck_task or 'Manager Approval'}"
-                    )
-                    evidence_results.append(
-                        f"Historical SLA compliance rate: {((kpi_row.sla_compliance_rate or 0.85) * 100):.1f}%"
-                    )
+                    avg_hours = kpi_row.avg_task_duration_hours
+                    bottleneck = kpi_row.bottleneck_task
+                    sla_rate = kpi_row.sla_compliance_rate
+                    if avg_hours is not None:
+                        evidence_results.append(
+                            f"Historical average task duration: {avg_hours:.1f} hours"
+                        )
+                    if bottleneck:
+                        evidence_results.append(f"Process bottleneck: {bottleneck}")
+                    if sla_rate is not None:
+                        evidence_results.append(
+                            f"Historical SLA compliance rate: {(sla_rate * 100):.1f}%"
+                        )
 
                 # Retrieve optimization recommendations
                 stmt_opt = (
@@ -168,12 +172,11 @@ class ProcessMemory:
             except Exception:
                 pass
 
-        # Fallback default evidence if DB is empty or unseeded
+        # If the database has no historical evidence, tell the planner that honestly
+        # rather than injecting dummy bottleneck numbers.
         if not evidence_results:
             evidence_results = [
-                "Historical average Manager Approval duration is 18.4 hours (primary bottleneck).",
-                "Manager Approval SLA breach rate is 15.5% (> 24 hours).",
-                "Automated PO creation average duration is 8.0 minutes.",
+                "No historical KPI evidence is stored yet for this process.",
             ]
 
         # BM25 & Rerank (keyword similarity scoring)
@@ -182,7 +185,7 @@ class ProcessMemory:
         def score_item(text_item: str) -> float:
             text_words = text_item.lower().split()
             overlap = sum(1 for w in text_words if w in q_terms)
-            return overlap + (1.0 if "bottleneck" in text_item.lower() or "18.4" in text_item else 0.5)
+            return overlap + (1.0 if "bottleneck" in text_item.lower() else 0.0)
 
         scored = [(item, score_item(item)) for item in evidence_results]
         scored.sort(key=lambda x: x[1], reverse=True)

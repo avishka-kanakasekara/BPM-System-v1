@@ -21,10 +21,11 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.types import JSON
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ class ProcessInstance(TimestampMixin, Base):
     __tablename__ = "process_instances"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     process_definition_id: Mapped[Optional[str]] = mapped_column(String(255))
     process_type: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -111,10 +112,10 @@ class Task(TimestampMixin, Base):
     __tablename__ = "tasks"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     process_instance_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
     )
     task_definition_id: Mapped[Optional[str]] = mapped_column(String(255))
     title: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -162,10 +163,10 @@ class ExecutionPlan(TimestampMixin, Base):
     __tablename__ = "execution_plans"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     process_instance_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
     )
     plan_version: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(
@@ -190,10 +191,10 @@ class ExecutionAttempt(TimestampMixin, Base):
     __tablename__ = "execution_attempts"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     task_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("tasks.id"), nullable=False
     )
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(
@@ -221,10 +222,10 @@ class ToolCall(TimestampMixin, Base):
     __tablename__ = "tool_calls"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     execution_attempt_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("execution_attempts.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("execution_attempts.id"), nullable=False
     )
     tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
     action: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -252,13 +253,13 @@ class ExecutionReceipt(TimestampMixin, Base):
     __tablename__ = "execution_receipts"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     process_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
     )
     task_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("tasks.id"), nullable=False
     )
     agent_id: Mapped[str] = mapped_column(String(100), nullable=False)
     tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -301,13 +302,13 @@ class WorkflowEvent(Base):
     __tablename__ = "workflow_events"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     process_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
     )
     task_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id")
+        Uuid(as_uuid=True), ForeignKey("tasks.id")
     )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     actor: Mapped[Optional[str]] = mapped_column(String(255))
@@ -334,10 +335,10 @@ class EmailEvent(TimestampMixin, Base):
     __tablename__ = "email_events"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     execution_receipt_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("execution_receipts.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("execution_receipts.id"), nullable=False
     )
     recipient_email: Mapped[str] = mapped_column(String(320), nullable=False)
     recipient_role: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -363,13 +364,13 @@ class Failure(TimestampMixin, Base):
     __tablename__ = "failures"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     execution_receipt_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("execution_receipts.id")
+        Uuid(as_uuid=True), ForeignKey("execution_receipts.id")
     )
     task_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id")
+        Uuid(as_uuid=True), ForeignKey("tasks.id")
     )
     failure_type: Mapped[str] = mapped_column(String(100), nullable=False)
     severity: Mapped[str] = mapped_column(
@@ -397,10 +398,10 @@ class RetryAttempt(TimestampMixin, Base):
     __tablename__ = "retry_attempts"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     failure_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("failures.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("failures.id"), nullable=False
     )
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     strategy: Mapped[str] = mapped_column(
@@ -426,10 +427,10 @@ class SLAEvent(TimestampMixin, Base):
     __tablename__ = "sla_events"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     task_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("tasks.id"), nullable=False
     )
     event_type: Mapped[str] = mapped_column(
         String(50), nullable=False
@@ -452,10 +453,10 @@ class ProcessKPI(TimestampMixin, Base):
     __tablename__ = "process_kpis"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     process_instance_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("process_instances.id")
+        Uuid(as_uuid=True), ForeignKey("process_instances.id")
     )
     process_type: Mapped[str] = mapped_column(String(100), nullable=False)
     time_window_start: Mapped[datetime] = mapped_column(
@@ -487,10 +488,10 @@ class OptimizationRecommendation(TimestampMixin, Base):
     __tablename__ = "optimization_recommendations"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     process_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
+        Uuid(as_uuid=True), ForeignKey("process_instances.id"), nullable=False
     )
     recommendation_type: Mapped[str] = mapped_column(String(100), nullable=False)
     problem: Mapped[str] = mapped_column(Text, nullable=False)
@@ -521,13 +522,13 @@ class AgentMessage(Base):
     __tablename__ = "agent_messages"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     message_id: Mapped[str] = mapped_column(
         String(255), nullable=False, unique=True, index=True
     )
     process_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("process_instances.id")
+        Uuid(as_uuid=True), ForeignKey("process_instances.id")
     )
     trace_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
     sender: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -557,7 +558,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     actor: Mapped[str] = mapped_column(String(255), nullable=False)
     agent: Mapped[Optional[str]] = mapped_column(String(100))

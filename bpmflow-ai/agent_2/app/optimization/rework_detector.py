@@ -32,7 +32,9 @@ async def detect_rework_patterns(
     :param session: Active AsyncSession (optional)
     :return: ReworkAnalysis instance
     """
-    rework_counts = {"missing cost centre": 113, "missing quotation": 70, "incorrect supplier": 22}
+    rework_counts: Dict[str, int] = {}
+    if session is None:
+        rework_counts = {"missing cost centre": 113, "missing quotation": 70, "incorrect supplier": 22}
 
     if session is not None:
         try:
@@ -49,9 +51,18 @@ async def detect_rework_patterns(
         except Exception:
             pass
 
-    total_events = sum(rework_counts.values()) or 1
+    total_events = sum(rework_counts.values())
+    if total_events == 0:
+        return ReworkAnalysis(
+            total_rework_events=0,
+            dominant_rework_reason="none recorded",
+            dominant_reason_count=0,
+            dominant_reason_fraction=0.0,
+            rework_breakdown={},
+            details={"dominant_percentage": 0.0, "rework_types_count": 0},
+        )
     sorted_reasons = sorted(rework_counts.items(), key=lambda x: x[1], reverse=True)
-    dom_reason, dom_cnt = sorted_reasons[0] if sorted_reasons else ("missing cost centre", 113)
+    dom_reason, dom_cnt = sorted_reasons[0]
     dom_frac = round(dom_cnt / float(total_events), 4)
 
     return ReworkAnalysis(

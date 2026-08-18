@@ -16,8 +16,8 @@ Persists snapshots to process_kpis table and exposes get_kpis() retrieval functi
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -209,18 +209,22 @@ async def compute_and_save_kpis(
     :return: Created ProcessKPI ORM instance
     """
     metrics = await calculate_all_kpis(session)
+    now = datetime.now(timezone.utc)
 
     kpi_row = ProcessKPI(
         id=uuid.uuid4(),
-        process_id=process_id,
+        process_instance_id=None,
+        process_type="procurement",
+        time_window_start=now - timedelta(days=30),
+        time_window_end=now,
         avg_cycle_time_hours=metrics["average_cycle_time"],
         avg_task_duration_hours=metrics["average_waiting_time"],
+        completion_rate=metrics.get("task_success_rate"),
         sla_compliance_rate=metrics["sla_compliance_rate"],
-        automation_rate=0.88,
+        failure_rate=metrics["failure_rate"],
+        throughput=metrics.get("throughput"),
         bottleneck_task=metrics["bottleneck_task"],
-        rework_rate=metrics["rework_rate"],
-        error_rate=metrics["failure_rate"],
-        created_at=datetime.now(timezone.utc),
+        kpi_data_json=metrics,
     )
 
     session.add(kpi_row)

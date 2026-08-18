@@ -14,6 +14,10 @@ venv/
 .env.*
 !.env.example
 
+# Local SQLite fallback
+*.db
+data/agent2.db
+
 # IDE / OS
 .vscode/
 .idea/

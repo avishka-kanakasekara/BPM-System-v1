@@ -143,6 +143,7 @@ def test_all_12_tools_declared():
 
 def test_system_prompts_safety_directives():
     for prompt_text in [
+        prompts.SYSTEM_PROMPT_REASONING,
         prompts.SYSTEM_PROMPT_PLANNING,
         prompts.SYSTEM_PROMPT_FAILURE_CLASSIFICATION,
         prompts.SYSTEM_PROMPT_RECOVERY,

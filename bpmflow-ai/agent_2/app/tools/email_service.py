@@ -160,21 +160,11 @@ class EmailService:
                 status_result = "FAILED"
                 error_msg = str(e)
 
-        # Step 4: Track Delivery & Audit Log
-        if self.session is not None:
-            email_event_row = EmailEvent(
-                id=uuid.uuid4(),
-                execution_receipt_id=uuid.uuid4(),  # Execution receipt reference
-                recipient_email=request.recipient,
-                recipient_role=request.recipient_role,
-                subject=request.subject,
-                template_name=template_name,
-                status=status_result,
-                sent_at=None if status_result == "FAILED" else None,
-                error_message=error_msg or None,
-            )
-            self.session.add(email_event_row)
-            await self.session.commit()
+        # Step 4: Audit Log
+        # NOTE: EmailEvent requires a valid execution_receipt_id foreign key. Tool handlers
+        # in this repo currently do not pass receipt IDs into EmailService, so writing a fake
+        # UUID here would break referential integrity on a real database. Keep the action
+        # audited and return a tool result without creating an invalid row.
 
         await audit.log_audit_event(
             self.session,
@@ -201,9 +191,14 @@ class EmailService:
         prompt_text = (
             f"Draft a notification email for recipient role '{context.get('recipient_role', 'manager')}'.\n"
             f"Purpose: {context.get('purpose', 'SLA Reminder')}\n"
-            f"Process ID: {context.get('process_id', 'proc-1001')}\n"
-            f"Current State: {context.get('current_state', 'PENDING_APPROVAL')}\n"
-            f"Elapsed Hours: {context.get('elapsed_hours', 18.0)} / SLA: {context.get('sla_hours', 24.0)} hours.\n"
+            f"Process ID: {context.get('process_id', '')}\n"
+            f"Task ID: {context.get('task_id', '')}\n"
+            f"Process title: {context.get('process_title', '')}\n"
+            f"Task title: {context.get('task_title', '')}\n"
+            f"Current State: {context.get('current_state', 'IN_PROGRESS')}\n"
+            f"Elapsed Hours: {context.get('elapsed_hours', 0.0)} / SLA: {context.get('sla_hours', 24.0)} hours.\n"
+            f"Assigned to: {context.get('assigned_to', '')}\n"
+            "Do not invent names, vendors, or purchase amounts that are not in this context."
         )
 
         draft = await client.generate_structured_output(

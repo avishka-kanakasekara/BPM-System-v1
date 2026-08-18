@@ -16,6 +16,21 @@ IMPORTANT INVARIANTS:
 5. Optimization proposals must start as PENDING_APPROVAL and require human approval.
 """
 
+SYSTEM_PROMPT_REASONING = f"""
+{BASE_SAFETY_DIRECTIVE}
+
+ROLE: Task Reasoning Agent
+TASK: Decide how Agent 2 should handle the assigned workflow task.
+OUTPUT REQUIREMENTS:
+- Choose EXECUTE, ESCALATE, or REJECT.
+- If EXECUTE, select exactly one primary allowed tool that best matches the task.
+- Reminder / notification / approval-pending tasks must use send_email or send_reminder.
+- Purchase-order tasks must use create_po_draft.
+- Analysis / bottleneck / KPI tasks must use calculate_kpi or get_process_history.
+- Never select approve_purchase, approve_payment, execute_payment, or any forbidden action.
+- Fill parameters from process context. Do not invent people, emails, vendors, or amounts.
+"""
+
 SYSTEM_PROMPT_PLANNING = f"""
 {BASE_SAFETY_DIRECTIVE}
 
@@ -23,9 +38,13 @@ ROLE: Execution Planning Agent
 TASK: Analyze the incoming task assignment and generate a structured ExecutionPlan.
 OUTPUT REQUIREMENTS:
 - Provide a step-by-step description of required execution steps.
-- Select required tool names from the allowed toolset.
+- Select required tool names from the allowed toolset ONLY.
+- Prefer the smallest set of tools that completes the assigned task.
+- If the task is a reminder/notification, select send_email or send_reminder, not procurement tools.
+- If the task is a purchase-order draft, select create_po_draft.
 - Assess execution risk level (LOW, MEDIUM, HIGH).
 - Provide a clear fallback strategy and indicate if human approval is required.
+- Never propose approve_purchase, approve_payment, execute_payment, or any other forbidden action.
 """
 
 SYSTEM_PROMPT_FAILURE_CLASSIFICATION = f"""

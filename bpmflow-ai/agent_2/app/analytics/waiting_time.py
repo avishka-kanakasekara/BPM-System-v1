@@ -17,7 +17,6 @@ def calculate_per_event_waiting_times(df: pd.DataFrame) -> pd.DataFrame:
     :return: DataFrame with added waiting_time_hours column
     """
     if df.empty:
-        df["waiting_time_hours"] = []
         return df
 
     df_sorted = df.sort_values(by=["case:concept:name", "time:timestamp"]).copy()
@@ -40,7 +39,7 @@ def calculate_activity_waiting_times(df: pd.DataFrame) -> Dict[str, float]:
     :return: Dict mapping activity_name -> mean_waiting_time_hours
     """
     df_with_wait = calculate_per_event_waiting_times(df)
-    if df_with_wait.empty:
+    if df_with_wait.empty or "prev_timestamp" not in df_with_wait.columns:
         return {}
 
     # Filter out first event of each case (which has 0 waiting time by default)
@@ -94,6 +93,8 @@ def calculate_average_waiting_time(df: pd.DataFrame) -> float:
     :return: Mean waiting time in hours
     """
     df_with_wait = calculate_per_event_waiting_times(df)
+    if df_with_wait.empty or "prev_timestamp" not in df_with_wait.columns:
+        return 0.0
     non_first = df_with_wait[df_with_wait["prev_timestamp"].notna()]
     if non_first.empty:
         return 0.0

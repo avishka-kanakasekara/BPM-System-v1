@@ -4,8 +4,10 @@ uvicorn[standard]
 
 # Database
 sqlalchemy>=2.0
+greenlet
 alembic
 asyncpg
+aiosqlite
 
 # Pydantic and validation
 pydantic>=2
@@ -31,6 +33,7 @@ pgvector
 
 # Environment
 python-dotenv
+python-jose
 
 # HTTP client
 httpx

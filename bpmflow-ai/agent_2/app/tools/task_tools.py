@@ -1,8 +1,8 @@
 """
-Agent 2 — Task System Integration Tools (Mocked)
+Agent 2 — Task System Integration Tools
 
-# MOCK: stands in for Agent 1/3 task-system integration; swap the body for a real call
-when those agents exist — the signature and the guard/registry contract shouldn't need to change.
+Persists workflow tasks to Agent 2's own `tasks` table (Supabase/Postgres).
+# MOCK: Agent 1/3 do not exist yet; this is the real Agent 2 task store, not a remote call.
 """
 
 import uuid
@@ -11,7 +11,9 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database.ids import parse_uuid
 from app.database.models import Task
+from app.database.persistence import ensure_process_instance
 from app.tools.schemas import (
     CreateTaskInput,
     CreateTaskOutput,
@@ -23,12 +25,17 @@ from app.tools.schemas import (
 async def create_workflow_task(
     session: Optional[AsyncSession], input_data: CreateTaskInput
 ) -> CreateTaskOutput:
-    """
-    # MOCK: Creates a new workflow task in the tasks table.
-    """
+    """Create a new workflow task and persist it when a DB session is available."""
     now = datetime.now(timezone.utc)
     task_uuid = uuid.uuid4()
-    process_uuid = uuid.UUID(input_data.process_id)
+    process_uuid = parse_uuid(input_data.process_id)
+
+    await ensure_process_instance(
+        session,
+        input_data.process_id,
+        title=input_data.title,
+        process_type="procurement",
+    )
 
     task_row = Task(
         id=task_uuid,
@@ -58,11 +65,9 @@ async def create_workflow_task(
 async def update_task(
     session: Optional[AsyncSession], input_data: UpdateTaskInput
 ) -> UpdateTaskOutput:
-    """
-    # MOCK: Updates an existing workflow task status and assigned user.
-    """
+    """Update an existing workflow task status and assigned user."""
     now = datetime.now(timezone.utc)
-    task_uuid = uuid.UUID(input_data.task_id)
+    task_uuid = parse_uuid(input_data.task_id)
 
     if session is not None:
         stmt = select(Task).where(Task.id == task_uuid)
@@ -76,6 +81,8 @@ async def update_task(
             if input_data.result_notes:
                 task_row.result_json = {"notes": input_data.result_notes}
             task_row.updated_at = now
+            if input_data.status == "IN_PROGRESS" and not task_row.started_at:
+                task_row.started_at = now
             if input_data.status == "COMPLETED":
                 task_row.completed_at = now
             await session.commit()

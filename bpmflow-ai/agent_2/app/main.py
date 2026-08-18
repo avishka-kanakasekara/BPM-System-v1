@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.database.session import ensure_database_schema
 from app.routers import governance, messages, read
 
 
@@ -92,8 +93,13 @@ app.include_router(governance.router)
 
 
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
     logger.info("Agent 2 (Workflow Execution & Optimization Agent) started successfully.")
+    try:
+        backend = await ensure_database_schema()
+        logger.info(f"Agent 2 database schema ensured ({backend}).")
+    except Exception as exc:
+        logger.warning(f"Could not ensure Agent 2 database schema: {exc}")
 
 
 @app.get("/", summary="Root Endpoint")
@@ -111,8 +117,8 @@ async def health():
     return {
         "status": "healthy",
         "service": "BPMFlow AI — Agent 2",
-        "database": "configured" if settings.DATABASE_URL else "not configured",
-        "gemini": "configured" if settings.GEMINI_API_KEY else "offline_stub_mode",
+        "database": "configured" if settings.DATABASE_URL else "sqlite_fallback",
+        "gemini": "configured" if settings.GEMINI_API_KEY and not settings.GEMINI_OFFLINE else "offline_stub_mode",
         "email_dry_run": settings.EMAIL_DRY_RUN,
     }
 

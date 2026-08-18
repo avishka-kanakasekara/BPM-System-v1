@@ -63,6 +63,7 @@ class SendReminderInput(BaseModel):
     elapsed_hours: float = Field(..., ge=0.0, description="Hours elapsed")
     sla_hours: float = Field(..., ge=0.0, description="Target SLA hours")
     message: str = Field(default="", description="Optional custom reminder message")
+    process_id: str = Field(default="", description="Associated process instance ID")
 
 
 class SendReminderOutput(BaseModel):
@@ -91,6 +92,7 @@ class RequestQuotationInput(BaseModel):
     vendor_email: str = Field(..., description="Vendor contact email")
     items: str = Field(..., description="Item specifications and quantities")
     required_by: str = Field(default="", description="Required ISO date")
+    process_id: str = Field(default="", description="Optional process instance ID for persistence")
 
 
 class RequestQuotationOutput(BaseModel):
@@ -104,6 +106,7 @@ class UpdateProcurementRecordInput(BaseModel):
     record_id: str = Field(..., description="ERP record ID")
     status: str = Field(..., description="New record status")
     notes: str = Field(default="", description="Audit notes")
+    process_id: str = Field(default="", description="Optional process instance ID for persistence")
 
 
 class UpdateProcurementRecordOutput(BaseModel):

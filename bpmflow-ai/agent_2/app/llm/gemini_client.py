@@ -8,8 +8,8 @@ Provides two call shapes:
 2. generate_function_call(): Pass tool declarations and receive a proposed ToolCallContract object.
 
 Model Tiers:
-- Flash Tier ("flash"): Fast, cost-efficient model (gemini-2.5-flash / gemini-2.0-flash) for classification and drafting.
-- Pro Tier ("pro"): High-reasoning model (gemini-2.5-pro / gemini-2.0-pro) for complex planning and optimization.
+- Flash Tier ("flash"): Fast, cost-efficient model (gemini-3.6-flash) for classification and drafting.
+- Pro Tier ("pro"): High-reasoning model (gemini-3.6-flash / gemini-3-flash-preview) for complex planning and optimization.
 
 Features:
 - Stateless per-request invocation (no stateful multi-turn interactions).
@@ -21,7 +21,7 @@ import asyncio
 import json
 import logging
 import os
-import time
+import re
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
 from pydantic import BaseModel
@@ -41,9 +41,21 @@ logger = logging.getLogger("agent_2.llm.gemini_client")
 
 T = TypeVar("T", bound=BaseModel)
 
-# Default model tier identifiers
-MODEL_FLASH = os.getenv("GEMINI_MODEL_FLASH", "gemini-2.5-flash")
-MODEL_PRO = os.getenv("GEMINI_MODEL_PRO", "gemini-2.5-pro")
+QUOTA_MARKERS = (
+    "429",
+    "RESOURCE_EXHAUSTED",
+    "quota",
+    "rate limit",
+    "too many requests",
+)
+
+MODEL_FALLBACKS = [
+    "gemini-3.6-flash",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-preview",
+    "gemini-2.5-flash",
+    "gemini-flash-latest",
+]
 
 
 class GeminiClient:
@@ -53,12 +65,10 @@ class GeminiClient:
 
     def __init__(self, api_key: Optional[str] = None, is_offline: Optional[bool] = None):
         self.api_key = api_key or settings.GEMINI_API_KEY
-        
-        # Check offline mode override or auto-detect based on key presence
         env_offline = os.getenv("GEMINI_OFFLINE", "").strip().lower()
         if is_offline is not None:
             self.is_offline = is_offline
-        elif env_offline in ["true", "1", "yes"]:
+        elif getattr(settings, "GEMINI_OFFLINE", False) or env_offline in ["true", "1", "yes"]:
             self.is_offline = True
         elif not self.api_key or self.api_key.startswith("your_"):
             self.is_offline = True
@@ -66,6 +76,7 @@ class GeminiClient:
             self.is_offline = False
 
         self._sdk_client = None
+        self._working_model = None
         if not self.is_offline:
             try:
                 from google import genai
@@ -76,8 +87,178 @@ class GeminiClient:
 
     def _select_model(self, tier: str) -> str:
         if tier.strip().lower() == "pro":
-            return MODEL_PRO
-        return MODEL_FLASH
+            return settings.GEMINI_MODEL_PRO or "gemini-3.6-flash"
+        return settings.GEMINI_MODEL_FLASH or "gemini-3.6-flash"
+
+    def _model_candidates(self, tier: str) -> List[str]:
+        primary = self._select_model(tier)
+        ordered = [self._working_model, primary, settings.GEMINI_MODEL_FLASH, settings.GEMINI_MODEL_PRO, *MODEL_FALLBACKS]
+        seen = set()
+        unique: List[str] = []
+        for name in ordered:
+            if name and name not in seen:
+                unique.append(name)
+                seen.add(name)
+        return unique
+
+    def _is_quota_error(self, error: Exception) -> bool:
+        text = str(error).lower()
+        return any(marker.lower() in text for marker in QUOTA_MARKERS)
+
+    def _sanitize_gemini_schema(self, obj: Any) -> Any:
+        """Strip JSON Schema fields Gemini Developer API rejects (additionalProperties, etc.)."""
+        if isinstance(obj, dict):
+            out: Dict[str, Any] = {}
+            for key, value in obj.items():
+                if key in {"additionalProperties", "$schema", "title", "default"}:
+                    continue
+                if key == "type" and isinstance(value, str):
+                    out[key] = value.lower()
+                else:
+                    out[key] = self._sanitize_gemini_schema(value)
+            if out.get("type") == "object" and "properties" not in out:
+                out["properties"] = {}
+            return out
+        if isinstance(obj, list):
+            return [self._sanitize_gemini_schema(item) for item in obj]
+        return obj
+
+    def _pydantic_schema_for_gemini(self, response_schema: Type[BaseModel]) -> Dict[str, Any]:
+        return self._sanitize_gemini_schema(response_schema.model_json_schema())
+
+        if isinstance(obj, dict):
+            out: Dict[str, Any] = {}
+            for key, value in obj.items():
+                if key == "type" and isinstance(value, str):
+                    out[key] = value.lower()
+                else:
+                    out[key] = self._normalize_schema(value)
+            return out
+        if isinstance(obj, list):
+            return [self._normalize_schema(item) for item in obj]
+        return obj
+
+    def _sdk_tools(self, declarations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if declarations and isinstance(declarations[0], dict) and "function_declarations" in declarations[0]:
+            wrapped = declarations
+        else:
+            wrapped = [{"function_declarations": declarations}]
+        return self._normalize_schema(wrapped)
+
+    def _extract_text(self, response: Any) -> str:
+        raw = getattr(response, "text", None)
+        if raw:
+            return str(raw).strip()
+        candidates = getattr(response, "candidates", None) or []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None) or []
+            for part in parts:
+                text = getattr(part, "text", None)
+                if text:
+                    return str(text).strip()
+        return ""
+
+    def _extract_function_call(self, response: Any) -> Optional[ToolCallContract]:
+        calls = getattr(response, "function_calls", None) or []
+        if calls:
+            fc = calls[0]
+            name = getattr(fc, "name", "") or ""
+            args = dict(getattr(fc, "args", None) or {})
+            if name:
+                return ToolCallContract(name=name, parameters=args)
+        candidates = getattr(response, "candidates", None) or []
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            parts = getattr(content, "parts", None) or []
+            for part in parts:
+                fc = getattr(part, "function_call", None)
+                if fc:
+                    name = getattr(fc, "name", "") or ""
+                    args = dict(getattr(fc, "args", None) or {})
+                    if name:
+                        return ToolCallContract(name=name, parameters=args)
+        return None
+
+    def _parse_model_json(self, raw_text: str, response_schema: Type[T]) -> Optional[T]:
+        if not raw_text:
+            return None
+        cleaned = raw_text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+        try:
+            return response_schema.model_validate_json(cleaned)
+        except Exception:
+            pass
+        try:
+            data = json.loads(cleaned)
+            if isinstance(data, dict):
+                return response_schema.model_validate(data)
+        except Exception:
+            return None
+        return None
+
+    def _extract_labeled_value(self, prompt: str, label: str) -> str:
+        match = re.search(rf"{re.escape(label)}\s*:\s*([^\n]+)", prompt, flags=re.IGNORECASE)
+        if not match:
+            return ""
+        return match.group(1).strip().strip("()[],")
+
+    def _infer_tools_from_prompt(self, prompt: str) -> List[str]:
+        prompt_lower = prompt.lower()
+        if any(k in prompt_lower for k in ("reminder", "email", "notify", "approval pending")):
+            return ["send_email"]
+        if "quotation" in prompt_lower or "rfq" in prompt_lower:
+            return ["request_quotation"]
+        if "purchase order" in prompt_lower or "create_po" in prompt_lower or " po " in prompt_lower:
+            return ["create_po_draft"]
+        if any(k in prompt_lower for k in ("kpi", "bottleneck", "optim")):
+            return ["calculate_kpi"]
+        if "escalat" in prompt_lower:
+            return ["schedule_escalation"]
+        return ["send_email"]
+
+    async def generate_text(
+        self,
+        prompt: str,
+        system_instruction: str = "",
+        model_tier: str = "flash",
+        max_retries: int = 2,
+    ) -> str:
+        """
+        Generate plain text from Gemini, with automatic fallback to a deterministic
+        offline-safe response when the API key is missing, the model is unavailable,
+        or the account is rate/quota limited.
+        """
+        if self.is_offline:
+            return self._generate_offline_text(prompt)
+
+        sys_prompt = system_instruction or prompts.BASE_SAFETY_DIRECTIVE
+        last_error = None
+        for model_name in self._model_candidates(model_tier):
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = self._sdk_client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={"system_instruction": sys_prompt},
+                    )
+                    raw_text = self._extract_text(response)
+                    if raw_text:
+                        self._working_model = model_name
+                        return raw_text
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Gemini text {model_name} attempt {attempt}/{max_retries} failed: {e}")
+                    if self._is_quota_error(e):
+                        self.is_offline = True
+                        return self._generate_offline_text(prompt)
+                    if "404" in str(e) or "NOT_FOUND" in str(e):
+                        break
+                    if attempt < max_retries:
+                        await asyncio.sleep(2 ** (attempt - 1))
+        logger.error(f"Gemini text generation exhausted models. Last error: {last_error}")
+        return self._generate_offline_text(prompt)
 
     async def generate_structured_output(
         self,
@@ -85,7 +266,7 @@ class GeminiClient:
         response_schema: Type[T],
         system_instruction: str = "",
         model_tier: str = "flash",
-        max_retries: int = 3,
+        max_retries: int = 2,
     ) -> T:
         """
         Generate a validated Pydantic model instance from Gemini structured output.
@@ -101,31 +282,59 @@ class GeminiClient:
             logger.info(f"[OFFLINE MODE] Generating canned stub for schema {response_schema.__name__}")
             return self._generate_offline_stub(response_schema, prompt)
 
-        model_name = self._select_model(model_tier)
         sys_prompt = system_instruction or prompts.BASE_SAFETY_DIRECTIVE
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                # Use google-genai SDK structured output configuration
-                response = self._sdk_client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config={
-                        "system_instruction": sys_prompt,
-                        "response_mime_type": "application/json",
-                        "response_schema": response_schema,
-                    },
-                )
-                raw_text = response.text
-                return response_schema.model_validate_json(raw_text)
-
-            except Exception as e:
-                logger.warning(f"Gemini API attempt {attempt}/{max_retries} failed for schema {response_schema.__name__}: {e}")
-                if attempt == max_retries:
-                    logger.error("All Gemini API retries exhausted. Falling back to stub response.")
-                    return self._generate_offline_stub(response_schema, prompt)
-                await asyncio.sleep(2 ** (attempt - 1))
-
+        json_schema = self._pydantic_schema_for_gemini(response_schema)
+        last_error = None
+        schema_configs = [
+            {"response_mime_type": "application/json", "response_json_schema": json_schema},
+            {"response_mime_type": "application/json", "response_schema": json_schema},
+        ]
+        for model_name in self._model_candidates(model_tier):
+            for schema_config in schema_configs:
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        response = self._sdk_client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config={"system_instruction": sys_prompt, **schema_config},
+                        )
+                        raw_text = self._extract_text(response)
+                        parsed = self._parse_model_json(raw_text, response_schema)
+                        if parsed is not None:
+                            self._working_model = model_name
+                            return parsed
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(
+                            f"Gemini API {model_name} attempt {attempt}/{max_retries} failed for schema {response_schema.__name__}: {e}"
+                        )
+                        if self._is_quota_error(e):
+                            self.is_offline = True
+                            return self._generate_offline_stub(response_schema, prompt)
+                        err = str(e)
+                        if "404" in err or "NOT_FOUND" in err:
+                            break
+                        if "additionalProperties" in err:
+                            break
+                        if attempt < max_retries:
+                            await asyncio.sleep(2 ** (attempt - 1))
+                else:
+                    continue
+                if last_error and ("404" in str(last_error) or "NOT_FOUND" in str(last_error)):
+                    break
+        try:
+            json_prompt = (
+                prompt
+                + "\n\nReturn ONLY valid JSON matching this schema:\n"
+                + json.dumps(json_schema)
+            )
+            raw_text = await self.generate_text(json_prompt, system_instruction=sys_prompt, model_tier=model_tier, max_retries=1)
+            parsed = self._parse_model_json(raw_text, response_schema)
+            if parsed is not None:
+                return parsed
+        except Exception as e:
+            last_error = e
+        logger.error(f"All Gemini structured-output attempts exhausted. Falling back. Last error: {last_error}")
         return self._generate_offline_stub(response_schema, prompt)
 
     async def generate_function_call(
@@ -134,7 +343,7 @@ class GeminiClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         system_instruction: str = "",
         model_tier: str = "flash",
-        max_retries: int = 3,
+        max_retries: int = 2,
     ) -> ToolCallContract:
         """
         Pass tool declarations to Gemini and receive a proposed ToolCallContract.
@@ -153,58 +362,87 @@ class GeminiClient:
             logger.info("[OFFLINE MODE] Generating canned ToolCallContract proposal")
             return self._generate_offline_tool_call(prompt, tool_declarations)
 
-        model_name = self._select_model(model_tier)
         sys_prompt = system_instruction or prompts.BASE_SAFETY_DIRECTIVE
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                response = self._sdk_client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config={
-                        "system_instruction": sys_prompt,
-                        "tools": tool_declarations,
-                    },
-                )
-                # Parse function call from response candidates
-                if response.function_calls:
-                    fc = response.function_calls[0]
-                    return ToolCallContract(name=fc.name, parameters=dict(fc.args))
-
-                # Fallback if model returned json text instead of function call candidate
-                return self._generate_offline_tool_call(prompt, tool_declarations)
-
-            except Exception as e:
-                logger.warning(f"Gemini function call attempt {attempt}/{max_retries} failed: {e}")
-                if attempt == max_retries:
-                    return self._generate_offline_tool_call(prompt, tool_declarations)
-                await asyncio.sleep(2 ** (attempt - 1))
-
+        last_error = None
+        for model_name in self._model_candidates(model_tier):
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = self._sdk_client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={
+                            "system_instruction": sys_prompt,
+                            "tools": self._sdk_tools(tool_declarations),
+                        },
+                    )
+                    if parsed_call:
+                        self._working_model = model_name
+                        return parsed_call
+                    raw_text = self._extract_text(response)
+                    parsed = self._parse_tool_call_json(raw_text)
+                    if parsed:
+                        self._working_model = model_name
+                        return parsed
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Gemini function call {model_name} attempt {attempt}/{max_retries} failed: {e}")
+                    if self._is_quota_error(e):
+                        self.is_offline = True
+                        return self._generate_offline_tool_call(prompt, tool_declarations)
+                    if "404" in str(e) or "NOT_FOUND" in str(e):
+                        break
+                    if attempt < max_retries:
+                        await asyncio.sleep(2 ** (attempt - 1))
+        logger.error(f"Gemini function-call attempts exhausted. Falling back. Last error: {last_error}")
         return self._generate_offline_tool_call(prompt, tool_declarations)
+
+    def _parse_tool_call_json(self, raw_text: str) -> Optional[ToolCallContract]:
+        if not raw_text:
+            return None
+        try:
+            cleaned = raw_text.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+            data = json.loads(cleaned)
+            if isinstance(data, dict) and "function_call" in data:
+                data = data["function_call"]
+            name = (data or {}).get("name") or (data or {}).get("tool")
+            params = (data or {}).get("parameters") or (data or {}).get("args") or {}
+            if name and isinstance(params, dict):
+                return ToolCallContract(name=name, parameters=params)
+        except Exception:
+            return None
+        return None
 
     def _generate_offline_stub(self, response_schema: Type[T], prompt: str) -> T:
         """Generate deterministic, schema-valid stub objects when running in offline mode."""
         schema_name = response_schema.__name__
+        process_id = self._extract_labeled_value(prompt, "process_id") or self._extract_labeled_value(prompt, "Process Title")
+        task_id = self._extract_labeled_value(prompt, "task_id") or self._extract_labeled_value(prompt, "Task Title")
+        if "ID:" in task_id:
+            task_id = task_id.split("ID:")[-1].strip(" )")
 
         if schema_name == "ExecutionPlan":
+            tools = self._infer_tools_from_prompt(prompt)
             return response_schema(
-                task_id="task-stub-101",
-                objective="Execute procurement purchase request validation and approval workflow",
-                steps=["send_email", "create_po_draft"],
-                selected_tools=["send_email", "create_po_draft"],
-                reasoning_summary="Offline stub execution plan for procurement process",
+                task_id=task_id or "task-offline",
+                objective=f"Execute the assigned workflow task using {', '.join(tools)}",
+                steps=tools,
+                selected_tools=tools,
+                reasoning_summary="Offline fallback plan derived from the current task prompt",
                 risk_level="LOW",
-                confidence=0.95,
-                fallback_strategy="Escalate to procurement officer if timeout occurs",
+                confidence=0.8,
+                fallback_strategy="Escalate to the assigned manager if the primary tool fails",
                 requires_human=False,
             )
         elif schema_name == "AgentDecision":
+            tools = self._infer_tools_from_prompt(prompt)
             return response_schema(
                 decision="EXECUTE",
-                confidence=0.92,
-                selected_tool="create_po_draft",
-                reason="Parameters validated; procurement request approved",
-                parameters={"vendor_id": "v-stub-100", "amount": 1500.00, "process_id": "proc-stub-1"},
+                confidence=0.8,
+                selected_tool=tools[0],
+                reason="Offline fallback selected an allowed tool from the current task context",
+                parameters={"process_id": process_id, "task_id": task_id},
                 risk_level="LOW",
                 fallback_strategy="Log escalation warning",
                 requires_human=False,
@@ -263,33 +501,54 @@ class GeminiClient:
     ) -> ToolCallContract:
         """Generate a deterministic stub function call matching one of the declared tools."""
         prompt_lower = prompt.lower()
-        if "email" in prompt_lower or "reminder" in prompt_lower:
+        process_id = self._extract_labeled_value(prompt, "process_id") or "proc-offline"
+        task_id = self._extract_labeled_value(prompt, "task_id") or "task-offline"
+        recipient = (
+            self._extract_labeled_value(prompt, "assigned_to")
+            or self._extract_labeled_value(prompt, "recipient")
+            or self._extract_labeled_value(prompt, "requester_email")
+        )
+        declared_names = [t.get("name", "") for t in tools if isinstance(t, dict)]
+        if "email" in prompt_lower or "reminder" in prompt_lower or "send_email" in declared_names[:1]:
             return ToolCallContract(
                 name="send_email",
                 parameters={
-                    "recipient": "frank.miller@acmeglobal.com",
-                    "subject": "Approval Reminder: Purchase Request #1001",
-                    "body": "Please review pending purchase request #1001.",
-                    "process_id": "proc-stub-1",
-                    "task_id": "task-stub-2",
-                    "recipient_role": "manager",
+                    "recipient": recipient,
+                    "subject": "Action required on assigned workflow task",
+                    "body": "Please review the pending task and complete the required action.",
+                    "process_id": process_id,
+                    "task_id": task_id,
+                    "recipient_role": self._extract_labeled_value(prompt, "assigned_role") or "manager",
                 },
             )
-        elif "po" in prompt_lower or "purchase order" in prompt_lower:
+        if "po" in prompt_lower or "purchase order" in prompt_lower:
+            amount_match = re.search(r"amount[^\d]*(\d+(?:\.\d+)?)", prompt_lower)
             return ToolCallContract(
                 name="create_po_draft",
                 parameters={
-                    "vendor_id": "v-100",
-                    "amount": 3400.00,
-                    "process_id": "proc-stub-1",
+                    "vendor_id": self._extract_labeled_value(prompt, "vendor_id") or "vendor-unknown",
+                    "amount": float(amount_match.group(1)) if amount_match else 1.0,
+                    "process_id": process_id,
                 },
             )
         return ToolCallContract(
             name="create_workflow_task",
             parameters={
-                "process_id": "proc-stub-1",
-                "title": "Validate Purchase Request",
+                "process_id": process_id,
+                "title": self._extract_labeled_value(prompt, "task_title") or "Execute assigned task",
                 "task_type": "AUTOMATED",
-                "assigned_role": "system",
+                "assigned_role": self._extract_labeled_value(prompt, "assigned_role") or "system",
             },
         )
+
+    def _generate_offline_text(self, prompt: str) -> str:
+        prompt_lower = prompt.lower()
+        if "root cause" in prompt_lower or "bottleneck" in prompt_lower:
+            return (
+                "The dominant delay is caused by manual approval follow-up and incomplete "
+                "request data that forces rework. Adding automated reminders and stronger "
+                "input validation should reduce waiting time and repeat handling."
+            )
+        if "email" in prompt_lower:
+            return "Please review the pending task and take the required action within the SLA window."
+        return "Fallback offline response generated because Gemini was unavailable."
