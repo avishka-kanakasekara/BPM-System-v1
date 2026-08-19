@@ -61,6 +61,9 @@ class Agent2:
             "score_breakdown": score_breakdown.details,
             "total_score": score_breakdown.total_score,
             "error_message": receipt.error_message or "",
+            "cognitive_trace": score_breakdown.details.get("cognitive_trace", []),
+            "tools_executed": score_breakdown.details.get("tools_executed", []),
+            "critic_notes": score_breakdown.details.get("critic_notes", ""),
         }
 
         outbound_message = AgentMessage(

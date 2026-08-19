@@ -14,6 +14,7 @@ from app.llm import function_declarations, prompts
 from app.llm.gemini_client import GeminiClient
 from app.llm.schemas import (
     AgentDecision,
+    CycleStepDecision,
     ExecutionPlan,
     FailureDiagnosis,
     OptimizationRecommendationSchema,
@@ -58,6 +59,22 @@ async def test_structured_output_agent_decision(offline_client):
     assert isinstance(decision, AgentDecision)
     assert decision.decision in ["EXECUTE", "ESCALATE", "REJECT"]
     assert 0.0 <= decision.confidence <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_structured_output_cycle_step_complete_after_success(offline_client):
+    step = await offline_client.generate_structured_output(
+        prompt=(
+            "ASSIGNED OBJECTIVE: Send finance reminder\n"
+            "OBSERVATIONS:\n1. tool=send_email status=SUCCESS error=none result={}\n"
+        ),
+        response_schema=CycleStepDecision,
+        system_instruction=prompts.SYSTEM_PROMPT_LOOP,
+        model_tier="pro",
+    )
+    assert isinstance(step, CycleStepDecision)
+    assert step.next_action == "COMPLETE"
+    assert step.goal_achieved is True
 
 
 @pytest.mark.asyncio
@@ -145,6 +162,7 @@ def test_system_prompts_safety_directives():
     for prompt_text in [
         prompts.SYSTEM_PROMPT_REASONING,
         prompts.SYSTEM_PROMPT_PLANNING,
+        prompts.SYSTEM_PROMPT_LOOP,
         prompts.SYSTEM_PROMPT_FAILURE_CLASSIFICATION,
         prompts.SYSTEM_PROMPT_RECOVERY,
         prompts.SYSTEM_PROMPT_PROCESS_OPTIMIZATION,

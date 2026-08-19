@@ -118,6 +118,7 @@ class ProcessMemory:
         query: str,
         caller_role: str = "manager",
         top_k: int = 3,
+        process_id: str = "",
     ) -> List[str]:
         """
         Retrieve top-K historical facts and evidence strings for Gemini planning context.
@@ -169,6 +170,13 @@ class ProcessMemory:
                     evidence_results.append(
                         f"Known inefficiency: {opt.problem} (Baseline: {opt.baseline_metric}h)"
                     )
+
+                if process_id:
+                    recent = await EpisodicMemory.get_recent_receipts(session, process_id, limit=5)
+                    for rec in recent:
+                        evidence_results.append(
+                            f"Prior execution: {rec['tool_name']} -> {rec['status']} (attempt {rec['attempt']})"
+                        )
             except Exception:
                 pass
 

@@ -11,12 +11,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import context_engine, memory, planner
+from app.agent.memory import ShortTermMemory
+from app.agent.reasoning import format_loop_prompt
 from app.database.models import ExecutionReceipt
 from app.database.persistence import ensure_process_instance, ensure_task
 from app.execution.execution_engine import execute_with_recovery
 from app.llm import function_declarations, prompts
 from app.llm.gemini_client import GeminiClient
-from app.llm.schemas import AgentDecision, AgentMessage, ExecutionPlan
+from app.llm.schemas import AgentDecision, AgentMessage, CycleStepDecision, ExecutionPlan
 from app.optimization import recommendation_engine
 from app.security import authorization
 from app.tools.registry import registry
@@ -24,6 +26,7 @@ from app.tools.registry import registry
 logger = logging.getLogger("agent_2.agent.decision_engine")
 
 MAX_PLAN_TOOLS = 5
+MAX_REACT_STEPS = 4
 
 
 @dataclass
@@ -239,19 +242,74 @@ async def _reason_about_task(
     )
 
 
+def _observation_from_receipt(receipt: ExecutionReceipt) -> Dict[str, Any]:
+    return {
+        "tool": receipt.tool_name,
+        "status": receipt.status,
+        "error": receipt.error_message or "",
+        "result": receipt.result or {},
+        "latency_ms": receipt.latency_ms or 0,
+    }
+
+
+async def _decide_next_step(
+    ctx: context_engine.ProcessContext,
+    objective: str,
+    observations: List[Dict[str, Any]],
+    remaining_tools: List[str],
+    client: GeminiClient,
+) -> CycleStepDecision:
+    prompt = format_loop_prompt(ctx, objective, observations, remaining_tools)
+    return await client.generate_structured_output(
+        prompt=prompt,
+        response_schema=CycleStepDecision,
+        system_instruction=prompts.SYSTEM_PROMPT_LOOP,
+        model_tier="pro",
+    )
+
+
+async def _act(
+    ctx: context_engine.ProcessContext,
+    tool_name: str,
+    incoming_tool_params: Dict[str, Any],
+    client: GeminiClient,
+    session: Optional[AsyncSession],
+    actor: str,
+) -> ExecutionReceipt:
+    tool_params = await _build_tool_params(tool_name, incoming_tool_params, ctx, client)
+    receipt = await execute_with_recovery(
+        process_id=ctx.process_id,
+        task_id=ctx.task_id,
+        tool_name=tool_name,
+        parameters=tool_params,
+        session=session,
+        actor=actor,
+        gemini_client=client,
+    )
+    logger.info(f"ACT complete: tool={tool_name} status={receipt.status}")
+    return receipt
+
+
 async def run_decision_pipeline(
     message: AgentMessage,
     session: Optional[AsyncSession] = None,
     gemini_client: Optional[GeminiClient] = None,
 ) -> Tuple[ExecutionReceipt, PlanScoreBreakdown]:
     """
-    Execute the 11-Node Cognitive Decision Pipeline end-to-end:
-    PERCEIVE -> UNDERSTAND -> RETRIEVE -> REASON -> PLAN -> VALIDATE -> SCORE -> SELECT -> ACT -> OBSERVE -> RECOVER
+    Closed-loop cognitive cycle:
+    PERCEIVE -> RETRIEVE -> REASON -> PLAN -> ACT -> OBSERVE -> REPLAN until COMPLETE,
     plus LEARN / OPTIMIZE / RECOMMEND when the task is analytical.
     """
     client = gemini_client or GeminiClient()
+    working = ShortTermMemory(
+        message_id=message.message_id,
+        process_id=message.process_id,
+        task_id=(message.payload or {}).get("task_id", ""),
+        current_state="PERCEIVED",
+    )
 
     ctx = await context_engine.perceive_context(session, message)
+    working.task_id = ctx.task_id
     if session is not None:
         await ensure_process_instance(
             session,
@@ -275,10 +333,15 @@ async def run_decision_pipeline(
         )
 
     evidence = await memory.ProcessMemory.retrieve_evidence(
-        session, query=ctx.task_title, caller_role=ctx.assigned_role
+        session, query=ctx.task_title, caller_role=ctx.assigned_role, process_id=ctx.process_id
     )
+    working.evidence = evidence
+    working.current_state = "REASONING"
     decision = await _reason_about_task(ctx, evidence, client)
+    working.decisions.append(decision.model_dump())
     plan = await planner.generate_plan(ctx, evidence, gemini_client=client, session=session)
+    working.active_plan = plan
+    working.current_state = "PLANNED"
 
     payload_params = message.payload.get("parameters") or {}
     tool_name_override = payload_params.get("tool_name")
@@ -298,42 +361,83 @@ async def run_decision_pipeline(
     score_breakdown.details["decision_reason"] = decision.reason
     score_breakdown.details["plan_reasoning"] = plan.reasoning_summary
 
+    actor = message.sender or "agent_2"
+    observations: List[Dict[str, Any]] = []
+    executed: List[str] = []
     last_receipt: Optional[ExecutionReceipt] = None
+    critic_notes = ""
+
+    working.current_state = "ACTING"
     for tool_name in tools_to_run:
-        tool_params = await _build_tool_params(tool_name, incoming_tool_params, ctx, client)
-        last_receipt = await execute_with_recovery(
-            process_id=ctx.process_id,
-            task_id=ctx.task_id,
-            tool_name=tool_name,
-            parameters=tool_params,
-            session=session,
-            actor=message.sender or "agent_2",
-            gemini_client=client,
-        )
-        logger.info(
-            f"ACT complete: tool={tool_name} status={last_receipt.status} score={score_breakdown.total_score}"
-        )
+        last_receipt = await _act(ctx, tool_name, incoming_tool_params, client, session, actor)
+        executed.append(tool_name)
+        observations.append(_observation_from_receipt(last_receipt))
         if last_receipt.status == "BLOCKED":
+            working.errors.append(last_receipt.error_message or "blocked")
             break
 
+    if (
+        last_receipt is not None
+        and last_receipt.status != "BLOCKED"
+        and not tool_name_override
+        and len(executed) < MAX_REACT_STEPS
+    ):
+        working.current_state = "OBSERVING"
+        allowed = [t.name for t in registry.list_tools() if authorization.is_permitted(t.name)]
+        remaining = [t for t in allowed if t not in executed]
+        for _ in range(MAX_REACT_STEPS - len(executed)):
+            step = await _decide_next_step(
+                ctx,
+                plan.objective or ctx.task_title,
+                observations,
+                remaining,
+                client,
+            )
+            critic_notes = step.critic_notes or step.reason
+            working.decisions.append(step.model_dump())
+            if step.next_action != "EXECUTE" or step.goal_achieved:
+                working.current_state = "COMPLETE" if step.next_action == "COMPLETE" else step.next_action
+                break
+            next_tool = (step.selected_tool or "").strip().lower()
+            if not next_tool or next_tool in executed or not authorization.is_permitted(next_tool):
+                working.current_state = "COMPLETE"
+                break
+            if step.parameters:
+                incoming_tool_params = {
+                    **incoming_tool_params,
+                    **{k: v for k, v in step.parameters.items() if v not in (None, "")},
+                }
+            last_receipt = await _act(ctx, next_tool, incoming_tool_params, client, session, actor)
+            executed.append(next_tool)
+            remaining = [t for t in remaining if t != next_tool]
+            observations.append(_observation_from_receipt(last_receipt))
+            if last_receipt.status in {"BLOCKED", "FAILED"}:
+                working.errors.append(last_receipt.error_message or last_receipt.status)
+                break
+
     if last_receipt is None:
-        last_receipt = await execute_with_recovery(
-            process_id=ctx.process_id,
-            task_id=ctx.task_id,
-            tool_name="create_exception",
-            parameters={
+        last_receipt = await _act(
+            ctx,
+            "create_exception",
+            {
                 "process_id": ctx.process_id,
                 "task_id": ctx.task_id,
                 "severity": "MEDIUM",
                 "reason": "No executable tool could be selected from the plan",
             },
-            session=session,
-            actor=message.sender or "agent_2",
-            gemini_client=client,
+            client,
+            session,
+            actor,
         )
+        observations.append(_observation_from_receipt(last_receipt))
+
+    score_breakdown.details["cognitive_trace"] = observations
+    score_breakdown.details["tools_executed"] = executed
+    score_breakdown.details["critic_notes"] = critic_notes
+    score_breakdown.details["working_state"] = working.current_state
 
     analytical = any(
-        t in {"calculate_kpi", "get_process_history", "get_task_history"} for t in tools_to_run
+        t in {"calculate_kpi", "get_process_history", "get_task_history"} for t in executed
     ) or str(message.task_type).upper() in {"ANALYZE", "OPTIMIZE", "GENERATE_RECOMMENDATION"}
     if session is not None and last_receipt.status == "SUCCESS":
         try:

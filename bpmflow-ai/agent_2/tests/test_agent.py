@@ -76,6 +76,9 @@ async def test_agent2_handle_permitted_task(agent2_offline):
     assert "efficiency" in breakdown
     assert "historical_success" in breakdown
     assert payload["total_score"] > 0.0
+    assert "cognitive_trace" in payload
+    assert payload["receipt_status"] in ["SUCCESS", "FAILED", "BLOCKED"]
+    assert isinstance(payload.get("tools_executed"), list)
 
 
 # ---------------------------------------------------------------------------

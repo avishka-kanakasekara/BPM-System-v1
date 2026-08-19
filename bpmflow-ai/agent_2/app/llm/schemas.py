@@ -94,6 +94,25 @@ class AgentDecision(BaseModel):
     requires_human: bool = Field(default=False, description="Whether human approval is required prior to execution")
 
 
+class CycleStepDecision(BaseModel):
+    """
+    One step of the observe-replan loop after a tool has already run.
+
+    Produced by: Gemini during OBSERVE / REASON after ACT.
+    Operational role: Decide whether the assigned goal is complete or another allowed tool is required.
+    """
+
+    next_action: Literal["EXECUTE", "COMPLETE", "ESCALATE"] = Field(
+        ..., description="Whether to run another tool, stop, or escalate"
+    )
+    selected_tool: str = Field(default="", description="Next allowed tool if next_action is EXECUTE")
+    reason: str = Field(..., description="Why this step was chosen given the observations")
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0, description="Confidence in this step")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the next tool")
+    goal_achieved: bool = Field(default=False, description="True if the assigned task is already satisfied")
+    critic_notes: str = Field(default="", description="Verification of whether the last result matches the objective")
+
+
 # ---------------------------------------------------------------------------
 # 4. ToolCall & ToolResult
 # ---------------------------------------------------------------------------

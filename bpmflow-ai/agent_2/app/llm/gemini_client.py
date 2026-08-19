@@ -447,6 +447,37 @@ class GeminiClient:
                 fallback_strategy="Log escalation warning",
                 requires_human=False,
             )
+        elif schema_name == "CycleStepDecision":
+            prompt_lower = prompt.lower()
+            if "status=success" in prompt_lower and "status=blocked" not in prompt_lower:
+                return response_schema(
+                    next_action="COMPLETE",
+                    selected_tool="",
+                    reason="Offline critic: the last successful tool already satisfies the assigned objective",
+                    confidence=0.86,
+                    parameters={},
+                    goal_achieved=True,
+                    critic_notes="Objective appears complete; no further allowed tools are required.",
+                )
+            if "status=blocked" in prompt_lower:
+                return response_schema(
+                    next_action="ESCALATE",
+                    selected_tool="",
+                    reason="Offline critic: the action was blocked by policy",
+                    confidence=0.95,
+                    goal_achieved=False,
+                    critic_notes="Do not retry a blocked or forbidden action.",
+                )
+            tools = self._infer_tools_from_prompt(prompt)
+            return response_schema(
+                next_action="EXECUTE",
+                selected_tool=tools[0],
+                reason="Offline critic: the objective is not yet satisfied; propose one more allowed tool",
+                confidence=0.72,
+                parameters={"process_id": process_id, "task_id": task_id},
+                goal_achieved=False,
+                critic_notes="Continue with the smallest remaining allowed action.",
+            )
         elif schema_name == "FailureDiagnosis":
             return response_schema(
                 failure_type="TEMPORARY",
