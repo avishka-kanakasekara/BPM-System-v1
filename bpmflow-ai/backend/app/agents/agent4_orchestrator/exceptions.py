@@ -21,3 +21,22 @@ class ProcessAlreadyExistsError(ValueError):
 
 class DatabasePersistenceError(RuntimeError):
     """Raised when a database read or write fails during orchestration."""
+
+
+class ApprovalNotFoundError(KeyError):
+    """Raised when an approval request id does not exist."""
+
+    def __init__(self, approval_id: UUID) -> None:
+        self.approval_id = approval_id
+        super().__init__(f"Unknown approval request: {approval_id}")
+
+
+class ApprovalAlreadyDecidedError(ValueError):
+    """Raised when a non-pending approval is approved or rejected again."""
+
+    def __init__(self, approval_id: UUID, status: str) -> None:
+        self.approval_id = approval_id
+        self.status = status
+        super().__init__(
+            f"Approval request {approval_id} is already {status} and cannot be decided again"
+        )

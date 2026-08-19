@@ -1,5 +1,6 @@
 """Pydantic schemas for Agent 4 workflow state management and risk analysis."""
 
+from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 from .constants import (
     HIGH_VALUE_PURCHASE_THRESHOLD,
     LOW_CONFIDENCE_THRESHOLD,
+    ApprovalStatus,
     RiskLevel,
     RiskRecommendation,
     RiskType,
@@ -67,3 +69,35 @@ class RiskAssessment(BaseModel):
     risk_detected: bool
     overall_risk_level: Optional[RiskLevel] = None
     findings: List[RiskFinding] = Field(default_factory=list)
+
+
+class ApprovalRequestRecord(BaseModel):
+    """Approval gate record matching public.approval_requests."""
+
+    id: UUID
+    process_id: UUID
+    task_id: Optional[UUID] = None
+    requested_by: Optional[UUID] = None
+    approver_id: Optional[UUID] = None
+    status: ApprovalStatus
+    risk_level: RiskLevel
+    reason: str = Field(min_length=1)
+    decision: Optional[ApprovalStatus] = None
+    comments: Optional[str] = None
+    created_at: datetime
+    decided_at: Optional[datetime] = None
+
+
+class ApprovalDecisionResult(BaseModel):
+    """Outcome of approve_request or reject_request. No further workflow move."""
+
+    approval: ApprovalRequestRecord
+    decision: ApprovalStatus
+
+
+class ApprovalGateResult(BaseModel):
+    """Result of applying risk findings to the human-approval gate."""
+
+    human_approval_required: bool
+    approval: Optional[ApprovalRequestRecord] = None
+    transition: Optional[ProcessStateTransition] = None

@@ -1,5 +1,11 @@
 # Agent 4: Orchestrator, Coordination & Risk Analysis
 
+from .approval_repository import (
+    InMemoryApprovalRepository,
+    ApprovalRepository,
+    SqlAlchemyApprovalRepository,
+)
+from .approvals import ApprovalService
 from .constants import (
     HIGH_VALUE_PURCHASE_THRESHOLD,
     LOW_CONFIDENCE_THRESHOLD,
@@ -10,6 +16,8 @@ from .constants import (
     WorkflowStage,
 )
 from .exceptions import (
+    ApprovalAlreadyDecidedError,
+    ApprovalNotFoundError,
     DatabasePersistenceError,
     ProcessAlreadyExistsError,
     ProcessNotFoundError,
@@ -21,9 +29,17 @@ from .repository import (
     ProcessRepository,
     SqlAlchemyProcessRepository,
 )
-from .schemas import ProcessStateTransition, RiskAssessment, RiskEvaluationContext, RiskFinding
-from .service import OrchestratorService
 from .risk_rules import RiskAnalysisEngine
+from .schemas import (
+    ApprovalDecisionResult,
+    ApprovalGateResult,
+    ApprovalRequestRecord,
+    ProcessStateTransition,
+    RiskAssessment,
+    RiskEvaluationContext,
+    RiskFinding,
+)
+from .service import OrchestratorService
 from .state_machine import (
     ALLOWED_TRANSITIONS,
     InvalidTransitionError,
@@ -43,6 +59,15 @@ __all__ = [
     "RiskFinding",
     "RiskAssessment",
     "RiskAnalysisEngine",
+    "ApprovalService",
+    "ApprovalRepository",
+    "InMemoryApprovalRepository",
+    "SqlAlchemyApprovalRepository",
+    "ApprovalRequestRecord",
+    "ApprovalDecisionResult",
+    "ApprovalGateResult",
+    "ApprovalNotFoundError",
+    "ApprovalAlreadyDecidedError",
     "OrchestratorService",
     "ProcessAlreadyExistsError",
     "ProcessNotFoundError",
