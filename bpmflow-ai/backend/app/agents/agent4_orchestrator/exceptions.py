@@ -65,3 +65,27 @@ class InvalidMessageError(ValueError):
 
 class CommunicationFailureError(RuntimeError):
     """Raised when adapter communication fails unexpectedly."""
+
+
+class BpmExceptionNotFoundError(KeyError):
+    """Raised when a public.exceptions row does not exist."""
+
+    def __init__(self, exception_id: UUID) -> None:
+        self.exception_id = exception_id
+        super().__init__(f"Unknown exception: {exception_id}")
+
+
+class InvalidExceptionStatusError(ValueError):
+    """Raised when an exception status change is not allowed."""
+
+    def __init__(self, exception_id: UUID, current_status: str, target_status: str) -> None:
+        self.exception_id = exception_id
+        self.current_status = current_status
+        self.target_status = target_status
+        super().__init__(
+            f"Cannot change exception {exception_id} from {current_status} to {target_status}"
+        )
+
+
+class InvalidRetryError(ValueError):
+    """Raised when a retry is not allowed for this exception or process stage."""

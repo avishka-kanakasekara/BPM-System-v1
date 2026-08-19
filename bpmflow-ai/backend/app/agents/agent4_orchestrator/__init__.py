@@ -10,6 +10,9 @@ from .constants import (
     HIGH_VALUE_PURCHASE_THRESHOLD,
     LOW_CONFIDENCE_THRESHOLD,
     ApprovalStatus,
+    ExceptionSeverity,
+    ExceptionStatus,
+    ExceptionType,
     RiskLevel,
     RiskRecommendation,
     RiskType,
@@ -21,7 +24,10 @@ from .exceptions import (
     ApprovalNotFoundError,
     CommunicationFailureError,
     DatabasePersistenceError,
+    InvalidExceptionStatusError,
     InvalidMessageError,
+    InvalidRetryError,
+    BpmExceptionNotFoundError,
     ProcessAlreadyExistsError,
     ProcessNotFoundError,
     UnsupportedAgentError,
@@ -34,10 +40,17 @@ from .repository import (
     SqlAlchemyProcessRepository,
 )
 from .risk_rules import RiskAnalysisEngine
+from .exception_repository import (
+    InMemoryExceptionRepository,
+    ExceptionRepository,
+    SqlAlchemyExceptionRepository,
+)
+from .exception_service import ExceptionService
 from .schemas import (
     ApprovalDecisionResult,
     ApprovalGateResult,
     ApprovalRequestRecord,
+    ExceptionRecord,
     ProcessStateTransition,
     RiskAssessment,
     RiskEvaluationContext,
@@ -58,6 +71,17 @@ from .state_machine import (
 __all__ = [
     "WorkflowStage",
     "ApprovalStatus",
+    "ExceptionStatus",
+    "ExceptionSeverity",
+    "ExceptionType",
+    "ExceptionRecord",
+    "ExceptionService",
+    "ExceptionRepository",
+    "InMemoryExceptionRepository",
+    "SqlAlchemyExceptionRepository",
+    "BpmExceptionNotFoundError",
+    "InvalidExceptionStatusError",
+    "InvalidRetryError",
     "RiskLevel",
     "RiskType",
     "RiskRecommendation",

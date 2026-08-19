@@ -27,6 +27,33 @@ class ApprovalStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class ExceptionStatus(str, Enum):
+    """Statuses from public.exceptions comments: open, in_progress, resolved, ignored."""
+
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    RESOLVED = "resolved"
+    IGNORED = "ignored"
+
+
+class ExceptionSeverity(str, Enum):
+    """Severities from public.exceptions comments."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class ExceptionType(str, Enum):
+    """Issue types from public.exceptions comments, plus workflow failures."""
+
+    TIMEOUT = "timeout"
+    RESOURCE_CONFLICT = "resource_conflict"
+    APPROVAL_DENIED = "approval_denied"
+    SYSTEM_ERROR = "system_error"
+
+
 class RiskLevel(str, Enum):
     """Risk severity used for approval routing and exception handling."""
 

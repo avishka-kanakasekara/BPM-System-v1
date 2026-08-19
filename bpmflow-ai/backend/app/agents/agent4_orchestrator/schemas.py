@@ -11,6 +11,9 @@ from .constants import (
     HIGH_VALUE_PURCHASE_THRESHOLD,
     LOW_CONFIDENCE_THRESHOLD,
     ApprovalStatus,
+    ExceptionSeverity,
+    ExceptionStatus,
+    ExceptionType,
     RiskLevel,
     RiskRecommendation,
     RiskType,
@@ -103,6 +106,22 @@ class ApprovalGateResult(BaseModel):
     transition: Optional[ProcessStateTransition] = None
 
 
+class ExceptionRecord(BaseModel):
+    """BPM exception matching public.exceptions columns."""
+
+    id: UUID
+    process_id: Optional[UUID] = None
+    task_id: Optional[UUID] = None
+    severity: ExceptionSeverity
+    type: ExceptionType
+    description: str = Field(min_length=1)
+    status: ExceptionStatus
+    assigned_to: Optional[UUID] = None
+    resolution_notes: Optional[str] = None
+    created_at: datetime
+    resolved_at: Optional[datetime] = None
+
+
 class WorkflowResult(BaseModel):
     """Outcome of one Agent 4 orchestration step. Not a DB row."""
 
@@ -116,3 +135,4 @@ class WorkflowResult(BaseModel):
     human_approval_required: bool = False
     approval: Optional[ApprovalRequestRecord] = None
     risk_assessment: Optional[RiskAssessment] = None
+    bpm_exception: Optional[ExceptionRecord] = None

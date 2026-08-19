@@ -19,7 +19,8 @@ from app.schemas.agent_message import (
 
 from .approvals import ApprovalService
 from .communication_service import AgentCommunicationService
-from .constants import ApprovalStatus, WorkflowStage
+from .constants import ApprovalStatus, ExceptionSeverity, ExceptionType, WorkflowStage
+from .exception_service import ExceptionService
 from .exceptions import (
     AgentUnavailableError,
     CommunicationFailureError,
@@ -48,6 +49,7 @@ class Agent4Workflow:
         risk_engine: RiskAnalysisEngine | None = None,
         approval_service: ApprovalService | None = None,
         communication: AgentCommunicationService | None = None,
+        exception_service: ExceptionService | None = None,
     ) -> None:
         if approval_service is None:
             raise ValueError("ApprovalService is required for Agent4Workflow")
@@ -55,6 +57,35 @@ class Agent4Workflow:
         self._risk_engine = risk_engine or RiskAnalysisEngine()
         self._approvals = approval_service
         self._communication = communication or AgentCommunicationService()
+        self._exceptions = exception_service
+
+    async def capture_failure(
+        self,
+        process_id: UUID,
+        description: str,
+        severity: ExceptionSeverity | None = None,
+        exception_type: ExceptionType | None = None,
+        task_id: UUID | None = None,
+    ) -> WorkflowResult:
+        """Record a BPM exception and halt the process when the StateMachine allows it."""
+        if self._exceptions is None:
+            raise ValueError("ExceptionService is required for capture_failure")
+        record = await self._exceptions.create_exception(
+            process_id=process_id,
+            description=description,
+            severity=severity or ExceptionSeverity.HIGH,
+            exception_type=exception_type or ExceptionType.SYSTEM_ERROR,
+            task_id=task_id,
+            halt_process=True,
+        )
+        stage = await self._orchestrator.get_current_stage(process_id)
+        return WorkflowResult(
+            process_id=process_id,
+            current_stage=stage,
+            success=True,
+            message="BPM exception recorded",
+            bpm_exception=record,
+        )
 
     async def start_process(self, process_id: UUID) -> WorkflowResult:
         """Create a process at DRAFT and move it to DISCOVERING, then request Agent 1."""
