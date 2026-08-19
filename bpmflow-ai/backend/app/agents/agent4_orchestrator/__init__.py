@@ -2,6 +2,11 @@
 
 from .constants import ApprovalStatus, RiskLevel, WorkflowStage
 from .schemas import ProcessStateTransition
+from .service import (
+    OrchestratorService,
+    ProcessAlreadyExistsError,
+    ProcessNotFoundError,
+)
 from .state_machine import (
     ALLOWED_TRANSITIONS,
     InvalidTransitionError,
@@ -13,6 +18,9 @@ __all__ = [
     "ApprovalStatus",
     "RiskLevel",
     "ProcessStateTransition",
+    "OrchestratorService",
+    "ProcessAlreadyExistsError",
+    "ProcessNotFoundError",
     "ALLOWED_TRANSITIONS",
     "InvalidTransitionError",
     "StateMachine",
