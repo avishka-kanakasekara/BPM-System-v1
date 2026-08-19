@@ -16,11 +16,15 @@ from .constants import (
     WorkflowStage,
 )
 from .exceptions import (
+    AgentUnavailableError,
     ApprovalAlreadyDecidedError,
     ApprovalNotFoundError,
+    CommunicationFailureError,
     DatabasePersistenceError,
+    InvalidMessageError,
     ProcessAlreadyExistsError,
     ProcessNotFoundError,
+    UnsupportedAgentError,
 )
 from .repository import (
     AUDIT_ACTION_UPDATED,
@@ -39,6 +43,9 @@ from .schemas import (
     RiskEvaluationContext,
     RiskFinding,
 )
+from .communication import AgentAdapter
+from .communication_service import AgentCommunicationService
+from .adapters import Agent1Adapter, Agent2Adapter, Agent3Adapter
 from .service import OrchestratorService
 from .state_machine import (
     ALLOWED_TRANSITIONS,
@@ -68,6 +75,15 @@ __all__ = [
     "ApprovalGateResult",
     "ApprovalNotFoundError",
     "ApprovalAlreadyDecidedError",
+    "AgentAdapter",
+    "AgentCommunicationService",
+    "Agent1Adapter",
+    "Agent2Adapter",
+    "Agent3Adapter",
+    "UnsupportedAgentError",
+    "AgentUnavailableError",
+    "InvalidMessageError",
+    "CommunicationFailureError",
     "OrchestratorService",
     "ProcessAlreadyExistsError",
     "ProcessNotFoundError",

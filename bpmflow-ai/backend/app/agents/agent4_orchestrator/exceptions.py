@@ -40,3 +40,28 @@ class ApprovalAlreadyDecidedError(ValueError):
         super().__init__(
             f"Approval request {approval_id} is already {status} and cannot be decided again"
         )
+
+
+class UnsupportedAgentError(ValueError):
+    """Raised when sender or receiver is not a known BPMFlow agent."""
+
+    def __init__(self, agent_id: str) -> None:
+        self.agent_id = agent_id
+        super().__init__(f"Unsupported agent: {agent_id}")
+
+
+class AgentUnavailableError(RuntimeError):
+    """Raised when a known agent has no live implementation yet."""
+
+    def __init__(self, agent_id: str, reason: str | None = None) -> None:
+        self.agent_id = agent_id
+        detail = reason or "implementation is not available yet"
+        super().__init__(f"Agent {agent_id} is unavailable: {detail}")
+
+
+class InvalidMessageError(ValueError):
+    """Raised when an outbound or inbound agent message is invalid."""
+
+
+class CommunicationFailureError(RuntimeError):
+    """Raised when adapter communication fails unexpectedly."""
