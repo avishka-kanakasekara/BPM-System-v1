@@ -10,6 +10,7 @@ from app.schemas.agent_message import (
     AgentMessageMetadata,
     AgentMessageType,
 )
+from app.schemas.process import ProcessCreate, ProcessResponse, ProcessStartResponse
 
 __all__ = [
     "AGENT_1",
@@ -20,4 +21,7 @@ __all__ = [
     "AgentMessage",
     "AgentMessageMetadata",
     "AgentMessageType",
+    "ProcessCreate",
+    "ProcessResponse",
+    "ProcessStartResponse",
 ]

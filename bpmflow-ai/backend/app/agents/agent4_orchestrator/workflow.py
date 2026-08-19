@@ -97,6 +97,18 @@ class Agent4Workflow:
         )
         return await self._request_discovery(process_id)
 
+    async def start_existing_process(self, process_id: UUID) -> WorkflowResult:
+        """Move an existing DRAFT process to DISCOVERING, then request Agent 1.
+
+        Does not create a process row. Does not fake discovery success.
+        """
+        await self._orchestrator.move_process(
+            process_id,
+            WorkflowStage.DISCOVERING,
+            reason="Start process discovery",
+        )
+        return await self._request_discovery(process_id)
+
     async def advance_process(
         self,
         process_id: UUID,

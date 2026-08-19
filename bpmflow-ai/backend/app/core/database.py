@@ -6,31 +6,40 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Database URL from environment variable
-# Convert to async format for asyncpg
-DATABASE_URL = os.getenv("DATABASE_URL").replace("postgresql://", "postgresql+asyncpg://")
+# Convert to asyncpg URL when a Postgres connection string is present.
+DATABASE_URL = os.getenv("DATABASE_URL") or ""
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 
-# Create async engine
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=True,  # Set to False in production
-    poolclass=NullPool,  # Use NullPool for serverless environments like Supabase
-)
+engine = None
+AsyncSessionLocal = None
 
-# Create async session factory
-AsyncSessionLocal = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
-
-# Base class for models
+# Base class for models (legacy; ORM models use app.models.base.Base)
 Base = declarative_base()
 
 
-# Dependency to get database session
+def _session_factory():
+    """Create the async sessionmaker on first use so imports work without DATABASE_URL."""
+    global engine, AsyncSessionLocal
+    if AsyncSessionLocal is None:
+        if not DATABASE_URL:
+            raise RuntimeError("DATABASE_URL is not configured")
+        engine = create_async_engine(
+            DATABASE_URL,
+            echo=True,
+            poolclass=NullPool,
+        )
+        AsyncSessionLocal = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+    return AsyncSessionLocal
+
+
 async def get_db():
-    async with AsyncSessionLocal() as session:
+    factory = _session_factory()
+    async with factory() as session:
         try:
             yield session
         finally:

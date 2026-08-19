@@ -9,10 +9,12 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import AuditLog
 from app.models.process import Process
+from app.schemas.process import ProcessResponse
 
 from .constants import WorkflowStage
 from .exceptions import (
@@ -77,6 +79,24 @@ class ProcessRepository(ABC):
         """Roll back a unit of work. No-op for in-memory storage."""
         return None
 
+    async def insert_process(
+        self,
+        name: str,
+        process_type: str,
+        description: str | None = None,
+        created_by: UUID | None = None,
+    ) -> ProcessResponse:
+        """Insert a public.processes row at status=draft, current_stage=DRAFT."""
+        raise NotImplementedError
+
+    async def get_process(self, process_id: UUID) -> ProcessResponse:
+        """Return a process record for API responses."""
+        raise NotImplementedError
+
+    async def list_processes(self) -> List[ProcessResponse]:
+        """Return process records for API list responses."""
+        raise NotImplementedError
+
 
 class InMemoryProcessRepository(ProcessRepository):
     """In-memory stand-in used by unit tests."""
@@ -84,6 +104,7 @@ class InMemoryProcessRepository(ProcessRepository):
     def __init__(self) -> None:
         self._stages: Dict[UUID, WorkflowStage] = {}
         self._history: List[ProcessStateTransition] = []
+        self._records: Dict[UUID, ProcessResponse] = {}
 
     async def create_process(
         self,
@@ -108,6 +129,14 @@ class InMemoryProcessRepository(ProcessRepository):
         if process_id not in self._stages:
             raise ProcessNotFoundError(process_id)
         self._stages[process_id] = new_stage
+        record = self._records.get(process_id)
+        if record is not None:
+            self._records[process_id] = record.model_copy(
+                update={
+                    "current_stage": new_stage,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
 
     async def record_transition(
         self,
@@ -133,6 +162,46 @@ class InMemoryProcessRepository(ProcessRepository):
             return list(self._history)
         return [item for item in self._history if item.process_id == process_id]
 
+    async def insert_process(
+        self,
+        name: str,
+        process_type: str,
+        description: str | None = None,
+        created_by: UUID | None = None,
+    ) -> ProcessResponse:
+        now = datetime.now(timezone.utc)
+        process_id = uuid4()
+        record = ProcessResponse(
+            id=process_id,
+            name=name,
+            description=description,
+            process_type=process_type,
+            status="draft",
+            current_stage=WorkflowStage.DRAFT,
+            version=1,
+            created_by=created_by,
+            created_at=now,
+            updated_at=now,
+        )
+        self._records[process_id] = record
+        self._stages[process_id] = WorkflowStage.DRAFT
+        return record
+
+    async def get_process(self, process_id: UUID) -> ProcessResponse:
+        record = self._records.get(process_id)
+        if record is None:
+            raise ProcessNotFoundError(process_id)
+        stage = self._stages.get(process_id, record.current_stage)
+        return record.model_copy(update={"current_stage": stage})
+
+    async def list_processes(self) -> List[ProcessResponse]:
+        items = []
+        for process_id, record in self._records.items():
+            stage = self._stages.get(process_id, record.current_stage)
+            items.append(record.model_copy(update={"current_stage": stage}))
+        items.sort(key=lambda item: item.created_at, reverse=True)
+        return items
+
 
 class SqlAlchemyProcessRepository(ProcessRepository):
     """PostgreSQL persistence via SQLAlchemy async sessions."""
@@ -151,6 +220,7 @@ class SqlAlchemyProcessRepository(ProcessRepository):
     ) -> None:
         process = await self._get_process(process_id)
         process.current_stage = new_stage.value
+        process.updated_at = datetime.now(timezone.utc)
 
     async def record_transition(
         self,
@@ -213,3 +283,62 @@ class SqlAlchemyProcessRepository(ProcessRepository):
         if process is None:
             raise ProcessNotFoundError(process_id)
         return process
+
+    async def insert_process(
+        self,
+        name: str,
+        process_type: str,
+        description: str | None = None,
+        created_by: UUID | None = None,
+    ) -> ProcessResponse:
+        now = datetime.now(timezone.utc)
+        process = Process(
+            id=uuid4(),
+            name=name,
+            description=description,
+            process_type=process_type,
+            status="draft",
+            version=1,
+            created_by=created_by,
+            created_at=now,
+            updated_at=now,
+            current_stage=WorkflowStage.DRAFT.value,
+        )
+        try:
+            self._session.add(process)
+            await self._session.commit()
+            await self._session.refresh(process)
+        except Exception as exc:
+            await self._session.rollback()
+            raise DatabasePersistenceError("Failed to create process") from exc
+        return process_from_orm(process)
+
+    async def get_process(self, process_id: UUID) -> ProcessResponse:
+        process = await self._get_process(process_id)
+        return process_from_orm(process)
+
+    async def list_processes(self) -> List[ProcessResponse]:
+        try:
+            result = await self._session.execute(
+                select(Process).order_by(Process.created_at.desc())
+            )
+            rows = result.scalars().all()
+        except Exception as exc:
+            raise DatabasePersistenceError("Failed to list processes") from exc
+        return [process_from_orm(row) for row in rows]
+
+
+def process_from_orm(process: Process) -> ProcessResponse:
+    """Map a Process ORM row to an API schema without exposing SQLAlchemy."""
+    return ProcessResponse(
+        id=process.id,
+        name=process.name,
+        description=process.description,
+        process_type=process.process_type,
+        status=process.status,
+        current_stage=WorkflowStage(process.current_stage),
+        version=process.version if process.version is not None else 1,
+        created_by=process.created_by,
+        created_at=process.created_at,
+        updated_at=process.updated_at,
+    )
