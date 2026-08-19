@@ -1,65 +1,55 @@
-"""In-memory BPM workflow controller for Agent 4."""
+"""BPM workflow controller for Agent 4.
 
-from typing import Dict, List
+Stage rules come only from StateMachine. Persistence is delegated to a
+ProcessRepository (in-memory for tests, SQLAlchemy for PostgreSQL).
+"""
+
+from typing import List
 from uuid import UUID
 
 from .constants import WorkflowStage
+from .exceptions import DatabasePersistenceError, ProcessNotFoundError
+from .repository import InMemoryProcessRepository, ProcessRepository
 from .schemas import ProcessStateTransition
 from .state_machine import InvalidTransitionError, StateMachine
 
 
-class ProcessNotFoundError(KeyError):
-    """Raised when a process_id is not tracked by the orchestrator."""
-
-    def __init__(self, process_id: UUID) -> None:
-        self.process_id = process_id
-        super().__init__(f"Unknown process: {process_id}")
-
-
-class ProcessAlreadyExistsError(ValueError):
-    """Raised when create_process is called for an existing process_id."""
-
-    def __init__(self, process_id: UUID) -> None:
-        self.process_id = process_id
-        super().__init__(f"Process already exists: {process_id}")
-
-
 class OrchestratorService:
-    """Central in-memory BPM workflow controller.
+    """Central BPM workflow controller.
 
-    Stage transition rules come only from StateMachine.
-    Persistence is in-memory so this can be unit-tested without FastAPI or Supabase.
+    Flow: repository current_stage -> StateMachine validation -> persist + audit.
     """
 
-    def __init__(self, state_machine: StateMachine | None = None) -> None:
+    def __init__(
+        self,
+        state_machine: StateMachine | None = None,
+        repository: ProcessRepository | None = None,
+    ) -> None:
         self._state_machine = state_machine or StateMachine()
-        self._stages: Dict[UUID, WorkflowStage] = {}
-        self._history: List[ProcessStateTransition] = []
+        self._repository = repository or InMemoryProcessRepository()
 
-    def create_process(
+    async def create_process(
         self,
         process_id: UUID,
         initial_stage: WorkflowStage = WorkflowStage.DRAFT,
     ) -> WorkflowStage:
         """Register a process and return its current stage.
 
-        Defaults to DRAFT. Does not apply a StateMachine transition on create.
+        Defaults to DRAFT. In-memory only unless the repository implements create.
+        Does not apply a StateMachine transition on create.
         """
-        if process_id in self._stages:
-            raise ProcessAlreadyExistsError(process_id)
-        self._stages[process_id] = initial_stage
-        return initial_stage
+        return await self._repository.create_process(process_id, initial_stage)
 
-    def get_current_stage(self, process_id: UUID) -> WorkflowStage:
+    async def get_current_stage(self, process_id: UUID) -> WorkflowStage:
         """Return the current workflow stage for a process."""
-        return self._require_stage(process_id)
+        return await self._load_stage(process_id)
 
-    def can_move(self, process_id: UUID, next_stage: WorkflowStage) -> bool:
+    async def can_move(self, process_id: UUID, next_stage: WorkflowStage) -> bool:
         """Return True if the process may move to next_stage."""
-        current_stage = self._require_stage(process_id)
+        current_stage = await self._load_stage(process_id)
         return self._state_machine.can_transition(current_stage, next_stage)
 
-    def move_process(
+    async def move_process(
         self,
         process_id: UUID,
         next_stage: WorkflowStage,
@@ -70,35 +60,62 @@ class OrchestratorService:
         Raises:
             ProcessNotFoundError: if process_id is unknown.
             InvalidTransitionError: if StateMachine rejects the move.
+            DatabasePersistenceError: if persistence fails after a valid move.
         """
-        current_stage = self._require_stage(process_id)
+        current_stage = await self._load_stage(process_id)
         self._state_machine.transition(current_stage, next_stage)
 
-        result = ProcessStateTransition(
-            process_id=process_id,
-            from_stage=current_stage,
-            to_stage=next_stage,
-            reason=reason,
-        )
-        self._stages[process_id] = next_stage
-        self._history.append(result)
+        try:
+            await self._repository.update_process_stage(process_id, next_stage)
+            result = await self._repository.record_transition(
+                process_id,
+                current_stage,
+                next_stage,
+                reason,
+            )
+            await self._repository.commit()
+        except (ProcessNotFoundError, InvalidTransitionError):
+            await self._safe_rollback()
+            raise
+        except DatabasePersistenceError:
+            await self._safe_rollback()
+            raise
+        except Exception as exc:
+            await self._safe_rollback()
+            raise DatabasePersistenceError(
+                f"Failed to persist transition for process {process_id}"
+            ) from exc
+
         return result
 
-    def get_allowed_next_stages(self, process_id: UUID) -> List[WorkflowStage]:
+    async def get_allowed_next_stages(self, process_id: UUID) -> List[WorkflowStage]:
         """Return stages the process may move to from its current stage."""
-        current_stage = self._require_stage(process_id)
+        current_stage = await self._load_stage(process_id)
         return self._state_machine.get_allowed_next_stages(current_stage)
 
-    def get_transition_history(
+    async def get_transition_history(
         self,
         process_id: UUID | None = None,
     ) -> List[ProcessStateTransition]:
         """Return recorded transitions, optionally filtered by process_id."""
-        if process_id is None:
-            return list(self._history)
-        return [item for item in self._history if item.process_id == process_id]
+        return await self._repository.get_transition_history(process_id)
 
-    def _require_stage(self, process_id: UUID) -> WorkflowStage:
-        if process_id not in self._stages:
-            raise ProcessNotFoundError(process_id)
-        return self._stages[process_id]
+    async def _load_stage(self, process_id: UUID) -> WorkflowStage:
+        try:
+            return await self._repository.get_process_stage(process_id)
+        except (ProcessNotFoundError, DatabasePersistenceError):
+            raise
+        except Exception as exc:
+            raise DatabasePersistenceError(
+                f"Failed to read stage for process {process_id}"
+            ) from exc
+
+    async def _safe_rollback(self) -> None:
+        try:
+            await self._repository.rollback()
+        except DatabasePersistenceError:
+            raise
+        except Exception as exc:
+            raise DatabasePersistenceError(
+                "Failed to roll back process stage change"
+            ) from exc
