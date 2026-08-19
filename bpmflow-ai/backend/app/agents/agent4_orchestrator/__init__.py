@@ -42,7 +42,9 @@ from .schemas import (
     RiskAssessment,
     RiskEvaluationContext,
     RiskFinding,
+    WorkflowResult,
 )
+from .workflow import Agent4Workflow
 from .communication import AgentAdapter
 from .communication_service import AgentCommunicationService
 from .adapters import Agent1Adapter, Agent2Adapter, Agent3Adapter
@@ -65,6 +67,8 @@ __all__ = [
     "RiskEvaluationContext",
     "RiskFinding",
     "RiskAssessment",
+    "WorkflowResult",
+    "Agent4Workflow",
     "RiskAnalysisEngine",
     "ApprovalService",
     "ApprovalRepository",

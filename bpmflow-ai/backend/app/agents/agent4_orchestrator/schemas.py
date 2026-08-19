@@ -101,3 +101,18 @@ class ApprovalGateResult(BaseModel):
     human_approval_required: bool
     approval: Optional[ApprovalRequestRecord] = None
     transition: Optional[ProcessStateTransition] = None
+
+
+class WorkflowResult(BaseModel):
+    """Outcome of one Agent 4 orchestration step. Not a DB row."""
+
+    process_id: UUID
+    current_stage: WorkflowStage
+    success: bool
+    message: str = Field(min_length=1)
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    eligible_for_execution: bool = False
+    human_approval_required: bool = False
+    approval: Optional[ApprovalRequestRecord] = None
+    risk_assessment: Optional[RiskAssessment] = None
