@@ -12,6 +12,10 @@ from app.agents.agent4_orchestrator.approval_repository import (
     ApprovalRepository,
     SqlAlchemyApprovalRepository,
 )
+from app.agents.agent4_orchestrator.audit_repository import (
+    AuditRepository,
+    SqlAlchemyAuditRepository,
+)
 from app.agents.agent4_orchestrator.approvals import ApprovalService
 from app.agents.agent4_orchestrator.exception_repository import (
     ExceptionRepository,
@@ -47,6 +51,12 @@ async def get_exception_repository(
     db: AsyncSession = Depends(get_db),
 ) -> ExceptionRepository:
     return SqlAlchemyExceptionRepository(db)
+
+
+async def get_audit_repository(
+    db: AsyncSession = Depends(get_db),
+) -> AuditRepository:
+    return SqlAlchemyAuditRepository(db)
 
 
 async def get_orchestrator_service(

@@ -23,6 +23,7 @@ from app.schemas.exception import (
     ExceptionResponse,
     ExceptionRetryRequest,
 )
+from app.schemas.audit import AuditLogResponse
 
 __all__ = [
     "AGENT_1",
@@ -44,4 +45,5 @@ __all__ = [
     "ExceptionRetryRequest",
     "ExceptionFailRequest",
     "ExceptionActionResponse",
+    "AuditLogResponse",
 ]
