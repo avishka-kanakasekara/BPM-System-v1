@@ -16,6 +16,13 @@ from app.schemas.approval import (
     ApprovalDecisionResponse,
     ApprovalResponse,
 )
+from app.schemas.exception import (
+    ExceptionActionResponse,
+    ExceptionFailRequest,
+    ExceptionResolveRequest,
+    ExceptionResponse,
+    ExceptionRetryRequest,
+)
 
 __all__ = [
     "AGENT_1",
@@ -32,4 +39,9 @@ __all__ = [
     "ApprovalResponse",
     "ApprovalDecisionRequest",
     "ApprovalDecisionResponse",
+    "ExceptionResponse",
+    "ExceptionResolveRequest",
+    "ExceptionRetryRequest",
+    "ExceptionFailRequest",
+    "ExceptionActionResponse",
 ]

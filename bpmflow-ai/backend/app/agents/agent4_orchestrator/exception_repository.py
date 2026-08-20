@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit import AuditLog
@@ -56,6 +57,13 @@ class ExceptionRepository(ABC):
     @abstractmethod
     async def get_exception(self, exception_id: UUID) -> ExceptionRecord:
         """Load one exception by id."""
+
+    @abstractmethod
+    async def list_exceptions(
+        self,
+        status: ExceptionStatus | None = None,
+    ) -> List[ExceptionRecord]:
+        """Return exception rows, optionally filtered by status."""
 
     @abstractmethod
     async def update_exception(self, record: ExceptionRecord) -> ExceptionRecord:
@@ -126,6 +134,16 @@ class InMemoryExceptionRepository(ExceptionRepository):
         if exception_id not in self._records:
             raise BpmExceptionNotFoundError(exception_id)
         return self._records[exception_id]
+
+    async def list_exceptions(
+        self,
+        status: ExceptionStatus | None = None,
+    ) -> List[ExceptionRecord]:
+        records = list(self._records.values())
+        if status is not None:
+            records = [record for record in records if record.status is status]
+        records.sort(key=lambda record: record.created_at, reverse=True)
+        return records
 
     async def update_exception(self, record: ExceptionRecord) -> ExceptionRecord:
         if record.id not in self._records:
@@ -203,6 +221,20 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
     async def get_exception(self, exception_id: UUID) -> ExceptionRecord:
         row = await self._get_row(exception_id)
         return record_from_orm(row)
+
+    async def list_exceptions(
+        self,
+        status: ExceptionStatus | None = None,
+    ) -> List[ExceptionRecord]:
+        try:
+            stmt = select(ProcessException).order_by(ProcessException.created_at.desc())
+            if status is not None:
+                stmt = stmt.where(ProcessException.status == status.value)
+            result = await self._session.execute(stmt)
+            rows = result.scalars().all()
+        except Exception as exc:
+            raise DatabasePersistenceError("Failed to list exceptions") from exc
+        return [record_from_orm(row) for row in rows]
 
     async def update_exception(self, record: ExceptionRecord) -> ExceptionRecord:
         row = await self._get_row(record.id)
