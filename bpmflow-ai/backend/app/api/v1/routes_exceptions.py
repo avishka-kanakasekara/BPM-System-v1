@@ -15,6 +15,8 @@ from app.agents.agent4_orchestrator.exceptions import (
 )
 from app.agents.agent4_orchestrator.state_machine import InvalidTransitionError
 from app.api.v1.deps import get_exception_repository, get_exception_service
+from app.core.security import get_current_user
+from app.schemas.auth import CurrentUser
 from app.schemas.exception import (
     ExceptionActionResponse,
     ExceptionFailRequest,
@@ -55,6 +57,7 @@ def _database_error() -> HTTPException:
 async def list_exceptions(
     status: ExceptionStatus | None = Query(default=None),
     repository: ExceptionRepository = Depends(get_exception_repository),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> list[ExceptionResponse]:
     try:
         records = await repository.list_exceptions(status=status)
@@ -67,6 +70,7 @@ async def list_exceptions(
 async def get_exception(
     exception_id: UUID,
     repository: ExceptionRepository = Depends(get_exception_repository),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> ExceptionResponse:
     try:
         record = await repository.get_exception(exception_id)
@@ -82,12 +86,14 @@ async def resolve_exception(
     exception_id: UUID,
     payload: ExceptionResolveRequest,
     service: ExceptionService = Depends(get_exception_service),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> ExceptionActionResponse:
     """Resolve an exception without auto-completing the process."""
     try:
         record = await service.resolve_exception(
             exception_id,
             resolution_notes=payload.resolution_notes,
+            performed_by=current_user.id,
         )
     except BpmExceptionNotFoundError as exc:
         raise _not_found() from exc
@@ -110,6 +116,7 @@ async def retry_exception(
     exception_id: UUID,
     payload: ExceptionRetryRequest,
     service: ExceptionService = Depends(get_exception_service),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> ExceptionActionResponse:
     """Retry an eligible exception via the existing recovery flow."""
     try:
@@ -138,6 +145,7 @@ async def fail_exception(
     exception_id: UUID,
     payload: ExceptionFailRequest,
     service: ExceptionService = Depends(get_exception_service),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> ExceptionActionResponse:
     """Map terminal failure to ignored without auto-completing the process."""
     try:

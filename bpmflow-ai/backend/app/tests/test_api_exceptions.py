@@ -17,10 +17,12 @@ from app.agents.agent4_orchestrator.repository import InMemoryProcessRepository
 from app.agents.agent4_orchestrator.service import OrchestratorService
 from app.api.v1.deps import get_exception_repository, get_exception_service
 from app.main import app
+from app.tests.auth_helpers import override_current_user
 
 
 @pytest.fixture
 def exception_setup():
+    override_current_user(role="requester")
     process_repo = InMemoryProcessRepository()
     exception_repo = InMemoryExceptionRepository()
     orchestrator = OrchestratorService(repository=process_repo)

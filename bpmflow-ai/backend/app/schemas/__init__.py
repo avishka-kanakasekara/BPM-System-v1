@@ -24,6 +24,7 @@ from app.schemas.exception import (
     ExceptionRetryRequest,
 )
 from app.schemas.audit import AuditLogResponse
+from app.schemas.auth import ALLOWED_USER_ROLES, CurrentUser
 
 __all__ = [
     "AGENT_1",
@@ -46,4 +47,6 @@ __all__ = [
     "ExceptionFailRequest",
     "ExceptionActionResponse",
     "AuditLogResponse",
+    "CurrentUser",
+    "ALLOWED_USER_ROLES",
 ]

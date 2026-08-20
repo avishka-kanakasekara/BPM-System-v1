@@ -12,6 +12,8 @@ from app.agents.agent4_orchestrator.repository import ProcessRepository
 from app.agents.agent4_orchestrator.state_machine import InvalidTransitionError
 from app.agents.agent4_orchestrator.workflow import Agent4Workflow
 from app.api.v1.deps import get_agent4_workflow, get_process_repository
+from app.core.security import get_current_user
+from app.schemas.auth import CurrentUser
 from app.schemas.process import ProcessCreate, ProcessResponse, ProcessStartResponse
 
 router = APIRouter(prefix="/processes", tags=["processes"])
@@ -35,6 +37,7 @@ def _database_error() -> HTTPException:
 @router.get("", response_model=list[ProcessResponse])
 async def list_processes(
     repository: ProcessRepository = Depends(get_process_repository),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> list[ProcessResponse]:
     try:
         return await repository.list_processes()
@@ -46,6 +49,7 @@ async def list_processes(
 async def create_process(
     payload: ProcessCreate,
     repository: ProcessRepository = Depends(get_process_repository),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> ProcessResponse:
     """Insert a public.processes row. Does not call Agent 1."""
     try:
@@ -53,6 +57,7 @@ async def create_process(
             name=payload.name,
             process_type=payload.process_type,
             description=payload.description,
+            created_by=current_user.id,
         )
     except DatabasePersistenceError as exc:
         raise _database_error() from exc
@@ -62,6 +67,7 @@ async def create_process(
 async def get_process(
     process_id: UUID,
     repository: ProcessRepository = Depends(get_process_repository),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> ProcessResponse:
     try:
         return await repository.get_process(process_id)
@@ -76,6 +82,7 @@ async def start_process(
     process_id: UUID,
     repository: ProcessRepository = Depends(get_process_repository),
     workflow: Agent4Workflow = Depends(get_agent4_workflow),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> ProcessStartResponse:
     """Move DRAFT → DISCOVERING via the StateMachine, then attempt Agent 1.
 

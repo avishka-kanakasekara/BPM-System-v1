@@ -17,6 +17,7 @@ from app.agents.agent4_orchestrator.exceptions import DatabasePersistenceError
 from app.agents.agent4_orchestrator.repository import AUDIT_ENTITY_PROCESS
 from app.api.v1.deps import get_audit_repository
 from app.main import app
+from app.tests.auth_helpers import override_current_user
 
 UTC = timezone.utc
 BASE_TIME = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
@@ -24,6 +25,7 @@ BASE_TIME = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
 
 @pytest.fixture
 def audit_setup():
+    override_current_user(role="requester")
     repository = InMemoryAuditRepository()
 
     async def override_repository() -> InMemoryAuditRepository:
@@ -210,6 +212,7 @@ def test_offset_works(audit_setup) -> None:
 
 
 def test_database_failure_returns_503(audit_setup) -> None:
+    override_current_user(role="requester")
     failing_repo = AsyncMock()
     failing_repo.list_audit_logs.side_effect = DatabasePersistenceError("down")
 

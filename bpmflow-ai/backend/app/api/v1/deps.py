@@ -29,10 +29,16 @@ from app.agents.agent4_orchestrator.repository import (
 from app.agents.agent4_orchestrator.service import OrchestratorService
 from app.agents.agent4_orchestrator.workflow import Agent4Workflow
 from app.core.database import get_db
+from app.core.security import get_current_user, require_roles
+from app.schemas.auth import CurrentUser
 
-# Placeholder approver until authentication is implemented.
-# Not persisted as a user row; only stored on approval_requests.approver_id.
+# Legacy test-only constant. Do not use in production API paths.
 UNAUTHENTICATED_APPROVER_ID = UUID("00000000-0000-4000-8000-000000000001")
+
+
+def resolve_approver_id(current_user: CurrentUser) -> UUID:
+    """Return the authenticated approver id from CurrentUser."""
+    return current_user.id
 
 
 async def get_process_repository(
@@ -89,3 +95,19 @@ async def get_agent4_workflow(
         approval_service=approval_service,
         exception_service=exception_service,
     )
+
+
+__all__ = [
+    "UNAUTHENTICATED_APPROVER_ID",
+    "resolve_approver_id",
+    "get_current_user",
+    "require_roles",
+    "get_process_repository",
+    "get_approval_repository",
+    "get_exception_repository",
+    "get_audit_repository",
+    "get_orchestrator_service",
+    "get_approval_service",
+    "get_exception_service",
+    "get_agent4_workflow",
+]

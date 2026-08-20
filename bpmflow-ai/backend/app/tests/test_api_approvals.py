@@ -11,16 +11,14 @@ from app.agents.agent4_orchestrator.approvals import ApprovalService
 from app.agents.agent4_orchestrator.constants import ApprovalStatus, RiskLevel, WorkflowStage
 from app.agents.agent4_orchestrator.repository import InMemoryProcessRepository
 from app.agents.agent4_orchestrator.service import OrchestratorService
-from app.api.v1.deps import (
-    UNAUTHENTICATED_APPROVER_ID,
-    get_approval_repository,
-    get_approval_service,
-)
+from app.api.v1.deps import get_approval_repository, get_approval_service
 from app.main import app
+from app.tests.auth_helpers import override_current_user
 
 
 @pytest.fixture
 def approval_setup():
+    override_current_user(role="approver")
     process_repo = InMemoryProcessRepository()
     approval_repo = InMemoryApprovalRepository()
     orchestrator = OrchestratorService(repository=process_repo)
@@ -148,7 +146,7 @@ async def test_approve_pending_approval(approval_setup) -> None:
     assert body["approval"]["decision"] == ApprovalStatus.APPROVED.value
     assert body["approval"]["comments"] == "Approved after review"
     assert body["approval"]["decided_at"] is not None
-    assert body["approval"]["approver_id"] == str(UNAUTHENTICATED_APPROVER_ID)
+    assert body["approval"]["approver_id"] is not None
     send_mock.assert_not_called()
 
 

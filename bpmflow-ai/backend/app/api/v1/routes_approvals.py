@@ -12,11 +12,8 @@ from app.agents.agent4_orchestrator.exceptions import (
     ApprovalNotFoundError,
     DatabasePersistenceError,
 )
-from app.api.v1.deps import (
-    UNAUTHENTICATED_APPROVER_ID,
-    get_approval_repository,
-    get_approval_service,
-)
+from app.api.v1.deps import get_approval_repository, get_approval_service
+from app.core.security import get_current_user, require_roles
 from app.schemas.approval import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
@@ -24,6 +21,7 @@ from app.schemas.approval import (
     approval_from_record,
     decision_from_result,
 )
+from app.schemas.auth import CurrentUser
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
 
@@ -55,6 +53,7 @@ def _database_error() -> HTTPException:
 async def list_approvals(
     status: ApprovalStatus | None = Query(default=None),
     repository: ApprovalRepository = Depends(get_approval_repository),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> list[ApprovalResponse]:
     try:
         records = await repository.list_approval_requests(status=status)
@@ -67,6 +66,7 @@ async def list_approvals(
 async def get_approval(
     approval_id: UUID,
     repository: ApprovalRepository = Depends(get_approval_repository),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> ApprovalResponse:
     try:
         record = await repository.get_approval_request(approval_id)
@@ -82,12 +82,13 @@ async def approve_approval(
     approval_id: UUID,
     payload: ApprovalDecisionRequest,
     service: ApprovalService = Depends(get_approval_service),
+    current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ApprovalDecisionResponse:
     """Record APPROVED. Does not execute Agent 2 or complete the process."""
     try:
         result = await service.approve_request(
             approval_id,
-            approver_id=UNAUTHENTICATED_APPROVER_ID,
+            approver_id=current_user.id,
             comments=payload.comments,
         )
     except ApprovalNotFoundError as exc:
@@ -111,12 +112,13 @@ async def reject_approval(
     approval_id: UUID,
     payload: ApprovalDecisionRequest,
     service: ApprovalService = Depends(get_approval_service),
+    current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ApprovalDecisionResponse:
     """Record REJECTED. Does not auto-create exceptions or complete the process."""
     try:
         result = await service.reject_request(
             approval_id,
-            approver_id=UNAUTHENTICATED_APPROVER_ID,
+            approver_id=current_user.id,
             comments=payload.comments,
         )
     except ApprovalNotFoundError as exc:

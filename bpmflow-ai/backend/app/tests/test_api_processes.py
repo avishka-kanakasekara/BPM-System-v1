@@ -12,9 +12,14 @@ from app.agents.agent4_orchestrator.service import OrchestratorService
 from app.agents.agent4_orchestrator.workflow import Agent4Workflow
 from app.api.v1.deps import get_agent4_workflow, get_process_repository
 from app.main import app
+from app.tests.auth_helpers import override_current_user
 
 
-def _client() -> tuple[TestClient, InMemoryProcessRepository]:
+def _client(
+    *,
+    role: str = "requester",
+) -> tuple[TestClient, InMemoryProcessRepository]:
+    override_current_user(role=role)
     repository = InMemoryProcessRepository()
     orchestrator = OrchestratorService(repository=repository)
     workflow = Agent4Workflow(
