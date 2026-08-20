@@ -1,8 +1,7 @@
 """API v1 router.
 
-Only process routes are registered in this section. Later sections can include:
+Process and approval routes are registered. Later sections can include:
 - task routes
-- approval routes
 - exception routes
 - audit routes
 - agent routes
@@ -10,7 +9,9 @@ Only process routes are registered in this section. Later sections can include:
 
 from fastapi import APIRouter
 
+from app.api.v1.routes_approvals import router as approvals_router
 from app.api.v1.routes_process import router as process_router
 
 api_router = APIRouter()
 api_router.include_router(process_router)
+api_router.include_router(approvals_router)

@@ -78,6 +78,13 @@ class ApprovalRepository(ABC):
         """Return the pending approval for a process, if any."""
 
     @abstractmethod
+    async def list_approval_requests(
+        self,
+        status: ApprovalStatus | None = None,
+    ) -> List[ApprovalRequestRecord]:
+        """Return approval requests, optionally filtered by status."""
+
+    @abstractmethod
     async def approve_request(
         self,
         approval_id: UUID,
@@ -165,6 +172,16 @@ class InMemoryApprovalRepository(ApprovalRepository):
             ):
                 return record
         return None
+
+    async def list_approval_requests(
+        self,
+        status: ApprovalStatus | None = None,
+    ) -> List[ApprovalRequestRecord]:
+        records = list(self._records.values())
+        if status is not None:
+            records = [record for record in records if record.status is status]
+        records.sort(key=lambda record: record.created_at, reverse=True)
+        return records
 
     async def approve_request(
         self,
@@ -311,6 +328,20 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
         if row is None:
             return None
         return approval_from_orm(row)
+
+    async def list_approval_requests(
+        self,
+        status: ApprovalStatus | None = None,
+    ) -> List[ApprovalRequestRecord]:
+        try:
+            stmt = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc())
+            if status is not None:
+                stmt = stmt.where(ApprovalRequest.status == status.value)
+            result = await self._session.execute(stmt)
+            rows = result.scalars().all()
+        except Exception as exc:
+            raise DatabasePersistenceError("Failed to list approval requests") from exc
+        return [approval_from_orm(row) for row in rows]
 
     async def approve_request(
         self,

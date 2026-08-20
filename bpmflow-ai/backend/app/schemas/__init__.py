@@ -11,6 +11,11 @@ from app.schemas.agent_message import (
     AgentMessageType,
 )
 from app.schemas.process import ProcessCreate, ProcessResponse, ProcessStartResponse
+from app.schemas.approval import (
+    ApprovalDecisionRequest,
+    ApprovalDecisionResponse,
+    ApprovalResponse,
+)
 
 __all__ = [
     "AGENT_1",
@@ -24,4 +29,7 @@ __all__ = [
     "ProcessCreate",
     "ProcessResponse",
     "ProcessStartResponse",
+    "ApprovalResponse",
+    "ApprovalDecisionRequest",
+    "ApprovalDecisionResponse",
 ]
