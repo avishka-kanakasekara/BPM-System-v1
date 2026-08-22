@@ -43,6 +43,25 @@ from .eligibility import EligibilityEvaluator
 from .ranking import HumanResourceRanker
 from .gaps import GapDetector
 from .explainer_template import TemplateExplainer, ExplanationContext
+from .llm_explainer import (
+    ExplanationGenerator,
+    TemplateExplainerAdapter,
+    OpenAIExplanationGenerator,
+    ResilientFallbackExplainer,
+    LLMOutputValidator,
+    SanitizedExplanationInput,
+    sanitize_explanation_context,
+    build_user_prompt,
+    LLMExplanationError,
+)
+from .runtime_config import (
+    Agent3LLMConfig,
+    get_agent3_llm_config,
+    get_shared_openai_client,
+    close_agent3_llm_runtime,
+    reset_agent3_llm_runtime,
+    set_openai_client_factory,
+)
 from .service import ResourceAllocationService
 from .strategies import ResourceStrategy, HumanResourceStrategy, BudgetResourceStrategy
 from .failures import (
@@ -64,6 +83,17 @@ from .fixtures import (
     get_resource_id_1,
     get_resource_id_2,
     get_resource_id_3,
+)
+from .repositories import (
+    RecommendationWriteRepository,
+    PersistenceError,
+    PersistenceValidationError,
+    PersistenceConflictError,
+    PersistenceLookupError,
+    PersistenceTransactionError,
+    MIGRATION_0004_FILENAME,
+    WRITE_PATH_TABLES,
+    AGENT3_ALLOWED_RECOMMENDATION_STATUSES,
 )
 
 __all__ = [
@@ -112,6 +142,21 @@ __all__ = [
     "GapDetector",
     "TemplateExplainer",
     "ExplanationContext",
+    "ExplanationGenerator",
+    "TemplateExplainerAdapter",
+    "OpenAIExplanationGenerator",
+    "ResilientFallbackExplainer",
+    "LLMOutputValidator",
+    "SanitizedExplanationInput",
+    "sanitize_explanation_context",
+    "build_user_prompt",
+    "LLMExplanationError",
+    "Agent3LLMConfig",
+    "get_agent3_llm_config",
+    "get_shared_openai_client",
+    "close_agent3_llm_runtime",
+    "reset_agent3_llm_runtime",
+    "set_openai_client_factory",
     "ResourceAllocationService",
     "FailureSpec",
     "detect_invalid_request",
@@ -134,4 +179,14 @@ __all__ = [
     "get_resource_id_1",
     "get_resource_id_2",
     "get_resource_id_3",
+    # Write repository
+    "RecommendationWriteRepository",
+    "PersistenceError",
+    "PersistenceValidationError",
+    "PersistenceConflictError",
+    "PersistenceLookupError",
+    "PersistenceTransactionError",
+    "MIGRATION_0004_FILENAME",
+    "WRITE_PATH_TABLES",
+    "AGENT3_ALLOWED_RECOMMENDATION_STATUSES",
 ]

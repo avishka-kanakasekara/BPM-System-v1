@@ -1,7 +1,7 @@
-"""Declarative base for BPM ORM models (Agent 3/4).
+"""Declarative base for SQLAlchemy ORM models.
 
-Kept separate from app.core.database so unit tests can import these models
-without creating a database engine.
+Kept separate from app.core.database engine creation so unit tests can import
+models without requiring DATABASE_URL.
 """
 
 from sqlalchemy.orm import declarative_base

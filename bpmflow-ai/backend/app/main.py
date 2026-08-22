@@ -86,7 +86,7 @@ async def health_check():
         "status": "healthy" if database in {"postgres", "supabase_rest"} else "degraded",
         "env": settings.ENV,
         "agent": "agent1_discovery",
-        "database": database,
+        "database": "configured" if settings.DATABASE_URL else "not configured",
         "supabase": "configured" if settings.SUPABASE_URL else "not configured",
     }
 

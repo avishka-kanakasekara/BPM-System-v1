@@ -20,14 +20,16 @@ class ResourceStrategy(ABC):
     async def process_requirement(
         self,
         requirement,
+        tenant_id,
         evaluation_timestamp,
     ) -> RequirementResult:
         """Process a resource requirement and return results.
-        
+
         Args:
             requirement: HumanResourceRequirement or BudgetResourceRequirement
+            tenant_id: Trusted tenant scope from request metadata
             evaluation_timestamp: Fixed timestamp for deterministic behavior
-            
+
         Returns:
             RequirementResult with eligible candidates, exclusions, and validation
         """

@@ -21,6 +21,7 @@ class ExplanationContext:
     alternatives: List[ResourceAlternative] = field(default_factory=list)
     limitations: List[str] = field(default_factory=list)
     confidence: Optional[Decimal] = None
+    currency: Optional[str] = None
 
 
 class TemplateExplainer:
@@ -37,7 +38,7 @@ class TemplateExplainer:
 
         if context.budget_requirement_result:
             lines.append("")
-            lines.append(self._explain_budget_result(context.budget_requirement_result))
+            lines.append(self._explain_budget_result(context.budget_requirement_result, currency=context.currency))
 
         if context.resource_gaps:
             lines.append("")
@@ -129,15 +130,16 @@ class TemplateExplainer:
 
         return "\n".join(lines)
 
-    def _explain_budget_result(self, result: RequirementResult) -> str:
+    def _explain_budget_result(self, result: RequirementResult, currency: Optional[str] = None) -> str:
         lines = []
         lines.append("=== Budget Validation ===")
 
         if result.budget_validation:
             validation = result.budget_validation
             lines.append(f"Budget: {validation.name}")
-            lines.append(f"Available Balance: ${validation.available_balance}")
-            lines.append(f"Required Amount: ${validation.required_amount}")
+            curr_str = f" {currency}" if currency else ""
+            lines.append(f"Available Balance: {validation.available_balance}{curr_str}")
+            lines.append(f"Required Amount: {validation.required_amount}{curr_str}")
             lines.append("")
             lines.append("Validation Checks:")
             lines.append(

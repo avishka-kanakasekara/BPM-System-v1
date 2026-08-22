@@ -1,7 +1,7 @@
 """Shared API v1 router for all agents.
 
-Aggregates Agent 1 discovery, Agent 3 allocation, and Agent 4
-process/approval/exception/audit/auth routes. Each agent router keeps its own prefix.
+Aggregates Agent 4 process/approval/exception/audit/auth routes and
+Agent 3 allocation routes. Each agent router keeps its own prefix.
 Mounted from main.py with prefix=/api/v1.
 """
 
