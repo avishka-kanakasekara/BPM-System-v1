@@ -3,8 +3,9 @@ fastapi
 uvicorn[standard]
 python-multipart
 
-# Database
+# Database (sync Agent 1 + async Agents 3/4)
 sqlalchemy[asyncio]
+psycopg2-binary
 asyncpg
 alembic
 
@@ -24,13 +25,20 @@ passlib[bcrypt]
 httpx
 aiohttp
 
-# LLM Clients
+# LLM clients
+anthropic
 openai
 google-generativeai
 
 # Vector database and embeddings
 pgvector
 sentence-transformers
+
+# Agent 1 discovery / document intelligence
+spacy
+pm4py
+python-docx
+pypdf
 
 # Utilities
 python-dotenv

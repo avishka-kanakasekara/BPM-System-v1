@@ -1,16 +1,20 @@
-"""Shared inter-agent message envelope for BPMFlow AI.
+"""Shared inter-agent message envelopes for BPMFlow AI.
 
-Preserves Agent 3 metadata field names and meanings. Agent-specific payloads
-(e.g. AllocationRequest / AllocationRecommendation) stay in agent packages.
+Two shapes live here on purpose:
+- AgentMessage / AgentMessageMetadata: Agent 3/4 routing envelope (nested metadata).
+- DiscoveryAgentMessage: Agent 1 HTTP/discovery result (flat, informational only).
+
 This is not the database agent_messages transport row.
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SCHEMA_VERSION = "1.0.0"
 
@@ -70,3 +74,49 @@ class AgentMessage(BaseModel):
 
     metadata: AgentMessageMetadata
     payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+AgentMessageStatus = Literal["COMPLETE", "PARTIAL", "NEEDS_CLARIFICATION"]
+
+
+class EvidenceReference(BaseModel):
+    """Pointer from a payload field back to source evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    file_id: UUID
+    page: Optional[int] = None
+    span_start: Optional[int] = None
+    span_end: Optional[int] = None
+
+
+class DiscoveryAgentMessage(BaseModel):
+    """Agent 1 discovery result. Informational only — no approve/decision fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: UUID = Field(default_factory=uuid4)
+    trace_id: UUID = Field(default_factory=uuid4)
+    process_id: UUID = Field(default_factory=uuid4)
+    sender: str = "agent1_discovery"
+    timestamp: datetime = Field(default_factory=utc_now)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    evidence_references: list[EvidenceReference] = Field(default_factory=list)
+    overall_confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+    status: AgentMessageStatus
+
+    def to_inter_agent_message(self, *, receiver: str = AGENT_4) -> AgentMessage:
+        """Wrap this discovery result in the shared Agent 3/4 envelope."""
+        return AgentMessage(
+            metadata=AgentMessageMetadata(
+                message_id=self.message_id,
+                correlation_id=self.trace_id,
+                process_instance_id=self.process_id,
+                sender=AGENT_1,
+                receiver=receiver,
+                message_type=AgentMessageType.PROCESS_DISCOVERY_RESPONSE,
+                timestamp=self.timestamp,
+            ),
+            payload=self.model_dump(mode="json"),
+        )

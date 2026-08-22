@@ -149,6 +149,32 @@ bpmflow-ai/
         └── frontend-ci.yml
 ```
 
+## Agent 1 - Setup
+
+Agent 1 (Process Discovery & Document Intelligence) is intended to run from `backend/` on its own. Process, auth, and other-agent routers are not mounted yet.
+
+1. Copy environment defaults and edit values as needed:
+
+   ```bash
+   cd bpmflow-ai/backend
+   python -m venv venv
+   venv\Scripts\activate          # Windows
+   pip install -r requirements.txt
+   copy .env.example .env         # Windows; use `cp` on macOS/Linux
+   ```
+
+2. Set `DATABASE_URL` to a reachable Postgres instance (or SQLite, e.g. `sqlite:///./bpmflow.db`, for local-only work). Add `ANTHROPIC_API_KEY` when you enable LLM extraction. `MAX_UPLOAD_MB` and `ALLOWED_FILE_TYPES` control document ingestion.
+
+3. Start the API:
+
+   ```bash
+   uvicorn app.main:app --reload --port 8001
+   ```
+
+4. Check `GET http://localhost:8001/health`. Interactive docs: `http://localhost:8001/docs`.
+
+Optional: `python -m spacy download en_core_web_sm` if you want spaCy NER instead of the rule-based extractor.
+
 ## Status
 
 This is an empty scaffold. Implementation has not started yet. All files are empty except for `.gitignore` and this `README.md`.

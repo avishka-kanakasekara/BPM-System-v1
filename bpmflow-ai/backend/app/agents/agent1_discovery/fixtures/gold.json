@@ -1,0 +1,57 @@
+{
+  "documents": [
+    {
+      "id": "purchase_request",
+      "doc_type": "PURCHASE_REQUEST",
+      "text": "Purchase Request PR-1042\nRequester: Jane Smith\nSupplier: Acme Supplies Ltd\nAmount: USD 1,250.00\nCost centre: CC100\nDate: 2026-03-15\nPlease approve this purchase request for laptops.\n",
+      "entities": [
+        {"entity_type": "requester", "value": "Jane Smith"},
+        {"entity_type": "supplier", "value": "Acme Supplies Ltd"},
+        {"entity_type": "amount", "value": "1,250.00"},
+        {"entity_type": "currency", "value": "USD"},
+        {"entity_type": "cost_centre", "value": "CC100"},
+        {"entity_type": "date", "value": "2026-03-15"}
+      ],
+      "relations": [
+        {"subject": "Requester", "predicate": "actor-performs-task", "object": "Submit purchase request"},
+        {"subject": "Submit purchase request", "predicate": "task-precedes-task", "object": "Approve purchase request"},
+        {"subject": "Policy threshold", "predicate": "rule-controls-task", "object": "Approve purchase request"}
+      ],
+      "expected_missing": ["process_name", "exit_conditions", "system"]
+    },
+    {
+      "id": "quotation",
+      "doc_type": "QUOTATION",
+      "text": "Quotation Q-77\nQuote number Q-77\nSupplier: Acme Supplies Ltd\nQuoted price: USD 1,250.00\nRequester: Jane Smith\nRFQ for laptops.\n",
+      "entities": [
+        {"entity_type": "requester", "value": "Jane Smith"},
+        {"entity_type": "supplier", "value": "Acme Supplies Ltd"},
+        {"entity_type": "currency", "value": "USD"}
+      ],
+      "relations": [
+        {"subject": "Requester", "predicate": "actor-performs-task", "object": "Submit purchase request"},
+        {"subject": "Submit purchase request", "predicate": "task-precedes-task", "object": "Approve purchase request"},
+        {"subject": "Policy threshold", "predicate": "rule-controls-task", "object": "Approve purchase request"}
+      ],
+      "expected_missing": ["process_name", "system"]
+    },
+    {
+      "id": "sop",
+      "doc_type": "SOP",
+      "text": "Standard Operating Procedure SOP-01\nProcurement Process\nStep 1: Requester submits a purchase request.\nStep 2: Manager approves if the amount is below the policy threshold of $5000.\nSupplier: Acme Supplies Ltd may then be engaged.\nRequester: Jane Smith initiates the SOP.\nAmount: USD 500.00 is the sample request value.\n",
+      "entities": [
+        {"entity_type": "requester", "value": "Jane Smith"},
+        {"entity_type": "supplier", "value": "Acme Supplies Ltd"},
+        {"entity_type": "amount", "value": "500.00"},
+        {"entity_type": "currency", "value": "USD"},
+        {"entity_type": "policy_threshold", "value": "5000"}
+      ],
+      "relations": [
+        {"subject": "Requester", "predicate": "actor-performs-task", "object": "Submit purchase request"},
+        {"subject": "Submit purchase request", "predicate": "task-precedes-task", "object": "Approve purchase request"},
+        {"subject": "Policy threshold", "predicate": "rule-controls-task", "object": "Approve purchase request"}
+      ],
+      "expected_missing": ["process_name", "exit_conditions"]
+    }
+  ]
+}
