@@ -27,22 +27,6 @@ from app.schemas.agent_message import (
 from app.tests.auth_helpers import override_current_user
 
 
-class _FakeHealthyEngine:
-    """Minimal sync engine stand-in so /health does not hit the network."""
-
-    def connect(self):
-        return self
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
-
-    def execute(self, *_args, **_kwargs):
-        return None
-
-
 def _client(
     *,
     role: str = "requester",
@@ -79,14 +63,20 @@ def teardown_function() -> None:
 
 
 def test_health_still_works() -> None:
-    """Health must respond without requiring a live Supabase network call."""
+    """Health must respond without requiring a live Postgres pooler call.
+
+    When Supabase REST is configured, /health prefers HTTPS and must not hang
+    on a blocked pooler port. This test stubs REST as reachable.
+    """
     client, _ = _client()
-    with patch("app.core.database.get_sync_engine", return_value=_FakeHealthyEngine()):
+    with patch("app.core.supabase_rest.ping_rest", return_value=True), patch(
+        "app.core.supabase_rest.supabase_rest_configured", return_value=True
+    ):
         response = client.get("/health")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "healthy"
-    assert "database" in body
+    assert body["database"] == "supabase_rest"
     assert "supabase" in body
 
 

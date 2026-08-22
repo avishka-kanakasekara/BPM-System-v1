@@ -30,7 +30,14 @@ def _headers() -> dict[str, str]:
 def _client() -> httpx.Client:
     if not supabase_rest_configured():
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
-    return httpx.Client(base_url=settings.SUPABASE_URL.rstrip("/"), timeout=30.0, headers=_headers())
+    # trust_env=False: ignore HTTP(S)_PROXY so local/dev proxies cannot break
+    # Supabase HTTPS calls (otherwise health/REST fail with ProxyError 403).
+    return httpx.Client(
+        base_url=settings.SUPABASE_URL.rstrip("/"),
+        timeout=30.0,
+        headers=_headers(),
+        trust_env=False,
+    )
 
 
 def _raise_for_status(response: httpx.Response, action: str) -> None:

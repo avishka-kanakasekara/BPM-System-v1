@@ -91,23 +91,12 @@ class TestRouterRegistration:
             assert response.status_code == 200
             assert response.json()["message"] == "BPMFlow AI API"
 
-            # Health endpoint should still work without a live DB network call.
+            # Health endpoint should still work without a live pooler call.
             from unittest.mock import patch
 
-            class _FakeHealthyEngine:
-                def connect(self):
-                    return self
-
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, *args):
-                    return False
-
-                def execute(self, *_args, **_kwargs):
-                    return None
-
-            with patch("app.core.database.get_sync_engine", return_value=_FakeHealthyEngine()):
+            with patch("app.core.supabase_rest.ping_rest", return_value=True), patch(
+                "app.core.supabase_rest.supabase_rest_configured", return_value=True
+            ):
                 response = await client.get("/health")
             assert response.status_code == 200
             assert response.json()["status"] == "healthy"

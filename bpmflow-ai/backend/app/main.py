@@ -63,30 +63,39 @@ async def root():
 
 @app.get("/health")
 async def health_check():
+    """Liveness + dependency probe.
+
+    Prefers a fast Supabase REST ping (HTTPS) so environments that block the
+    Postgres pooler ports (6543/5432) still report healthy when Supabase is
+    reachable. Postgres is probed only when REST is unavailable/unconfigured.
+    """
     logger.info("health_check")
     database = "unknown"
     try:
         from app.core.database import get_sync_engine
-        from app.core.supabase_rest import ping_rest
+        from app.core.supabase_rest import ping_rest, supabase_rest_configured
         from sqlalchemy import text
 
-        engine = get_sync_engine()
-        if engine is not None:
-            with engine.connect() as connection:
-                connection.execute(text("SELECT 1"))
-            database = "postgres"
-        elif ping_rest():
+        if supabase_rest_configured() and ping_rest():
+            # Do not call get_sync_engine() here — a blocked pooler port can
+            # hang for many seconds even though Supabase HTTPS is fine.
             database = "supabase_rest"
         else:
-            database = "disconnected"
+            engine = get_sync_engine()
+            if engine is not None:
+                with engine.connect() as connection:
+                    connection.execute(text("SELECT 1"))
+                database = "postgres"
+            else:
+                database = "disconnected"
     except Exception as exc:
         logger.exception("health_database_failed")
         database = f"error: {type(exc).__name__}"
     return {
         "status": "healthy" if database in {"postgres", "supabase_rest"} else "degraded",
         "env": settings.ENV,
-        "agent": "agent1_discovery",
-        "database": "configured" if settings.DATABASE_URL else "not configured",
+        "database": database,
+        "database_url_configured": bool(settings.DATABASE_URL),
         "supabase": "configured" if settings.SUPABASE_URL else "not configured",
     }
 

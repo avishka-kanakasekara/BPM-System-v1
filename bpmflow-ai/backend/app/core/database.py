@@ -66,15 +66,24 @@ def _to_asyncpg_url(database_url: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _create_sync_engine(url: str) -> Engine:
+def _ensure_sslmode(url: str) -> str:
+    """Supabase Postgres requires TLS; append sslmode=require when missing."""
+    if _is_sqlite(url) or "sslmode=" in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}sslmode=require"
+
+
+def _create_sync_engine(url: str, *, connect_timeout: int = 5) -> Engine:
+    url = _ensure_sslmode(url)
     connect_args: dict = {}
     kwargs: dict = {"pool_pre_ping": True}
     if _is_sqlite(url):
         connect_args["check_same_thread"] = False
     else:
-        connect_args["connect_timeout"] = 8
-        if "sslmode=" not in url:
-            connect_args["sslmode"] = "require"
+        # Keep the health/fallback path snappy when the pooler port is blocked.
+        connect_args["connect_timeout"] = connect_timeout
+        connect_args["sslmode"] = "require"
         if ":6543" in url:
             kwargs["poolclass"] = NullPool
     return create_engine(url, connect_args=connect_args, **kwargs)
@@ -202,10 +211,26 @@ def get_engine() -> AsyncEngine:
                 execution_options={"schema_translate_map": {"public": None}},
             )
         else:
+            # asyncpg ignores sslmode query params — pass SSL explicitly.
+            # statement_cache_size=0 is required for Supabase transaction pooler (6543).
+            import ssl as _ssl
+
+            ssl_ctx = _ssl.create_default_context()
             connect_args = {
                 "statement_cache_size": 0,
                 "prepared_statement_cache_size": 0,
+                "ssl": ssl_ctx,
+                "timeout": 15,
             }
+            # Strip sslmode from the URL so asyncpg does not reject unknown kwargs.
+            if "?" in database_url:
+                base, query = database_url.split("?", 1)
+                kept = [
+                    part
+                    for part in query.split("&")
+                    if not part.lower().startswith("sslmode=")
+                ]
+                database_url = base if not kept else f"{base}?{'&'.join(kept)}"
             _engine = create_async_engine(
                 database_url,
                 echo=False,
