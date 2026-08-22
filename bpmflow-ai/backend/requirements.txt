@@ -3,10 +3,12 @@ fastapi
 uvicorn[standard]
 python-multipart
 
-# Database (sync Agent 1 + async Agents 3/4)
+# Database (sync Agent 1 + async Agents 2/3/4)
 sqlalchemy[asyncio]
 psycopg2-binary
 asyncpg
+aiosqlite
+greenlet
 alembic
 
 # Supabase
@@ -26,19 +28,32 @@ httpx
 aiohttp
 
 # LLM clients
+# Agent 1: Anthropic (+ MOCK_LLM fixtures)
+# Agent 2: google-genai (Gemini); google-generativeai kept for legacy imports
+# Agent 3: OpenAI optional explanations only
 anthropic
 openai
+google-genai
 google-generativeai
+
+# Caching / Agent 2 scheduler (optional at runtime)
+redis
+
+# Email templates (Agent 2)
+jinja2
 
 # Vector database and embeddings
 pgvector
 sentence-transformers
+rank-bm25
 
-# Agent 1 discovery / document intelligence
+# Agent 1 discovery / document intelligence + Agent 2 analytics
 spacy
 pm4py
 python-docx
 pypdf
+pandas
+numpy
 
 # Utilities
 python-dotenv

@@ -1,5 +1,11 @@
 # CLAUDE.md — Agent 2: Intelligent Workflow Execution, RPA & Process Optimization
 
+> **SUPERSEDED for runtime.** Agent 2 now runs inside the FastAPI monolith at
+> `bpmflow-ai/backend/app/agents/agent2_execution`. Do not start this directory
+> as its own server; `mock_agent4/` is gone. Use `bpmflow-ai/backend/.env`.
+> Historical design notes below remain useful; where they conflict with the
+> monolith (separate SQLite, port 8002, mock Agent 4), the monolith wins.
+
 > **Read this file before doing anything else in this repo, every session.**
 
 ---
