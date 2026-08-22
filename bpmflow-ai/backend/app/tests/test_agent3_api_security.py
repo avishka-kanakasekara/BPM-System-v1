@@ -6,8 +6,9 @@ These tests verify authentication and authorization enforcement.
 import os
 import pytest
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import uuid4, UUID
-from typing import Set
+from typing import Optional, Set
 
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport

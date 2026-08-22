@@ -1,10 +1,11 @@
-"""Shared database engine and session factory for Agent 3 and other agents.
+"""Shared database engine and session factory for Agent 3, Agent 4, and other agents.
 
 This module provides lazy database initialization to ensure:
 - No connection at import time
 - Single shared engine across all agents
 - Proper session lifecycle management
 - Engine disposal on application shutdown
+- Application imports work without DATABASE_URL (engine created on first use)
 
 The engine is created lazily on first access to avoid immediate database
 connections during import, which is important for testing and startup.
@@ -25,14 +26,11 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.pool import NullPool
 
-# Database URL from environment variable
-# Convert to async format for asyncpg (done lazily in get_database_url)
-
 # Global engine and session factory (initialized lazily)
 _engine: Optional[AsyncEngine] = None
 _session_factory: Optional[async_sessionmaker[AsyncSession]] = None
 
-# Base class for models
+# Base class for models (legacy; ORM models use app.models.base.Base)
 Base = declarative_base()
 
 
@@ -175,8 +173,15 @@ async def init_db() -> None:
 
     This function can be called during FastAPI lifespan startup to
     pre-initialize the engine, ensuring it's ready for the first request.
+
+    When DATABASE_URL is unset (unit tests / local import), skip eagerly
+    creating the engine so the application can still start.
     """
-    get_engine()
+    try:
+        get_engine()
+    except ValueError:
+        # DATABASE_URL not configured — keep lazy init for first real use
+        return
 
 
 async def close_db() -> None:
