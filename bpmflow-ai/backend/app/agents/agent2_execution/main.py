@@ -16,6 +16,8 @@ Features:
 import json
 import logging
 import sys
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -66,6 +68,18 @@ logger = logging.getLogger("agent_2.main")
 # FastAPI Application Initialization
 # ---------------------------------------------------------------------------
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Agent 2 (Workflow Execution & Optimization Agent) started successfully.")
+    try:
+        backend = await ensure_database_schema()
+        logger.info(f"Agent 2 database schema ensured ({backend}).")
+    except Exception as exc:
+        logger.warning(f"Could not ensure Agent 2 database schema: {exc}")
+    yield
+
+
 app = FastAPI(
     title="BPMFlow AI — Agent 2 (Workflow Execution & Optimization)",
     description=(
@@ -75,6 +89,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS Middleware Setup
@@ -91,16 +106,6 @@ app.add_middleware(
 app.include_router(messages.router)
 app.include_router(read.router, prefix="/api/v1")
 app.include_router(governance.router, prefix="/api/v1")
-
-
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Agent 2 (Workflow Execution & Optimization Agent) started successfully.")
-    try:
-        backend = await ensure_database_schema()
-        logger.info(f"Agent 2 database schema ensured ({backend}).")
-    except Exception as exc:
-        logger.warning(f"Could not ensure Agent 2 database schema: {exc}")
 
 
 @app.get("/", summary="Root Endpoint")

@@ -1,7 +1,7 @@
 """API tests for PROCESS endpoints. No live Supabase database is required."""
 
-import asyncio
 from unittest.mock import AsyncMock, patch
+import asyncio
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -25,6 +25,22 @@ from app.schemas.agent_message import (
     AgentMessageType,
 )
 from app.tests.auth_helpers import override_current_user
+
+
+class _FakeHealthyEngine:
+    """Minimal sync engine stand-in so /health does not hit the network."""
+
+    def connect(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, *_args, **_kwargs):
+        return None
 
 
 def _client(
@@ -63,8 +79,10 @@ def teardown_function() -> None:
 
 
 def test_health_still_works() -> None:
+    """Health must respond without requiring a live Supabase network call."""
     client, _ = _client()
-    response = client.get("/health")
+    with patch("app.core.database.get_sync_engine", return_value=_FakeHealthyEngine()):
+        response = client.get("/health")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "healthy"

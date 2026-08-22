@@ -90,9 +90,25 @@ class TestRouterRegistration:
             response = await client.get("/")
             assert response.status_code == 200
             assert response.json()["message"] == "BPMFlow AI API"
-        
-            # Health endpoint should still work
-            response = await client.get("/health")
+
+            # Health endpoint should still work without a live DB network call.
+            from unittest.mock import patch
+
+            class _FakeHealthyEngine:
+                def connect(self):
+                    return self
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def execute(self, *_args, **_kwargs):
+                    return None
+
+            with patch("app.core.database.get_sync_engine", return_value=_FakeHealthyEngine()):
+                response = await client.get("/health")
             assert response.status_code == 200
             assert response.json()["status"] == "healthy"
 
