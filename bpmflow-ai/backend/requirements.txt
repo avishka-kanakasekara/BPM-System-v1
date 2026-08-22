@@ -1,40 +1,15 @@
-# FastAPI and ASGI server
 fastapi
-uvicorn[standard]
-python-multipart
-
-# Database
-sqlalchemy[asyncio]
-asyncpg
-alembic
-
-# Supabase
-supabase
-
-# Pydantic and validation
+uvicorn
 pydantic
 pydantic-settings
-email-validator
-
-# Authentication and security
-python-jose[cryptography]
-passlib[bcrypt]
-
-# HTTP client
-httpx
-aiohttp
-
-# LLM Clients
-openai
-google-generativeai
-
-# Vector database and embeddings
-pgvector
-sentence-transformers
-
-# Utilities
+sqlalchemy
+psycopg2-binary
 python-dotenv
-
-# Testing
+spacy
+pm4py
+python-docx
+pypdf
+python-multipart
 pytest
-pytest-asyncio
+httpx
+anthropic
