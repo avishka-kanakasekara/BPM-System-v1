@@ -137,6 +137,7 @@ class Agent4Workflow:
         process_id: UUID,
         payload: dict | None = None,
         task_id: UUID | None = None,
+        tenant_id: UUID | None = None,
         correlation_id: UUID | None = None,
     ) -> WorkflowResult:
         """Send a resource-allocation request through the Agent 3 adapter boundary."""
@@ -146,10 +147,48 @@ class Agent4Workflow:
             message_type=AgentMessageType.RESOURCE_ALLOCATION_REQUEST,
             payload=payload or {},
             task_id=task_id,
+            tenant_id=tenant_id,
             correlation_id=correlation_id,
             success_type=AgentMessageType.RESOURCE_ALLOCATION_RESPONSE,
             unavailable_message="Agent 3 resource planning is unavailable",
         )
+
+    async def run_resource_planning(
+        self,
+        process_id: UUID,
+        payload: dict | None = None,
+        task_id: UUID | None = None,
+        tenant_id: UUID | None = None,
+        correlation_id: UUID | None = None,
+    ) -> WorkflowResult:
+        """DISCOVERING → RESOURCE_PLANNING, call real Agent 3, then → RISK_REVIEW.
+
+        The stage only advances to RISK_REVIEW when Agent 3 returns a real
+        recommendation; a failed allocation leaves the process at
+        RESOURCE_PLANNING with an honest error result.
+        """
+        await self._orchestrator.move_process(
+            process_id,
+            WorkflowStage.RESOURCE_PLANNING,
+            reason="Begin resource planning with Agent 3",
+        )
+        result = await self.plan_resources(
+            process_id,
+            payload=payload,
+            task_id=task_id,
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+        )
+        if not result.success:
+            return result
+
+        await self._orchestrator.move_process(
+            process_id,
+            WorkflowStage.RISK_REVIEW,
+            reason="Resource recommendation received; awaiting risk review",
+        )
+        stage = await self._orchestrator.get_current_stage(process_id)
+        return result.model_copy(update={"current_stage": stage})
 
     async def handle_risk(
         self,
@@ -229,8 +268,16 @@ class Agent4Workflow:
         self,
         process_id: UUID,
         approval: ApprovalRequestRecord,
+        execution_payload: dict | None = None,
+        correlation_id: UUID | None = None,
     ) -> WorkflowResult:
-        """Interpret PENDING / APPROVED / REJECTED. Does not start Agent 2."""
+        """Interpret PENDING / APPROVED / REJECTED.
+
+        Integration decision (explicit, user-approved): APPROVED advances
+        AWAITING_HUMAN_APPROVAL → WORKFLOW_EXECUTION via the StateMachine and
+        dispatches the authorized task to Agent 2 in-process. REJECTED moves
+        the process to EXCEPTION and never reaches Agent 2.
+        """
         stage = await self._orchestrator.get_current_stage(process_id)
         if approval.status is ApprovalStatus.PENDING:
             return WorkflowResult(
@@ -243,13 +290,19 @@ class Agent4Workflow:
                 eligible_for_execution=False,
             )
         if approval.status is ApprovalStatus.APPROVED:
-            return WorkflowResult(
-                process_id=process_id,
-                current_stage=stage,
-                success=True,
-                message="Approval granted; process is eligible for workflow execution",
-                approval=approval,
-                eligible_for_execution=True,
+            await self._orchestrator.move_process(
+                process_id,
+                WorkflowStage.WORKFLOW_EXECUTION,
+                reason="Human approval granted",
+            )
+            result = await self.execute_authorized(
+                process_id,
+                payload=execution_payload,
+                task_id=approval.task_id,
+                correlation_id=correlation_id,
+            )
+            return result.model_copy(
+                update={"approval": approval, "eligible_for_execution": True}
             )
         if approval.status is ApprovalStatus.REJECTED:
             await self._orchestrator.move_process(
@@ -282,7 +335,12 @@ class Agent4Workflow:
         task_id: UUID | None = None,
         correlation_id: UUID | None = None,
     ) -> WorkflowResult:
-        """Request Agent 2 execution. Does not fake success if Agent 2 is unavailable."""
+        """Request Agent 2 execution. Does not fake success if Agent 2 is unavailable.
+
+        The message carries status="AUTHORIZED" — Agent 4 is the only agent
+        allowed to mark work as authorized, and it only calls this after the
+        risk/approval gate.
+        """
         return await self._send_to_agent(
             process_id=process_id,
             receiver=AGENT_2,
@@ -292,6 +350,94 @@ class Agent4Workflow:
             correlation_id=correlation_id,
             success_type=AgentMessageType.WORKFLOW_EXECUTION_RESPONSE,
             unavailable_message="Agent 2 workflow execution is unavailable",
+            message_status="AUTHORIZED",
+        )
+
+    async def execute_authorized(
+        self,
+        process_id: UUID,
+        payload: dict | None = None,
+        task_id: UUID | None = None,
+        correlation_id: UUID | None = None,
+    ) -> WorkflowResult:
+        """Run Agent 2 at WORKFLOW_EXECUTION and advance or record an exception.
+
+        On a successful execution receipt the process moves
+        WORKFLOW_EXECUTION → INVOICE_MATCHING. On a failed/blocked receipt or
+        unreachable Agent 2, a BPM exception is recorded (which halts the
+        process via the StateMachine when allowed).
+        """
+        stage = await self._orchestrator.get_current_stage(process_id)
+        if stage is not WorkflowStage.WORKFLOW_EXECUTION:
+            return WorkflowResult(
+                process_id=process_id,
+                current_stage=stage,
+                success=False,
+                message="Process is not at WORKFLOW_EXECUTION",
+                error_code="INVALID_STAGE",
+                error_message=f"Current stage is {stage.value}",
+            )
+
+        result = await self.execute_workflow(
+            process_id,
+            payload=payload,
+            task_id=task_id,
+            correlation_id=correlation_id,
+        )
+
+        receipt_status = ""
+        if result.agent_response:
+            receipt_status = str(result.agent_response.get("receipt_status") or "")
+
+        if result.success and receipt_status == "SUCCESS":
+            await self._orchestrator.move_process(
+                process_id,
+                WorkflowStage.INVOICE_MATCHING,
+                reason="Agent 2 execution succeeded",
+            )
+            stage = await self._orchestrator.get_current_stage(process_id)
+            return result.model_copy(update={"current_stage": stage})
+
+        failure_detail = (
+            result.error_message
+            or (result.agent_response or {}).get("error_message")
+            or f"Agent 2 execution did not succeed (receipt_status={receipt_status or 'UNKNOWN'})"
+        )
+        if self._exceptions is not None:
+            return await self.capture_failure(
+                process_id,
+                description=str(failure_detail),
+                severity=ExceptionSeverity.HIGH,
+                exception_type=ExceptionType.SYSTEM_ERROR,
+                task_id=task_id,
+            )
+        return result.model_copy(update={"success": False})
+
+    async def complete_invoice_matching(
+        self,
+        process_id: UUID,
+        reference: str = "",
+    ) -> WorkflowResult:
+        """INVOICE_MATCHING → COMPLETED as an explicit, deliberate closure.
+
+        No automated invoice-matching logic exists yet; closing the stage is
+        an explicit API action with an operator-supplied reference, never an
+        implicit auto-complete.
+        """
+        reason = "Invoice matching closed"
+        if reference:
+            reason = f"Invoice matching closed: {reference}"
+        await self._orchestrator.move_process(
+            process_id,
+            WorkflowStage.COMPLETED,
+            reason=reason,
+        )
+        stage = await self._orchestrator.get_current_stage(process_id)
+        return WorkflowResult(
+            process_id=process_id,
+            current_stage=stage,
+            success=True,
+            message="Process completed",
         )
 
     async def _request_discovery(self, process_id: UUID) -> WorkflowResult:
@@ -313,7 +459,9 @@ class Agent4Workflow:
         success_type: AgentMessageType,
         unavailable_message: str,
         task_id: UUID | None = None,
+        tenant_id: UUID | None = None,
         correlation_id: UUID | None = None,
+        message_status: str | None = None,
     ) -> WorkflowResult:
         stage = await self._orchestrator.get_current_stage(process_id)
         message = AgentMessage(
@@ -321,11 +469,13 @@ class Agent4Workflow:
                 correlation_id=correlation_id or uuid4(),
                 process_instance_id=process_id,
                 task_id=task_id,
+                tenant_id=tenant_id,
                 sender=AGENT_4,
                 receiver=receiver,
                 message_type=message_type,
             ),
             payload=payload,
+            status=message_status,
         )
         try:
             response = await self._communication.send(message)
@@ -367,4 +517,5 @@ class Agent4Workflow:
             ),
             error_code=None if succeeded else str(response.metadata.message_type.value),
             error_message=None if succeeded else str(response.payload),
+            agent_response=dict(response.payload),
         )

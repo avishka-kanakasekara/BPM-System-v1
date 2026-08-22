@@ -11,12 +11,15 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SCHEMA_VERSION = "1.0.0"
+# 1.1.0: added optional top-level status / confidence / evidence_refs so the
+# envelope is a strict superset of every agent's wire format. No decision or
+# authorization fields exist on the envelope (Agent 1 invariant).
+SCHEMA_VERSION = "1.1.0"
 
 AGENT_1 = "agent1"
 AGENT_2 = "agent2"
@@ -70,10 +73,21 @@ class AgentMessageMetadata(BaseModel):
 
 
 class AgentMessage(BaseModel):
-    """Generic inter-agent message. payload is agent-specific JSON data."""
+    """Generic inter-agent message. payload is agent-specific JSON data.
+
+    Optional superset fields (schema 1.1.0):
+    - status: agent-specific lifecycle marker (e.g. Agent 4 -> Agent 2
+      "AUTHORIZED", Agent 2 -> Agent 4 "EXECUTION_RESULT"). Only Agent 4 may
+      send "AUTHORIZED"; Agents 1 and 3 never set approval-like statuses.
+    - confidence: sending agent's 0..1 confidence in the payload.
+    - evidence_refs: opaque references (receipt IDs, document IDs, logs).
+    """
 
     metadata: AgentMessageMetadata
     payload: Dict[str, Any] = Field(default_factory=dict)
+    status: Optional[str] = None
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    evidence_refs: List[str] = Field(default_factory=list)
 
 
 AgentMessageStatus = Literal["COMPLETE", "PARTIAL", "NEEDS_CLARIFICATION"]

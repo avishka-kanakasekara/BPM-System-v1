@@ -1,23 +1,24 @@
-"""Supabase Auth JWT validation and trusted principal extraction.
+"""One identity provider: Supabase Auth JWTs.
 
-Supabase Auth is the identity provider. This module provides two compatible
-FastAPI auth surfaces used by different agents:
+Every HTTP surface in the monolith verifies a Supabase access token.
+Two FastAPI dependencies share that provider and differ only in what
+they require after the signature is valid:
 
-Agent 4 (profile / role authorization):
-- Validates access tokens (JWKS preferred, optional HS256 secret)
-- Loads matching public.users profiles into CurrentUser
-- get_current_user / require_roles
-
-Agent 3 (tenant-scoped principal):
-- Verifies tokens against Supabase JWKS (ES256)
-- Extracts VerifiedPrincipal including app_metadata.tenant_id
-- get_verified_principal
+- ``get_current_user`` / ``require_roles`` (Agents 1, 2, 4): JWKS
+  (preferred) or optional HS256 secret, then a ``public.users`` profile
+  and BPM role. Optional ``tenant_id`` is copied from verified
+  ``app_metadata`` only.
+- ``get_verified_principal`` (Agent 3): same issuer, ES256 + audience,
+  and fail-closed if ``app_metadata.tenant_id`` is missing. Ranking and
+  eligibility stay tenant-scoped.
 
 Security rules:
 - Never decode a JWT without verifying it
 - Never trust user_metadata for authorization
+- Never take tenant_id from the request body when a JWT tenant is present
 - Never expose access tokens, API keys, DB URLs, passwords, or JWT payloads
 - Never use Supabase service-role keys in the frontend
+- No production path uses a hardcoded unauthenticated approver id
 """
 
 from __future__ import annotations
@@ -234,8 +235,17 @@ async def verify_supabase_access_token(token: str) -> dict:
     return claims
 
 
-async def load_user_profile(db: AsyncSession, user_id: UUID) -> CurrentUser:
-    """Load public.users by id. Does not create profiles."""
+async def load_user_profile(
+    db: AsyncSession,
+    user_id: UUID,
+    *,
+    tenant_id: Optional[UUID] = None,
+) -> CurrentUser:
+    """Load public.users by id. Does not create profiles.
+
+    tenant_id is the value already extracted from verified JWT
+    app_metadata (or None). It is never read from the users table.
+    """
     try:
         row = await db.get(User, user_id)
     except Exception as exc:
@@ -257,14 +267,41 @@ async def load_user_profile(db: AsyncSession, user_id: UUID) -> CurrentUser:
         full_name=row.full_name,
         role=role,
         department=row.department,
+        tenant_id=tenant_id,
     )
+
+
+def tenant_id_from_app_metadata(claims: dict) -> Optional[UUID]:
+    """Extract tenant_id from verified JWT app_metadata only.
+
+    Never reads user_metadata or the request body. Returns None when the
+    claim is missing or not a UUID — Agent 4's profile path stays usable
+    without a tenant; Agent 3's get_verified_principal still fails closed.
+    """
+    app_metadata = claims.get("app_metadata")
+    if not isinstance(app_metadata, dict):
+        return None
+    raw = app_metadata.get("tenant_id")
+    if raw is None:
+        return None
+    try:
+        return UUID(str(raw))
+    except (TypeError, ValueError):
+        return None
 
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> CurrentUser:
-    """Authenticate via Bearer token and return the public.users profile."""
+    """Authenticate via the shared Supabase JWT path and return the profile.
+
+    One identity provider for every HTTP surface: the same
+    ``verify_supabase_access_token`` used here is the JWT verification
+    step. Agent 3 additionally requires a tenant via
+    ``get_verified_principal`` (same issuer, fail-closed on missing
+    app_metadata.tenant_id).
+    """
     if credentials is None or credentials.scheme.lower() != "bearer" or not credentials.credentials:
         raise _unauthorized()
 
@@ -274,7 +311,8 @@ async def get_current_user(
         raise _unauthorized() from None
 
     user_id = UUID(str(claims["sub"]))
-    return await load_user_profile(db, user_id)
+    tenant_id = tenant_id_from_app_metadata(claims)
+    return await load_user_profile(db, user_id, tenant_id=tenant_id)
 
 
 def require_roles(*roles: str) -> Callable:

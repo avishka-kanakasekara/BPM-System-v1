@@ -167,8 +167,23 @@ class TestRiskAndApproval:
 
 class TestExecutionAndInvalid:
     async def test_agent2_unavailable_is_handled_cleanly(
-        self, workflow, orchestrator
+        self, orchestrator, approval_repo
     ) -> None:
+        """A broken Agent 2 pipeline yields an honest AGENT_UNAVAILABLE result."""
+        from app.agents.agent4_orchestrator.adapters import Agent2Adapter
+        from app.schemas.agent_message import AGENT_2
+
+        class BrokenAgent2:
+            async def handle(self, message, session=None):
+                raise RuntimeError("execution pipeline down")
+
+        workflow = Agent4Workflow(
+            orchestrator=orchestrator,
+            approval_service=ApprovalService(orchestrator, approval_repo),
+            communication=AgentCommunicationService(
+                adapters={AGENT_2: Agent2Adapter(agent=BrokenAgent2())}
+            ),
+        )
         process_id = uuid4()
         await orchestrator.create_process(
             process_id, initial_stage=WorkflowStage.WORKFLOW_EXECUTION
@@ -204,3 +219,66 @@ class TestExecutionAndInvalid:
         source = inspect.getsource(workflow_mod)
         assert "ALLOWED_TRANSITIONS" not in source
         assert "HIGH_VALUE_PURCHASE_THRESHOLD" not in source
+
+    async def test_approved_outcome_dispatches_agent2(
+        self, orchestrator, approval_repo
+    ) -> None:
+        from app.agents.agent4_orchestrator.communication import AgentAdapter
+        from app.schemas.agent_message import (
+            AGENT_2,
+            AGENT_4,
+            AgentMessage,
+            AgentMessageMetadata,
+            AgentMessageType,
+        )
+
+        captured: list[AgentMessage] = []
+
+        class AuthorizedAgent2(AgentAdapter):
+            async def send(self, message: AgentMessage) -> AgentMessage:
+                captured.append(message)
+                return AgentMessage(
+                    metadata=AgentMessageMetadata(
+                        correlation_id=message.metadata.correlation_id,
+                        process_instance_id=message.metadata.process_instance_id,
+                        task_id=message.metadata.task_id,
+                        sender=AGENT_2,
+                        receiver=AGENT_4,
+                        message_type=AgentMessageType.WORKFLOW_EXECUTION_RESPONSE,
+                    ),
+                    payload={"receipt_status": "SUCCESS"},
+                )
+
+        workflow = Agent4Workflow(
+            orchestrator=orchestrator,
+            approval_service=ApprovalService(orchestrator, approval_repo),
+            communication=AgentCommunicationService(adapters={AGENT_2: AuthorizedAgent2()}),
+        )
+        process_id = uuid4()
+        await orchestrator.create_process(
+            process_id, initial_stage=WorkflowStage.RISK_REVIEW
+        )
+        gate = await workflow.handle_risk(
+            process_id,
+            RiskEvaluationContext(purchase_amount=Decimal("25000")),
+        )
+        approvals = ApprovalService(orchestrator, approval_repo)
+        decided = await approvals.approve_request(
+            gate.approval.id, approver_id=uuid4()
+        )
+        result = await workflow.apply_approval_outcome(process_id, decided.approval)
+        assert captured and captured[0].status == "AUTHORIZED"
+        assert result.current_stage is WorkflowStage.INVOICE_MATCHING
+        assert result.eligible_for_execution is True
+
+    async def test_complete_invoice_matching_is_explicit(
+        self, workflow, orchestrator
+    ) -> None:
+        process_id = uuid4()
+        await orchestrator.create_process(
+            process_id, initial_stage=WorkflowStage.INVOICE_MATCHING
+        )
+        result = await workflow.complete_invoice_matching(process_id, reference="INV-9")
+        assert result.success is True
+        assert result.current_stage is WorkflowStage.COMPLETED
+        assert await orchestrator.get_current_stage(process_id) is WorkflowStage.COMPLETED

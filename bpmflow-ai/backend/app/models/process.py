@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, synonym
 from sqlalchemy.types import JSON, Uuid
 
 from app.core.database import Base
@@ -39,8 +39,18 @@ class Process(Base):
     trace_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     message_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     current_stage: Mapped[str] = mapped_column(Text, nullable=False, default="DRAFT")
+    # Agent 2 execution columns (migration 0005). execution_status is Agent 2's
+    # operational status; it never replaces current_stage (Agent 4 owned).
+    priority: Mapped[str | None] = mapped_column(Text, nullable=True)
+    department: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requester_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    execution_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JsonDict, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+
+    # Agent 2 compatibility aliases (its former process_instances columns).
+    title = synonym("name")
 
 
 class ProcessTask(Base):
@@ -61,8 +71,21 @@ class ProcessTask(Base):
     avg_duration: Mapped[float | None] = mapped_column(Float, nullable=True)
     due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Agent 2 execution columns (migration 0005). assigned_to_email holds
+    # Agent 2's email-based assignment; assigned_to stays a user UUID.
+    task_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assigned_role: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assigned_to_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sla_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    result_json: Mapped[dict | None] = mapped_column(JsonDict, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sequence_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+
+    # Agent 2 compatibility aliases (its former private tasks columns).
+    process_instance_id = synonym("process_id")
+    due_at = synonym("due_date")
 
 
 class ProcessExceptionRow(Base):

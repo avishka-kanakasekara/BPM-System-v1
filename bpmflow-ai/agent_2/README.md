@@ -1,29 +1,11 @@
-# Agent 2 — Intelligent Workflow Execution, RPA & Process Optimization
+# Agent 2 (standalone copy) — superseded
 
-Part of the **BPMFlow AI** four-agent platform. Agent 2 is a bounded-autonomy LLM agent that receives authorized tasks from Agent 4, plans execution with Google Gemini, executes through approved tools, and produces evidence-based optimization recommendations.
+Agent 2 now lives in the FastAPI monolith at
+`bpmflow-ai/backend/app/agents/agent2_execution`.
 
-See [CLAUDE.md](CLAUDE.md) for the full architecture, non-negotiable rules, and folder structure.
+Do not start this directory as its own server. The `mock_agent4/` stand-in
+has been removed; Agent 4 is the real in-process orchestrator.
 
-## Quick Start
-
-```bash
-# 1. Create virtual environment
-python -m venv venv && source venv/bin/activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Configure environment
-cp .env.example .env
-# Edit .env — set DATABASE_URL, GEMINI_API_KEY, etc.
-
-# 4. Run database migrations
-alembic upgrade head
-
-# 5. Start the server
-uvicorn app.main:app --reload --port 8002
-```
-
-## Tech Stack
-
-Python 3.12+ · FastAPI · SQLAlchemy 2.0 (async) · Alembic · PostgreSQL (Supabase / pgvector) · Redis · google-genai (Gemini) · Jinja2 · pandas · pm4py · pytest
+Configure the unified `bpmflow-ai/backend/.env` (see `.env.example` there).
+The Alembic history and `demo.py` in this folder are kept only as a
+pre-integration reference.

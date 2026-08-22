@@ -155,15 +155,41 @@ class TestUnavailableAndUnsupported:
         assert exc_info.value.agent_id == AGENT_1
 
     async def test_agent2_unavailable_is_handled_cleanly(self) -> None:
-        service = AgentCommunicationService()
+        """A broken Agent 2 pipeline surfaces as AgentUnavailableError, never fake success."""
+
+        class BrokenAgent2:
+            async def handle(self, message, session=None):
+                raise RuntimeError("execution pipeline down")
+
+        service = AgentCommunicationService(
+            adapters={AGENT_2: Agent2Adapter(agent=BrokenAgent2())}
+        )
+        request = _request(
+            receiver=AGENT_2,
+            message_type=AgentMessageType.WORKFLOW_EXECUTION_REQUEST,
+        ).model_copy(update={"status": "AUTHORIZED"})
         with pytest.raises(AgentUnavailableError) as exc_info:
-            await service.send(
-                _request(
-                    receiver=AGENT_2,
-                    message_type=AgentMessageType.WORKFLOW_EXECUTION_REQUEST,
-                )
-            )
+            await service.send(request)
         assert exc_info.value.agent_id == AGENT_2
+
+    async def test_agent2_never_receives_non_authorized_work(self) -> None:
+        """Agent 2 invariant: only status=AUTHORIZED messages reach execution."""
+
+        class MustNotRunAgent2:
+            async def handle(self, message, session=None):
+                raise AssertionError("Agent 2 must not execute non-authorized work")
+
+        service = AgentCommunicationService(
+            adapters={AGENT_2: Agent2Adapter(agent=MustNotRunAgent2())}
+        )
+        response = await service.send(
+            _request(
+                receiver=AGENT_2,
+                message_type=AgentMessageType.WORKFLOW_EXECUTION_REQUEST,
+            )
+        )
+        assert response.metadata.message_type is AgentMessageType.ERROR
+        assert response.payload["error"] == "NOT_AUTHORIZED"
 
     async def test_adapter_communication_failure_is_handled(self) -> None:
         service = AgentCommunicationService(adapters={AGENT_3: FailingAdapter()})
@@ -173,16 +199,21 @@ class TestUnavailableAndUnsupported:
 
 class TestNoBusinessLogicDuplication:
     def test_agent4_does_not_duplicate_agent3_allocation_logic(self) -> None:
+        """Agent 4 delegates to Agent 3's real service; it never re-implements
+        eligibility, ranking, or scoring itself."""
         import app.agents.agent4_orchestrator.adapters as adapters_mod
         import app.agents.agent4_orchestrator.communication_service as comm_mod
 
         adapter_src = inspect.getsource(adapters_mod)
         comm_src = inspect.getsource(comm_mod)
-        assert "from app.agents.agent3_resources" not in adapter_src
+        # The communication router stays agnostic of any agent's internals.
         assert "from app.agents.agent3_resources" not in comm_src
+        # Allocation business logic must not be duplicated inside Agent 4.
         assert "EligibilityEvaluator" not in adapter_src
         assert "HumanResourceRanker" not in adapter_src
         assert "SCORING_WEIGHTS" not in adapter_src
+        # The adapter delegates to Agent 3's real application service instead.
+        assert "PersistentResourceAllocationService" in adapter_src
         assert "handler" in adapter_src
         assert Agent1Adapter is not None
         assert Agent2Adapter is not None

@@ -102,4 +102,7 @@ class AgentCommunicationService:
                 timestamp=utc_now(),
             ),
             payload=response.payload,
+            status=response.status,
+            confidence=response.confidence,
+            evidence_refs=response.evidence_refs,
         )

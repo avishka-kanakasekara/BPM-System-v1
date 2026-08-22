@@ -28,16 +28,26 @@ class ApprovalResponse(BaseModel):
 
 
 class ApprovalDecisionRequest(BaseModel):
-    """Human decision payload for approve/reject endpoints."""
+    """Human decision payload for approve/reject endpoints.
+
+    execution optionally carries the task payload Agent 4 dispatches to
+    Agent 2 when the decision is APPROVED (task_type, parameters, ...).
+    """
 
     comments: Optional[str] = None
+    execution: Optional[dict] = None
 
 
 class ApprovalDecisionResponse(BaseModel):
-    """Outcome of approve/reject. Does not include workflow execution."""
+    """Outcome of approve/reject, including the workflow continuation.
+
+    APPROVED advances to WORKFLOW_EXECUTION and dispatches Agent 2;
+    REJECTED moves the process to EXCEPTION. workflow reports that step.
+    """
 
     approval: ApprovalResponse
     decision: ApprovalStatus
+    workflow: Optional[dict] = None
 
 
 def approval_from_record(record: ApprovalRequestRecord) -> ApprovalResponse:

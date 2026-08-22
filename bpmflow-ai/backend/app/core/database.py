@@ -36,13 +36,7 @@ logger = get_logger(__name__)
 _MIGRATION_FILE = (
     Path(__file__).resolve().parents[3] / "supabase" / "migrations" / "0002_agent1_discovery.sql"
 )
-from sqlalchemy.orm import declarative_base
-from sqlalchemy.pool import NullPool
-
 # Global engine and session factory (initialized lazily)
-_engine: Optional[AsyncEngine] = None
-_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
-
 _engine: Optional[AsyncEngine] = None
 _session_factory: Optional[async_sessionmaker[AsyncSession]] = None
 
@@ -179,7 +173,7 @@ def get_sync_db() -> Generator[Session | None, None, None]:
 
 
 def get_database_url() -> str:
-    """Return DATABASE_URL in postgresql+asyncpg:// form.
+    """Return DATABASE_URL in async form (asyncpg for Postgres, aiosqlite for SQLite).
 
     Reads os.environ first so Agent 3 tests can swap the URL without clearing
     the Settings lru_cache. Falls back to settings.DATABASE_URL.
@@ -187,25 +181,37 @@ def get_database_url() -> str:
     database_url = os.getenv("DATABASE_URL") or settings.DATABASE_URL
     if not database_url:
         raise ValueError("DATABASE_URL environment variable is not configured")
+    if _is_sqlite(database_url) and "+aiosqlite" not in database_url:
+        return database_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
     return _to_asyncpg_url(database_url)
 
 
 def get_engine() -> AsyncEngine:
-    """Lazy shared async engine (Agent 3/4). Raises if DATABASE_URL is missing."""
+    """Lazy shared async engine (Agents 2/3/4). Raises if DATABASE_URL is missing."""
     global _engine, _session_factory
 
     if _engine is None:
         database_url = get_database_url()
-        connect_args: dict = {
-            "statement_cache_size": 0,
-            "prepared_statement_cache_size": 0,
-        }
-        _engine = create_async_engine(
-            database_url,
-            echo=False,
-            poolclass=NullPool,
-            connect_args=connect_args,
-        )
+        if _is_sqlite(database_url):
+            # Models declared with schema="public" map onto the plain SQLite
+            # namespace for local development and tests.
+            _engine = create_async_engine(
+                database_url,
+                echo=False,
+                connect_args={"timeout": 30},
+                execution_options={"schema_translate_map": {"public": None}},
+            )
+        else:
+            connect_args = {
+                "statement_cache_size": 0,
+                "prepared_statement_cache_size": 0,
+            }
+            _engine = create_async_engine(
+                database_url,
+                echo=False,
+                poolclass=NullPool,
+                connect_args=connect_args,
+            )
         _session_factory = async_sessionmaker(
             _engine,
             class_=AsyncSession,
@@ -264,23 +270,6 @@ async def get_session():
 # ============================================================================
 # FastAPI Dependency
 # ============================================================================
-
-
-async def get_db():
-    """FastAPI dependency to get a database session.
-
-    This dependency provides a database session with proper lifecycle
-    management. The session is automatically closed after the request.
-
-    Yields:
-        AsyncSession: The database session
-    """
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

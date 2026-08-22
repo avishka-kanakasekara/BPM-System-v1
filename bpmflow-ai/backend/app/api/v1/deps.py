@@ -3,8 +3,6 @@
 Uses the existing get_db() session factory. Tests override these callables.
 """
 
-from uuid import UUID
-
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,11 +30,7 @@ from app.core.database import get_db
 from app.core.security import get_current_user, require_roles
 from app.schemas.auth import CurrentUser
 
-# Legacy test-only constant. Do not use in production API paths.
-UNAUTHENTICATED_APPROVER_ID = UUID("00000000-0000-4000-8000-000000000001")
-
-
-def resolve_approver_id(current_user: CurrentUser) -> UUID:
+def resolve_approver_id(current_user: CurrentUser):
     """Return the authenticated approver id from CurrentUser."""
     return current_user.id
 
@@ -98,7 +92,6 @@ async def get_agent4_workflow(
 
 
 __all__ = [
-    "UNAUTHENTICATED_APPROVER_ID",
     "resolve_approver_id",
     "get_current_user",
     "require_roles",

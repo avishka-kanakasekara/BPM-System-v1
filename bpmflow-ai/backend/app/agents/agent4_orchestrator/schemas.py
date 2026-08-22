@@ -136,3 +136,6 @@ class WorkflowResult(BaseModel):
     approval: Optional[ApprovalRequestRecord] = None
     risk_assessment: Optional[RiskAssessment] = None
     bpm_exception: Optional[ExceptionRecord] = None
+    # Payload returned by the downstream agent for this step (e.g. Agent 3
+    # recommendation or Agent 2 execution receipt summary).
+    agent_response: Optional[dict] = None

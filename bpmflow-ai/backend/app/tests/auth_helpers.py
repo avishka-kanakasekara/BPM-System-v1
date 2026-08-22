@@ -12,6 +12,7 @@ def override_current_user(
     role: str = "requester",
     user_id: UUID | None = None,
     email: str | None = None,
+    tenant_id: UUID | None = None,
 ) -> UUID:
     """Override get_current_user with a fixed CurrentUser for API tests."""
     uid = user_id or uuid4()
@@ -21,6 +22,7 @@ def override_current_user(
         full_name=f"{role.title()} User",
         role=role,
         department="Ops",
+        tenant_id=tenant_id,
     )
 
     async def _override() -> CurrentUser:

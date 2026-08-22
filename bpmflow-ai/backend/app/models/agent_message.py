@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON, Uuid
@@ -32,3 +32,8 @@ class AgentMessageRecord(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, default="sent")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Agent 2 envelope columns (migration 0005). Optional; older writers may omit.
+    message_uid: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    trace_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_refs: Mapped[dict | None] = mapped_column(JsonDict, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

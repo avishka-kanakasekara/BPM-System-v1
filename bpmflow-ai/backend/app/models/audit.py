@@ -8,8 +8,8 @@ Two tables, two classes:
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, DateTime, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON, Uuid
 
@@ -41,16 +41,27 @@ class IngestionAuditLog(CoreBase):
 
 
 class AuditLog(Base):
-    """Immutable BPM event log for entity changes."""
+    """Immutable BPM event log for entity changes and Agent 2 guard decisions.
+
+    Agent 3/4 rows fill entity_type/entity_id/old_values/new_values.
+    Agent 2 tool-guard rows fill actor/agent/allowed/reason/payload
+    (migration 0005); entity_id is nullable for those rows.
+    """
 
     __tablename__ = "audit_logs"
     __table_args__ = {"schema": "public"}
 
-    id = Column(UUID(as_uuid=True), primary_key=True)
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     entity_type = Column(Text, nullable=False)
-    entity_id = Column(UUID(as_uuid=True), nullable=False)
+    entity_id = Column(Uuid(as_uuid=True), nullable=True)
     action = Column(Text, nullable=False)
-    performed_by = Column(UUID(as_uuid=True), ForeignKey("public.users.id"))
-    old_values = Column(JSONB)
-    new_values = Column(JSONB)
-    timestamp = Column(DateTime(timezone=True), nullable=False)
+    performed_by = Column(Uuid(as_uuid=True), ForeignKey("public.users.id"))
+    old_values = Column(JsonDict)
+    new_values = Column(JsonDict)
+    timestamp = Column(DateTime(timezone=True), nullable=False, default=_utc_now)
+    # Agent 2 tool-guard decision columns (migration 0005).
+    actor = Column(Text, nullable=True)
+    agent = Column(Text, nullable=True)
+    allowed = Column(Boolean, nullable=True)
+    reason = Column(Text, nullable=True)
+    payload = Column(JsonDict, nullable=True)

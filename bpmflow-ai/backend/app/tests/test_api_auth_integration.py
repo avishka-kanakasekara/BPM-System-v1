@@ -38,6 +38,38 @@ FORBIDDEN_DETAIL = "Insufficient permissions"
 ALREADY_DECIDED_DETAIL = "Approval request has already been decided"
 
 
+def _agent2_success_reply(message):
+    """Well-formed Agent 2 execution response for the approve continuation."""
+    from app.schemas.agent_message import (
+        AGENT_2,
+        AGENT_4,
+        AgentMessage,
+        AgentMessageMetadata,
+        AgentMessageType,
+    )
+
+    return AgentMessage(
+        metadata=AgentMessageMetadata(
+            correlation_id=message.metadata.correlation_id,
+            process_instance_id=message.metadata.process_instance_id,
+            task_id=message.metadata.task_id,
+            sender=AGENT_2,
+            receiver=AGENT_4,
+            message_type=AgentMessageType.WORKFLOW_EXECUTION_RESPONSE,
+        ),
+        payload={"receipt_status": "SUCCESS"},
+        status="EXECUTION_RESULT",
+    )
+
+
+def _patch_agent2_send():
+    return patch(
+        "app.agents.agent4_orchestrator.communication_service.AgentCommunicationService.send",
+        new_callable=AsyncMock,
+        side_effect=_agent2_success_reply,
+    )
+
+
 @pytest.fixture
 def api_setup():
     process_repo = InMemoryProcessRepository()
@@ -255,10 +287,7 @@ async def test_approver_approve_success(api_setup) -> None:
     setup = api_setup
     approver_id = override_current_user(role="approver")
     created = await _create_pending_approval(setup)
-    with patch(
-        "app.agents.agent4_orchestrator.communication_service.AgentCommunicationService.send",
-        new_callable=AsyncMock,
-    ):
+    with _patch_agent2_send():
         response = setup["client"].post(
             f"/api/v1/approvals/{created['approval'].id}/approve",
             json={"comments": "Approved"},
@@ -273,10 +302,7 @@ async def test_admin_approve_success(api_setup) -> None:
     setup = api_setup
     admin_id = override_current_user(role="admin")
     created = await _create_pending_approval(setup)
-    with patch(
-        "app.agents.agent4_orchestrator.communication_service.AgentCommunicationService.send",
-        new_callable=AsyncMock,
-    ):
+    with _patch_agent2_send():
         response = setup["client"].post(
             f"/api/v1/approvals/{created['approval'].id}/approve",
             json={"comments": "Admin approved"},
@@ -290,10 +316,7 @@ async def test_approver_id_equals_current_user_on_approve(api_setup) -> None:
     setup = api_setup
     approver_id = override_current_user(role="approver")
     created = await _create_pending_approval(setup)
-    with patch(
-        "app.agents.agent4_orchestrator.communication_service.AgentCommunicationService.send",
-        new_callable=AsyncMock,
-    ):
+    with _patch_agent2_send():
         response = setup["client"].post(
             f"/api/v1/approvals/{created['approval'].id}/approve",
             json={"comments": "OK"},
@@ -308,10 +331,7 @@ async def test_client_cannot_override_approver_id_on_approve(api_setup) -> None:
     approver_id = override_current_user(role="approver")
     created = await _create_pending_approval(setup)
     spoofed = uuid4()
-    with patch(
-        "app.agents.agent4_orchestrator.communication_service.AgentCommunicationService.send",
-        new_callable=AsyncMock,
-    ):
+    with _patch_agent2_send():
         response = setup["client"].post(
             f"/api/v1/approvals/{created['approval'].id}/approve",
             json={"comments": "OK", "approver_id": str(spoofed)},
@@ -348,10 +368,7 @@ async def test_approver_reject_success(api_setup) -> None:
     setup = api_setup
     override_current_user(role="approver")
     created = await _create_pending_approval(setup)
-    with patch(
-        "app.agents.agent4_orchestrator.communication_service.AgentCommunicationService.send",
-        new_callable=AsyncMock,
-    ):
+    with _patch_agent2_send():
         response = setup["client"].post(
             f"/api/v1/approvals/{created['approval'].id}/reject",
             json={"comments": "Rejected"},
@@ -365,10 +382,7 @@ async def test_admin_reject_success(api_setup) -> None:
     setup = api_setup
     override_current_user(role="admin")
     created = await _create_pending_approval(setup)
-    with patch(
-        "app.agents.agent4_orchestrator.communication_service.AgentCommunicationService.send",
-        new_callable=AsyncMock,
-    ):
+    with _patch_agent2_send():
         response = setup["client"].post(
             f"/api/v1/approvals/{created['approval'].id}/reject",
             json={"comments": "Admin rejected"},

@@ -17,6 +17,7 @@ from app.core.security import (
     NOT_AUTHENTICATED_DETAIL,
     PROFILE_NOT_FOUND_DETAIL,
     require_roles,
+    tenant_id_from_app_metadata,
     verify_supabase_access_token,
 )
 from app.main import app
@@ -252,6 +253,42 @@ def test_no_secret_values_in_api_responses(client) -> None:
     assert TEST_SECRET not in body
     assert "your_supabase" not in body.lower()
     assert "service_role" not in body.lower()
+
+
+def test_auth_me_tenant_comes_from_app_metadata_only(client) -> None:
+    user_id = uuid4()
+    jwt_tenant = uuid4()
+    spoofed = uuid4()
+    token = _encode(
+        sub=str(user_id),
+        extra={
+            "app_metadata": {"tenant_id": str(jwt_tenant)},
+            "user_metadata": {"tenant_id": str(spoofed)},
+        },
+    )
+    _override_db(_user_row(user_id=user_id, role="requester"))
+
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["tenant_id"] == str(jwt_tenant)
+    assert body["tenant_id"] != str(spoofed)
+
+
+def test_tenant_id_from_app_metadata_ignores_user_metadata() -> None:
+    app_tenant = uuid4()
+    user_tenant = uuid4()
+    claims = {
+        "app_metadata": {"tenant_id": str(app_tenant)},
+        "user_metadata": {"tenant_id": str(user_tenant)},
+    }
+    assert tenant_id_from_app_metadata(claims) == app_tenant
+    assert tenant_id_from_app_metadata({"user_metadata": {"tenant_id": str(user_tenant)}}) is None
+    assert tenant_id_from_app_metadata({"app_metadata": {"tenant_id": "not-a-uuid"}}) is None
 
 
 def test_resolve_approver_id_uses_current_user() -> None:

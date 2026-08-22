@@ -12,7 +12,12 @@ from app.agents.agent4_orchestrator.exceptions import (
     ApprovalNotFoundError,
     DatabasePersistenceError,
 )
-from app.api.v1.deps import get_approval_repository, get_approval_service
+from app.agents.agent4_orchestrator.workflow import Agent4Workflow
+from app.api.v1.deps import (
+    get_agent4_workflow,
+    get_approval_repository,
+    get_approval_service,
+)
 from app.core.security import get_current_user, require_roles
 from app.schemas.approval import (
     ApprovalDecisionRequest,
@@ -82,14 +87,25 @@ async def approve_approval(
     approval_id: UUID,
     payload: ApprovalDecisionRequest,
     service: ApprovalService = Depends(get_approval_service),
+    workflow: Agent4Workflow = Depends(get_agent4_workflow),
     current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ApprovalDecisionResponse:
-    """Record APPROVED. Does not execute Agent 2 or complete the process."""
+    """Record APPROVED, then continue the workflow.
+
+    Integration decision (explicit, user-approved): approval advances
+    AWAITING_HUMAN_APPROVAL → WORKFLOW_EXECUTION via the StateMachine and
+    dispatches the authorized task to Agent 2 in-process.
+    """
     try:
         result = await service.approve_request(
             approval_id,
             approver_id=current_user.id,
             comments=payload.comments,
+        )
+        workflow_result = await workflow.apply_approval_outcome(
+            result.approval.process_id,
+            result.approval,
+            execution_payload=payload.execution,
         )
     except ApprovalNotFoundError as exc:
         raise _not_found() from exc
@@ -104,7 +120,9 @@ async def approve_approval(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=INTERNAL_DETAIL,
         ) from exc
-    return decision_from_result(result)
+    response = decision_from_result(result)
+    response.workflow = workflow_result.model_dump(mode="json")
+    return response
 
 
 @router.post("/{approval_id}/reject", response_model=ApprovalDecisionResponse)
@@ -112,14 +130,22 @@ async def reject_approval(
     approval_id: UUID,
     payload: ApprovalDecisionRequest,
     service: ApprovalService = Depends(get_approval_service),
+    workflow: Agent4Workflow = Depends(get_agent4_workflow),
     current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ApprovalDecisionResponse:
-    """Record REJECTED. Does not auto-create exceptions or complete the process."""
+    """Record REJECTED and move the process to EXCEPTION.
+
+    Agent 2 is never invoked on rejection.
+    """
     try:
         result = await service.reject_request(
             approval_id,
             approver_id=current_user.id,
             comments=payload.comments,
+        )
+        workflow_result = await workflow.apply_approval_outcome(
+            result.approval.process_id,
+            result.approval,
         )
     except ApprovalNotFoundError as exc:
         raise _not_found() from exc
@@ -134,4 +160,6 @@ async def reject_approval(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=INTERNAL_DETAIL,
         ) from exc
-    return decision_from_result(result)
+    response = decision_from_result(result)
+    response.workflow = workflow_result.model_dump(mode="json")
+    return response
