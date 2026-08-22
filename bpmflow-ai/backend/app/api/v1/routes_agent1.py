@@ -14,8 +14,8 @@ from app.agents.agent1_discovery.persistence import (
 )
 from app.agents.agent1_discovery.service import run_discovery
 from app.core.config import settings
-from app.core.database import get_db
-from app.schemas.agent_message import AgentMessage
+from app.core.database import get_sync_db
+from app.schemas.agent_message import DiscoveryAgentMessage
 
 router = APIRouter()
 
@@ -70,18 +70,18 @@ class ProcessDetail(BaseModel):
 
 @router.post(
     "/discover",
-    response_model=AgentMessage,
+    response_model=DiscoveryAgentMessage,
     summary="Discover a process from documents",
     description=(
         "Accepts multipart file uploads (PDF, DOCX, CSV — allow-list from "
-        "`ALLOWED_FILE_TYPES`). Returns an informational AgentMessage only; "
+        "`ALLOWED_FILE_TYPES`). Returns an informational discovery message only; "
         "Agent 1 does not approve or decide. The discovered workflow is stored in Supabase."
     ),
 )
 def discover(
     files: UploadFiles,
-    db: Session | None = Depends(get_db),
-) -> AgentMessage:
+    db: Session | None = Depends(get_sync_db),
+) -> DiscoveryAgentMessage:
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required")
     allowed = settings.allowed_file_types_list
@@ -100,7 +100,7 @@ def discover(
 
 
 @router.get("/processes", response_model=list[ProcessSummary])
-def list_processes(db: Session | None = Depends(get_db), limit: int = 20) -> list[ProcessSummary]:
+def list_processes(db: Session | None = Depends(get_sync_db), limit: int = 20) -> list[ProcessSummary]:
     rows = list_recent_processes(db, limit=min(limit, 50))
     summaries: list[ProcessSummary] = []
     for row in rows:
@@ -121,7 +121,7 @@ def list_processes(db: Session | None = Depends(get_db), limit: int = 20) -> lis
 
 
 @router.get("/processes/{process_id}", response_model=ProcessDetail)
-def read_process(process_id: UUID, db: Session | None = Depends(get_db)) -> ProcessDetail:
+def read_process(process_id: UUID, db: Session | None = Depends(get_sync_db)) -> ProcessDetail:
     row = get_process(db, process_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Process not found")

@@ -1,18 +1,45 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.database import close_db, init_db
 from app.core.logging import configure_logging, get_logger
 
 configure_logging()
 logger = get_logger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: lazy async engine. Shutdown: dispose engine and Agent 3 LLM if present."""
+    try:
+        await init_db()
+    except Exception:
+        logger.warning("async_db_init_skipped", exc_info=True)
+    yield
+    try:
+        await close_db()
+    except Exception:
+        logger.warning("async_db_close_skipped", exc_info=True)
+    try:
+        from app.agents.agent3_resources.runtime_config import close_agent3_llm_runtime
+
+        await close_agent3_llm_runtime()
+    except ImportError:
+        pass
+    except Exception:
+        logger.exception("agent3_llm_shutdown_failed")
+
+
 app = FastAPI(
     title="BPMFlow AI",
     description="Four-agent, human-supervised agentic AI platform for Business Process Management",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -39,11 +66,11 @@ async def health_check():
     logger.info("health_check")
     database = "unknown"
     try:
-        from app.core.database import get_engine
+        from app.core.database import get_sync_engine
         from app.core.supabase_rest import ping_rest
         from sqlalchemy import text
 
-        engine = get_engine()
+        engine = get_sync_engine()
         if engine is not None:
             with engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
@@ -60,10 +87,10 @@ async def health_check():
         "env": settings.ENV,
         "agent": "agent1_discovery",
         "database": database,
+        "supabase": "configured" if settings.SUPABASE_URL else "not configured",
     }
 
 
-# Agent 1 discovery. Process, auth, and other-agent routers are not mounted.
 app.include_router(api_router, prefix="/api/v1")
 
 

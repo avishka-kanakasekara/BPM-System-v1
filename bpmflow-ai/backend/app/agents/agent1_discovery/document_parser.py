@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.agents.agent1_discovery.schemas import ExtractedDocument, PageText, UploadResult
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.models.audit import AuditLog
+from app.models.audit import IngestionAuditLog
 
 logger = get_logger(__name__)
 
@@ -145,7 +145,7 @@ def _persist_and_log(
                 logger.exception("ingestion_audit_rest_failed")
         return
     db.add(
-        AuditLog(
+        IngestionAuditLog(
             event_type=INGESTION_EVENT_TYPE,
             actor=actor,
             file_id=file_id,

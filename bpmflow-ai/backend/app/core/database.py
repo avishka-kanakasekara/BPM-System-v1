@@ -1,8 +1,30 @@
-from collections.abc import Generator
+"""Shared database access for Agent 1 (sync) and Agents 3/4 (async).
+
+Sync path (Agent 1 discovery):
+    get_sync_engine, get_sync_session_factory, get_sync_db
+    Falls back to None when Postgres is unreachable so REST persistence can run.
+
+Async path (Agent 3, Agent 4, security deps — developer-branch names):
+    get_engine, get_session_factory, get_db, get_session, init_db, close_db
+    Lazy asyncpg engine; no connection at import time.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -15,8 +37,13 @@ _MIGRATION_FILE = (
     Path(__file__).resolve().parents[3] / "supabase" / "migrations" / "0002_agent1_discovery.sql"
 )
 
+_engine: Optional[AsyncEngine] = None
+_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+
 
 class Base(DeclarativeBase):
+    """ORM metadata base used by Agent 1 models."""
+
     pass
 
 
@@ -24,7 +51,22 @@ def _is_sqlite(url: str) -> bool:
     return url.startswith("sqlite")
 
 
-def _create_engine(url: str) -> Engine:
+def _to_asyncpg_url(database_url: str) -> str:
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return database_url
+
+
+# ---------------------------------------------------------------------------
+# Agent 1 — sync SQLAlchemy
+# ---------------------------------------------------------------------------
+
+
+def _create_sync_engine(url: str) -> Engine:
     connect_args: dict = {}
     kwargs: dict = {"pool_pre_ping": True}
     if _is_sqlite(url):
@@ -84,10 +126,10 @@ def apply_agent1_schema(engine: Engine) -> None:
 
 
 @lru_cache
-def get_engine() -> Engine | None:
+def get_sync_engine() -> Engine | None:
     url = settings.DATABASE_URL
     try:
-        engine = _create_engine(url)
+        engine = _create_sync_engine(url)
         _ping(engine)
         apply_agent1_schema(engine)
         import app.models  # noqa: F401
@@ -105,16 +147,16 @@ def get_engine() -> Engine | None:
 
 
 @lru_cache
-def get_session_factory() -> sessionmaker[Session] | None:
-    engine = get_engine()
+def get_sync_session_factory() -> sessionmaker[Session] | None:
+    engine = get_sync_engine()
     if engine is None:
         return None
     return sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-def get_db() -> Generator[Session | None, None, None]:
-    """Yield a SQLAlchemy session when Postgres is up; otherwise None (Supabase REST)."""
-    factory = get_session_factory()
+def get_sync_db() -> Generator[Session | None, None, None]:
+    """Yield a sync session when Postgres is up; otherwise None (Supabase REST)."""
+    factory = get_sync_session_factory()
     if factory is None:
         yield None
         return
@@ -123,3 +165,96 @@ def get_db() -> Generator[Session | None, None, None]:
         yield db
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Agents 3/4 — async SQLAlchemy (developer-branch public names)
+# ---------------------------------------------------------------------------
+
+
+def get_database_url() -> str:
+    """Return DATABASE_URL in postgresql+asyncpg:// form.
+
+    Reads os.environ first so Agent 3 tests can swap the URL without clearing
+    the Settings lru_cache. Falls back to settings.DATABASE_URL.
+    """
+    database_url = os.getenv("DATABASE_URL") or settings.DATABASE_URL
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable is not configured")
+    return _to_asyncpg_url(database_url)
+
+
+def get_engine() -> AsyncEngine:
+    """Lazy shared async engine (Agent 3/4). Raises if DATABASE_URL is missing."""
+    global _engine, _session_factory
+
+    if _engine is None:
+        database_url = get_database_url()
+        connect_args: dict = {
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+        }
+        _engine = create_async_engine(
+            database_url,
+            echo=False,
+            poolclass=NullPool,
+            connect_args=connect_args,
+        )
+        _session_factory = async_sessionmaker(
+            _engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+
+    return _engine
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Lazy shared async session factory (Agent 3/4)."""
+    global _session_factory
+
+    if _session_factory is None:
+        get_engine()
+
+    assert _session_factory is not None
+    return _session_factory
+
+
+async def dispose_engine() -> None:
+    global _engine, _session_factory
+
+    if _engine is not None:
+        await _engine.dispose()
+        _engine = None
+        _session_factory = None
+
+
+@asynccontextmanager
+async def get_session():
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI async session dependency used by Agent 3/4 and security."""
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+
+async def init_db() -> None:
+    try:
+        get_engine()
+    except ValueError:
+        return
+
+
+async def close_db() -> None:
+    await dispose_engine()

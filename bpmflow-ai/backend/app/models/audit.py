@@ -1,14 +1,20 @@
-"""Ingestion audit rows written by Agent 1 (separate from BPM audit_logs)."""
+"""Audit ORM models.
+
+Two tables, two classes:
+- IngestionAuditLog → public.ingestion_audit_logs (Agent 1 document ingest)
+- AuditLog → public.audit_logs (BPM entity change log used by Agents 3/4)
+"""
 
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, String
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON, Uuid
 
-from app.core.database import Base
+from app.core.database import Base as CoreBase
+from app.models.base import Base
 
 JsonDict = JSON().with_variant(JSONB(), "postgresql")
 
@@ -17,7 +23,9 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class AuditLog(Base):
+class IngestionAuditLog(CoreBase):
+    """Agent 1 ingest attempts. Not the BPM audit_logs table."""
+
     __tablename__ = "ingestion_audit_logs"
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -30,3 +38,19 @@ class AuditLog(Base):
         nullable=False,
         default=_utc_now,
     )
+
+
+class AuditLog(Base):
+    """Immutable BPM event log for entity changes."""
+
+    __tablename__ = "audit_logs"
+    __table_args__ = {"schema": "public"}
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True)
+    entity_type = Column(Text, nullable=False)
+    entity_id = Column(PG_UUID(as_uuid=True), nullable=False)
+    action = Column(Text, nullable=False)
+    performed_by = Column(PG_UUID(as_uuid=True), ForeignKey("public.users.id"))
+    old_values = Column(JSONB)
+    new_values = Column(JSONB)
+    timestamp = Column(DateTime(timezone=True), nullable=False)

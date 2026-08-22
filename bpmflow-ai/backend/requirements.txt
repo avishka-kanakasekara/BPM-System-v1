@@ -1,15 +1,48 @@
+# FastAPI and ASGI server
 fastapi
-uvicorn
+uvicorn[standard]
+python-multipart
+
+# Database (sync Agent 1 + async Agents 3/4)
+sqlalchemy[asyncio]
+psycopg2-binary
+asyncpg
+alembic
+
+# Supabase
+supabase
+
+# Pydantic and validation
 pydantic
 pydantic-settings
-sqlalchemy
-psycopg2-binary
-python-dotenv
+email-validator
+
+# Authentication and security
+python-jose[cryptography]>=3.5.0,<4
+passlib[bcrypt]
+
+# HTTP client
+httpx
+aiohttp
+
+# LLM clients
+anthropic
+openai
+google-generativeai
+
+# Vector database and embeddings
+pgvector
+sentence-transformers
+
+# Agent 1 discovery / document intelligence
 spacy
 pm4py
 python-docx
 pypdf
-python-multipart
+
+# Utilities
+python-dotenv
+
+# Testing
 pytest
-httpx
-anthropic
+pytest-asyncio

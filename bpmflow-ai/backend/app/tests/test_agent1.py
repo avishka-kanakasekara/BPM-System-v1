@@ -27,7 +27,7 @@ from app.llm.prompts.agent1_relation_extraction import (
 from app.agents.agent1_discovery.schemas import ExtractedDocument, PageText
 from app.core.config import settings
 from app.core.database import Base
-from app.models.audit import AuditLog
+from app.models.audit import IngestionAuditLog
 from app.models.process import Process
 
 MINIMAL_PDF = b"%PDF-1.1\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
@@ -136,8 +136,8 @@ def db_session():
         engine.dispose()
 
 
-def _audit_rows(db: Session) -> list[AuditLog]:
-    return list(db.scalars(select(AuditLog)))
+def _audit_rows(db: Session) -> list[IngestionAuditLog]:
+    return list(db.scalars(select(IngestionAuditLog)))
 
 
 def test_valid_pdf_is_accepted(db_session):
@@ -539,17 +539,17 @@ def test_build_process_json_validates_schema_and_records_missing_fields():
 def test_agent_message_rejects_authorization_fields():
     from pydantic import ValidationError
 
-    from app.schemas.agent_message import AgentMessage
+    from app.schemas.agent_message import DiscoveryAgentMessage
 
     try:
-        AgentMessage(
+        DiscoveryAgentMessage(
             status="COMPLETE",
             payload={},
             approved=True,
         )
     except ValidationError:
         return
-    raise AssertionError("approve/decision fields must not be accepted on AgentMessage")
+    raise AssertionError("approve/decision fields must not be accepted on DiscoveryAgentMessage")
 
 
 def test_run_discovery_returns_informational_agent_message(db_session, monkeypatch):
@@ -558,7 +558,7 @@ def test_run_discovery_returns_informational_agent_message(db_session, monkeypat
     from app.agents.agent1_discovery.service import run_discovery
     from app.core.config import settings
     from app.llm import client as llm_client
-    from app.schemas.agent_message import AgentMessage
+    from app.schemas.agent_message import DiscoveryAgentMessage
 
     monkeypatch.setattr(settings, "MOCK_LLM", True)
     monkeypatch.setattr(llm_client.settings, "MOCK_LLM", True)
@@ -567,7 +567,7 @@ def test_run_discovery_returns_informational_agent_message(db_session, monkeypat
     upload = FakeUpload("sample_event_log.csv", csv_bytes, "text/csv")
     message = run_discovery([upload], db_session)
 
-    AgentMessage.model_validate(message.model_dump())
+    DiscoveryAgentMessage.model_validate(message.model_dump())
     assert message.sender == "agent1_discovery"
     assert "approved" not in message.model_dump()
     assert "decision" not in message.model_dump()
@@ -589,10 +589,10 @@ def test_discover_endpoint_end_to_end(db_session, monkeypatch):
     from fastapi.testclient import TestClient
 
     from app.core.config import settings
-    from app.core.database import get_db
+    from app.core.database import get_sync_db
     from app.llm import client as llm_client
     from app.main import app
-    from app.schemas.agent_message import AgentMessage
+    from app.schemas.agent_message import DiscoveryAgentMessage
 
     monkeypatch.setattr(settings, "MOCK_LLM", True)
     monkeypatch.setattr(llm_client.settings, "MOCK_LLM", True)
@@ -600,7 +600,7 @@ def test_discover_endpoint_end_to_end(db_session, monkeypatch):
     def _override_db():
         yield db_session
 
-    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_sync_db] = _override_db
     csv_bytes = (Path(__file__).parent / "fixtures" / "sample_event_log.csv").read_bytes()
     docx_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     files = [
@@ -617,7 +617,7 @@ def test_discover_endpoint_end_to_end(db_session, monkeypatch):
 
     assert response.status_code == 200, response.text
     body = response.json()
-    message = AgentMessage.model_validate(body)
+    message = DiscoveryAgentMessage.model_validate(body)
     assert message.sender == "agent1_discovery"
     missing = message.payload.get("missing_or_contradictory_fields") or []
     if missing:

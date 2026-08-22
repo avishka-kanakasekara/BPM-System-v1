@@ -14,7 +14,7 @@ from app.core.logging import get_logger
 from app.models.agent_message import AgentMessageRecord
 from app.models.document import DiscoveredDocument
 from app.models.process import Process, ProcessExceptionRow, ProcessTask
-from app.schemas.agent_message import AgentMessage
+from app.schemas.agent_message import DiscoveryAgentMessage
 
 logger = get_logger(__name__)
 
@@ -71,7 +71,7 @@ def _task_view(row: dict[str, Any], index: int) -> SimpleNamespace:
 
 def persist_discovery(
     db: Session | None,
-    message: AgentMessage,
+    message: DiscoveryAgentMessage,
     process: ProcessJSON,
     documents: list[dict[str, Any]],
 ) -> Any:
@@ -83,7 +83,7 @@ def persist_discovery(
 
 def _persist_sqlalchemy(
     db: Session,
-    message: AgentMessage,
+    message: DiscoveryAgentMessage,
     process: ProcessJSON,
     documents: list[dict[str, Any]],
 ) -> Process:
@@ -99,6 +99,7 @@ def _persist_sqlalchemy(
         discovery_status=message.status,
         trace_id=message.trace_id,
         message_id=message.message_id,
+        current_stage="DRAFT",
     )
     db.add(row)
     db.flush()
@@ -186,7 +187,7 @@ def _jsonable_docs(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _persist_rest(
-    message: AgentMessage,
+    message: DiscoveryAgentMessage,
     process: ProcessJSON,
     documents: list[dict[str, Any]],
 ) -> SimpleNamespace:

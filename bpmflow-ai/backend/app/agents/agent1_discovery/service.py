@@ -38,7 +38,7 @@ from app.agents.agent1_discovery.schemas import (
     Relation,
 )
 from app.core.logging import get_logger
-from app.schemas.agent_message import AgentMessage, AgentMessageStatus, EvidenceReference
+from app.schemas.agent_message import AgentMessageStatus, DiscoveryAgentMessage, EvidenceReference
 
 logger = get_logger(__name__)
 
@@ -311,7 +311,7 @@ def _wrap_message(
     evidence_references: list[EvidenceReference],
     had_partial_failure: bool,
     discovery_errors: list[str],
-) -> AgentMessage:
+) -> DiscoveryAgentMessage:
     confidences = list(process.confidence.values()) if process.confidence else [0.0]
     overall = round(sum(confidences) / len(confidences), 4) if confidences else 0.0
     payload = process.model_dump(mode="json")
@@ -327,7 +327,7 @@ def _wrap_message(
             "overall_confidence": overall,
         },
     )
-    return AgentMessage(
+    return DiscoveryAgentMessage(
         sender="agent1_discovery",
         payload=payload,
         evidence_references=evidence_references,
@@ -344,7 +344,7 @@ def _wrap_and_persist(
     had_partial_failure: bool,
     discovery_errors: list[str],
     documents: list[dict[str, Any]],
-) -> AgentMessage:
+) -> DiscoveryAgentMessage:
     message = _wrap_message(
         process,
         evidence_references=evidence_references,
@@ -363,8 +363,8 @@ def _wrap_and_persist(
     return message
 
 
-def run_discovery(files: list[Any], db: Session | None) -> AgentMessage:
-    """Ingest documents, discover a process, and return an informational AgentMessage.
+def run_discovery(files: list[Any], db: Session | None) -> DiscoveryAgentMessage:
+    """Ingest documents, discover a process, and return an informational discovery message.
 
     Pipeline per file:
     validate_and_ingest → extract_text → classify_document → extract_entities
