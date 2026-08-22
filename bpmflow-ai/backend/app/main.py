@@ -1,12 +1,36 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from app.core.config import settings
+<<<<<<< HEAD
 from app.api.v1.router import api_router
+=======
+from app.core.database import init_db, close_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager.
+
+    Handles startup and shutdown events:
+    - Startup: Initialize database engine (lazy, no connection yet)
+    - Shutdown: Dispose database engine and close connections, close Agent 3 LLM client
+    """
+    # Startup
+    await init_db()
+    yield
+    # Shutdown
+    await close_db()
+    from app.agents.agent3_resources.runtime_config import close_agent3_llm_runtime
+    await close_agent3_llm_runtime()
+
+>>>>>>> origin/developer-branch
 
 app = FastAPI(
     title="BPMFlow AI",
     description="Four-agent, human-supervised agentic AI platform for Business Process Management",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Configure CORS
@@ -37,4 +61,10 @@ async def health_check():
     }
 
 
+<<<<<<< HEAD
 app.include_router(api_router, prefix="/api/v1")
+=======
+# Include routers
+from app.api.v1.router import api_router
+app.include_router(api_router)
+>>>>>>> origin/developer-branch

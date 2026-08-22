@@ -2,7 +2,9 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+import asyncio
+import inspect
+from typing import Optional, Any
 
 from .interfaces import ResourceRepository
 from .schemas import (
@@ -17,6 +19,11 @@ from .strategies.human import HumanResourceStrategy
 from .strategies.budget import BudgetResourceStrategy
 from .gaps import GapDetector
 from .explainer_template import TemplateExplainer, ExplanationContext
+from .llm_explainer import (
+    ResilientFallbackExplainer,
+    ExplanationGenerator,
+    TemplateExplainerAdapter,
+)
 from .constants import MessageType
 from .failures import (
     detect_invalid_request,
@@ -30,13 +37,32 @@ from .failures import (
 class ResourceAllocationService:
     """Orchestrates the complete resource allocation pipeline."""
 
-    def __init__(self, repository: ResourceRepository):
-        """Initialize with a resource repository."""
+    def __init__(
+        self,
+        repository: ResourceRepository,
+        explainer: Optional[Any] = None,
+    ):
+        """Initialize with a resource repository and optional explanation generator.
+
+        Enforces the ExplanationGenerator async protocol. Direct TemplateExplainer instances
+        are explicitly wrapped via TemplateExplainerAdapter for backward compatibility.
+        """
         self.repository = repository
         self.human_strategy = HumanResourceStrategy(repository)
         self.budget_strategy = BudgetResourceStrategy(repository)
         self.gap_detector = GapDetector()
-        self.explainer = TemplateExplainer()
+
+        if explainer is None:
+            self.explainer: ExplanationGenerator = ResilientFallbackExplainer()
+        elif isinstance(explainer, TemplateExplainer):
+            self.explainer = TemplateExplainerAdapter(explainer)
+        elif hasattr(explainer, "generate_explanation") and callable(getattr(explainer, "generate_explanation")):
+            if not inspect.iscoroutinefunction(getattr(explainer, "generate_explanation")):
+                self.explainer = TemplateExplainerAdapter(explainer)
+            else:
+                self.explainer = explainer
+        else:
+            raise TypeError("explainer must implement ExplanationGenerator async protocol")
 
     async def process_allocation_request(
         self,
@@ -67,6 +93,7 @@ class ResourceAllocationService:
                 try:
                     human_result = await self.human_strategy.process_requirement(
                         requirement=request.human_requirements,
+                        tenant_id=request.metadata.tenant_id,
                         evaluation_timestamp=evaluation_timestamp,
                     )
                 except Exception as exc:
@@ -82,6 +109,7 @@ class ResourceAllocationService:
                 try:
                     budget_result = await self.budget_strategy.process_requirement(
                         requirement=request.budget_requirements,
+                        tenant_id=request.metadata.tenant_id,
                         evaluation_timestamp=evaluation_timestamp,
                     )
                 except Exception as exc:
@@ -92,21 +120,23 @@ class ResourceAllocationService:
                         )
                     return build_internal_error_failure(response_metadata)
 
-            return self._build_business_recommendation(
+            return await self._build_business_recommendation(
                 response_metadata=response_metadata,
                 human_result=human_result,
                 budget_result=budget_result,
+                request=request,
             )
         except Exception:
             if response_metadata is None:
                 response_metadata = self._build_response_metadata(request.metadata)
             return build_internal_error_failure(response_metadata)
 
-    def _build_business_recommendation(
+    async def _build_business_recommendation(
         self,
         response_metadata: AgentMessageMetadata,
         human_result,
         budget_result,
+        request: Optional[AllocationRequest] = None,
     ) -> AllocationRecommendation:
         """Build a completed business recommendation, including constraint outcomes."""
         resource_gaps = []
@@ -129,16 +159,17 @@ class ResourceAllocationService:
             limitations.extend(budget_limitations)
 
         confidence = self._calculate_confidence(human_result, budget_result)
-        explanation = self.explainer.generate_explanation(
-            ExplanationContext(
-                human_requirement_result=human_result,
-                budget_requirement_result=budget_result,
-                resource_gaps=resource_gaps,
-                alternatives=alternatives,
-                limitations=limitations,
-                confidence=confidence,
-            )
+        currency = request.budget_requirements.currency if (request and request.budget_requirements) else None
+        explanation_context = ExplanationContext(
+            human_requirement_result=human_result,
+            budget_requirement_result=budget_result,
+            resource_gaps=resource_gaps,
+            alternatives=alternatives,
+            limitations=limitations,
+            confidence=confidence,
+            currency=currency,
         )
+        explanation = await self.explainer.generate_explanation(explanation_context)
 
         return AllocationRecommendation(
             metadata=response_metadata,
