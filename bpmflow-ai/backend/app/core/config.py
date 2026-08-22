@@ -1,33 +1,55 @@
-from pydantic_settings import BaseSettings
-from dotenv import load_dotenv
-import os
+from functools import lru_cache
+from typing import List
 
-load_dotenv()
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Supabase Configuration
-    SUPABASE_URL: str = os.getenv("SUPABASE_URL")
-    SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY")
-    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    
-    # Database Configuration
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
-    if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
-        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
-    
-    # API Configuration
-    API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT: int = int(os.getenv("API_PORT", "8000"))
-    DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
-    
-    # LLM Configuration
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    """Application settings loaded from environment variables / `.env`."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=True,
+    )
+
+    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/bpmflow"
+    SUPABASE_URL: str = ""
+    SUPABASE_ANON_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
+    MOCK_LLM: bool = False
+    MAX_UPLOAD_MB: int = 20
+    ALLOWED_FILE_TYPES: str = "pdf,docx,csv"
+    ENV: str = "development"
+
+    CORS_ORIGINS: List[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://localhost:5174",
+        ]
+    )
+
+    @property
+    def allowed_file_types_list(self) -> List[str]:
+        return [item.strip().lower() for item in self.ALLOWED_FILE_TYPES.split(",") if item.strip()]
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.MAX_UPLOAD_MB * 1024 * 1024
+
+    @property
+    def is_development(self) -> bool:
+        return self.ENV.lower() in {"development", "dev", "local"}
 
 
-settings = Settings()
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

@@ -1,0 +1,27 @@
+{
+  "RelationExtractionResult": {
+    "relations": [
+      {
+        "subject": "Requester",
+        "predicate": "actor-performs-task",
+        "object": "Submit purchase request",
+        "source_reference": "page 1",
+        "confidence": 0.92
+      },
+      {
+        "subject": "Submit purchase request",
+        "predicate": "task-precedes-task",
+        "object": "Approve purchase request",
+        "source_reference": "page 1",
+        "confidence": 0.88
+      },
+      {
+        "subject": "Policy threshold",
+        "predicate": "rule-controls-task",
+        "object": "Approve purchase request",
+        "source_reference": "page 1",
+        "confidence": 0.81
+      }
+    ]
+  }
+}
