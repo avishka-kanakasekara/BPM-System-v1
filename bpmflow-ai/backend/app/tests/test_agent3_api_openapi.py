@@ -4,6 +4,9 @@ These tests verify the OpenAPI schema is correctly generated.
 """
 
 import os
+from typing import Set
+from uuid import UUID, uuid4
+
 import pytest
 
 # Set minimal environment variables for config
@@ -13,7 +16,6 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
 from app.api.v1.routes_agent3 import router
-from uuid import uuid4, UUID
 
 from fastapi import FastAPI
 

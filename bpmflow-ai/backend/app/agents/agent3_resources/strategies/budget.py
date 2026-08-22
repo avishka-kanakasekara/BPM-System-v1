@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import List
+from uuid import UUID
 
 from ..interfaces import ResourceRepository
 from ..schemas import (

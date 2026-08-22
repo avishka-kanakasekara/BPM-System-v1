@@ -1,48 +1,39 @@
-<<<<<<< HEAD
-"""Supabase Auth JWT validation and FastAPI auth dependencies.
+"""Supabase Auth JWT validation and trusted principal extraction.
 
-Supabase Auth is the identity provider. FastAPI validates access tokens and
-loads matching public.users profiles. No custom password/login flows.
-=======
-"""Supabase JWT verification and trusted principal extraction.
+Supabase Auth is the identity provider. This module provides two compatible
+FastAPI auth surfaces used by different agents:
 
-This module provides secure JWT verification for Supabase access tokens using
-the JWKS (JSON Web Key Set) endpoint. It follows the safest available approach:
+Agent 4 (profile / role authorization):
+- Validates access tokens (JWKS preferred, optional HS256 secret)
+- Loads matching public.users profiles into CurrentUser
+- get_current_user / require_roles
 
-- Verifies token signature against Supabase JWKS endpoint
-- Validates algorithm (rejects alg=none)
-- Validates issuer exactly
-- Validates expiration and other standard claims
-- Extracts tenant_id from verified app_metadata only
-- Never trusts unverified payloads
-- Never exposes secrets or raw tokens in errors/logs
+Agent 3 (tenant-scoped principal):
+- Verifies tokens against Supabase JWKS (ES256)
+- Extracts VerifiedPrincipal including app_metadata.tenant_id
+- get_verified_principal
 
-TENANT SOURCE:
-- tenant_id MUST come from app_metadata.tenant_id (administratively controlled)
-- user_metadata is NEVER used for authorization (user-editable)
-- Missing/malformed tenant claim fails closed
-- JWT claim staleness is a documented limitation until token refresh
-
-SECURITY RULES:
+Security rules:
 - Never decode a JWT without verifying it
 - Never trust user_metadata for authorization
-- Never expose access tokens, API keys, DB URLs, passwords or JWT payloads
+- Never expose access tokens, API keys, DB URLs, passwords, or JWT payloads
 - Never use Supabase service-role keys in the frontend
->>>>>>> origin/developer-branch
 """
 
 from __future__ import annotations
 
-<<<<<<< HEAD
+import asyncio
 import time
-from typing import Callable
+from datetime import datetime, timezone
+from typing import Callable, Dict, Optional, Set, Tuple
 from uuid import UUID
 
 import httpx
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
-from jose.exceptions import ExpiredSignatureError
+from jose import JWTError, jwk, jwt
+from jose.exceptions import ExpiredSignatureError, JWTClaimsError
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -50,19 +41,24 @@ from app.core.database import get_db
 from app.models.user import User
 from app.schemas.auth import ALLOWED_USER_ROLES, CurrentUser
 
+# ============================================================================
+# Agent 4 — CurrentUser / role-based API auth
+# ============================================================================
+
 bearer_scheme = HTTPBearer(auto_error=False)
 
 NOT_AUTHENTICATED_DETAIL = "Not authenticated"
 PROFILE_NOT_FOUND_DETAIL = "User profile not found"
 FORBIDDEN_DETAIL = "Insufficient permissions"
 
-# JWKS cache: (fetched_at_epoch, jwks_payload)
-_jwks_cache: tuple[float, dict] | None = None
-_JWKS_CACHE_TTL_SECONDS = 300
+# Agent 4 JWKS cache: (fetched_at_epoch, jwks_payload)
+# Named separately from Agent 3's JWKSCache instance (_jwks_cache).
+_profile_jwks_cache: tuple[float, dict] | None = None
+_PROFILE_JWKS_CACHE_TTL_SECONDS = 300
 
 
 class AuthenticationError(Exception):
-    """Raised when a Bearer token cannot be validated."""
+    """Raised when a Bearer token cannot be validated (Agent 4 path)."""
 
 
 def _unauthorized() -> HTTPException:
@@ -93,15 +89,15 @@ def expected_issuer() -> str | None:
 
 
 async def fetch_jwks(*, force_refresh: bool = False) -> dict:
-    """Fetch and cache Supabase JWKS public keys."""
-    global _jwks_cache
+    """Fetch and cache Supabase JWKS public keys (Agent 4 profile auth)."""
+    global _profile_jwks_cache
     now = time.time()
     if (
         not force_refresh
-        and _jwks_cache is not None
-        and (now - _jwks_cache[0]) < _JWKS_CACHE_TTL_SECONDS
+        and _profile_jwks_cache is not None
+        and (now - _profile_jwks_cache[0]) < _PROFILE_JWKS_CACHE_TTL_SECONDS
     ):
-        return _jwks_cache[1]
+        return _profile_jwks_cache[1]
 
     url = supabase_jwks_url()
     try:
@@ -115,14 +111,14 @@ async def fetch_jwks(*, force_refresh: bool = False) -> dict:
     if not isinstance(payload, dict) or "keys" not in payload:
         raise AuthenticationError("Invalid signing key response")
 
-    _jwks_cache = (now, payload)
+    _profile_jwks_cache = (now, payload)
     return payload
 
 
 def clear_jwks_cache() -> None:
-    """Test helper to reset JWKS cache."""
-    global _jwks_cache
-    _jwks_cache = None
+    """Test helper to reset Agent 4 profile JWKS cache."""
+    global _profile_jwks_cache
+    _profile_jwks_cache = None
 
 
 def _rsa_or_ec_key_from_jwk(jwk_data: dict) -> dict:
@@ -194,7 +190,7 @@ def _validate_issuer(claims: dict) -> None:
 
 
 async def verify_supabase_access_token(token: str) -> dict:
-    """Validate a Supabase access JWT and return claims.
+    """Validate a Supabase access JWT and return claims (Agent 4).
 
     Verification order:
     1. Asymmetric JWKS (preferred) when token alg is ES256/RS256 and SUPABASE_URL is set
@@ -296,25 +292,10 @@ def require_roles(*roles: str) -> Callable:
         return current_user
 
     return _dependency
-=======
-import asyncio
-import json
-from datetime import datetime, timezone
-from functools import lru_cache
-from typing import Dict, Optional, Set, Tuple
-from uuid import UUID
-
-import httpx
-from fastapi import HTTPException, Request, status
-from jose import jwk, jwt
-from jose.exceptions import ExpiredSignatureError, JWTError, JWTClaimsError
-from pydantic import BaseModel, Field, field_validator
-
-from app.core.config import settings
 
 
 # ============================================================================
-# Verified Principal Model
+# Agent 3 — VerifiedPrincipal / tenant-scoped auth
 # ============================================================================
 
 
@@ -349,14 +330,8 @@ class VerifiedPrincipal(BaseModel):
     def validate_expiration(cls, value: datetime) -> datetime:
         """Ensure expiration is timezone-aware."""
         if value.tzinfo is None:
-            # Assume UTC if no timezone
             return value.replace(tzinfo=timezone.utc)
         return value
-
-
-# ============================================================================
-# JWKS Caching
-# ============================================================================
 
 
 class JWKSCache:
@@ -389,21 +364,18 @@ class JWKSCache:
             HTTPException: If JWKS fetch fails
         """
         async with self._lock:
-            # Check cache
             if jwks_url in self._cache:
                 jwks_data, cached_at = self._cache[jwks_url]
                 age = (datetime.now(timezone.utc) - cached_at).total_seconds()
                 if age < self._ttl:
                     return jwks_data
 
-            # Fetch fresh JWKS
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     response = await client.get(jwks_url)
                     response.raise_for_status()
                     jwks_data = response.json()
 
-                # Cache the result
                 self._cache[jwks_url] = (jwks_data, datetime.now(timezone.utc))
                 return jwks_data
 
@@ -418,24 +390,12 @@ class JWKSCache:
                 ) from exc
 
 
-# Global JWKS cache instance
+# Global Agent 3 JWKS cache instance (tests patch this name)
 _jwks_cache = JWKSCache()
 
 
-# ============================================================================
-# JWT Verification
-# ============================================================================
-
-
 def _get_jwks_url(supabase_url: str) -> str:
-    """Construct JWKS URL from Supabase URL.
-
-    Args:
-        supabase_url: The Supabase project URL
-
-    Returns:
-        The JWKS endpoint URL
-    """
+    """Construct JWKS URL from Supabase URL."""
     base_url = supabase_url.rstrip("/")
     if base_url.endswith("/auth/v1"):
         return f"{base_url}/.well-known/jwks.json"
@@ -443,14 +403,7 @@ def _get_jwks_url(supabase_url: str) -> str:
 
 
 def _get_expected_issuer(supabase_url: str) -> str:
-    """Construct expected issuer from Supabase URL.
-
-    Args:
-        supabase_url: The Supabase project URL
-
-    Returns:
-        The expected issuer string
-    """
+    """Construct expected issuer from Supabase URL."""
     base_url = supabase_url.rstrip("/")
     if base_url.endswith("/auth/v1"):
         return base_url
@@ -458,7 +411,7 @@ def _get_expected_issuer(supabase_url: str) -> str:
 
 
 async def verify_supabase_token(token: str) -> VerifiedPrincipal:
-    """Verify a Supabase access token and extract verified principal.
+    """Verify a Supabase access token and extract verified principal (Agent 3).
 
     This function:
     - Fetches JWKS from Supabase (cached)
@@ -468,17 +421,6 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
     - Validates expiration, nbf, and other standard claims
     - Extracts tenant_id from app_metadata only
     - Fails closed on any validation error
-
-    Args:
-        token: The Supabase access token (Bearer token)
-
-    Returns:
-        VerifiedPrincipal with verified claims
-
-    Raises:
-        HTTPException: 401 if token is invalid/expired/malformed
-        HTTPException: 403 if tenant claim is missing/malformed
-        HTTPException: 503 if JWKS fetch fails
     """
     if not settings.SUPABASE_URL:
         raise HTTPException(
@@ -490,15 +432,12 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
             },
         )
 
-    # Get JWKS URL and expected issuer
     jwks_url = _get_jwks_url(settings.SUPABASE_URL)
     expected_issuer = _get_expected_issuer(settings.SUPABASE_URL)
 
     try:
-        # Fetch JWKS (cached)
         jwks_data = await _jwks_cache.get_jwks(jwks_url)
 
-        # Parse JWKS
         jwks_keys = jwks_data.get("keys", [])
         if not jwks_keys:
             raise HTTPException(
@@ -510,16 +449,12 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
                 },
             )
 
-        # Build key dictionary for jose
         keys = {}
         for key_data in jwks_keys:
             key_id = key_data.get("kid")
             if key_id:
                 keys[key_id] = jwk.construct(key_data)
 
-        # Decode and verify token
-        # jose.decode automatically verifies signature, exp, nbf, iat
-        # We explicitly validate issuer and algorithm
         header = jwt.get_unverified_header(token)
         key_id = header.get("kid")
 
@@ -534,12 +469,9 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Verify header algorithm before decoding
-        header = jwt.get_unverified_header(token)
         alg = header.get("alg")
 
         # Enforce ES256 only for this project (matches Supabase project configuration)
-        # Do not trust header alone - must match expected algorithm
         allowed_algorithms = ["ES256"]
         if alg not in allowed_algorithms:
             raise HTTPException(
@@ -556,19 +488,18 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
             token,
             keys[key_id],
             algorithms=allowed_algorithms,
-            audience="authenticated",  # Supabase uses "authenticated" as audience
+            audience="authenticated",
             issuer=expected_issuer,
             options={
                 "verify_signature": True,
                 "verify_exp": True,
                 "verify_nbf": True,
                 "verify_iat": True,
-                "verify_aud": True,  # Enforce audience validation
+                "verify_aud": True,
                 "verify_iss": True,
             },
         )
 
-        # Extract required claims
         sub = claims.get("sub")
         if not sub:
             raise HTTPException(
@@ -581,7 +512,6 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Extract tenant_id from app_metadata only
         app_metadata = claims.get("app_metadata", {})
         tenant_id_str = app_metadata.get("tenant_id")
 
@@ -607,7 +537,6 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
                 },
             )
 
-        # Extract user_id from sub
         try:
             user_id = UUID(sub)
         except (ValueError, AttributeError):
@@ -621,12 +550,9 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Extract roles from verified claims
-        # Roles can come from various claim locations depending on Supabase configuration
         role_claims = claims.get("role", "authenticated")
         user_role = str(role_claims)
 
-        # Extract additional roles if present
         roles_set: Set[str] = {user_role}
         if "user_roles" in claims:
             if isinstance(claims["user_roles"], list):
@@ -634,20 +560,17 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
             elif isinstance(claims["user_roles"], str):
                 roles_set.add(claims["user_roles"])
 
-        # Extract session_id if present
         session_id = None
         if "session_id" in claims:
             try:
                 session_id = UUID(claims["session_id"])
             except (ValueError, AttributeError):
-                pass  # Session ID is optional
+                pass
 
-        # Extract expiration
         exp = claims.get("exp")
         if exp:
             expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
         else:
-            # Default to 1 hour from now if not present (shouldn't happen with valid JWT)
             expires_at = datetime.now(timezone.utc).replace(microsecond=0)
 
         return VerifiedPrincipal(
@@ -681,31 +604,8 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
         ) from exc
 
 
-# ============================================================================
-# FastAPI Dependency
-# ============================================================================
-
-
 async def get_verified_principal(request: Request) -> VerifiedPrincipal:
-    """FastAPI dependency to extract verified principal from Authorization header.
-
-    This dependency:
-    - Extracts Bearer token from Authorization header
-    - Verifies token signature and claims
-    - Returns VerifiedPrincipal with tenant_id from app_metadata
-    - Fails closed with 401/403 on any error
-
-    Args:
-        request: The FastAPI request object
-
-    Returns:
-        VerifiedPrincipal with verified claims
-
-    Raises:
-        HTTPException: 401 if missing/invalid token
-        HTTPException: 403 if tenant claim missing/invalid
-        HTTPException: 503 if JWKS fetch fails
-    """
+    """FastAPI dependency to extract verified principal from Authorization header."""
     authorization = request.headers.get("Authorization")
 
     if not authorization:
@@ -733,4 +633,3 @@ async def get_verified_principal(request: Request) -> VerifiedPrincipal:
     token = authorization[7:]  # Remove "Bearer " prefix
 
     return await verify_supabase_token(token)
->>>>>>> origin/developer-branch
