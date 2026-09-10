@@ -58,20 +58,39 @@ class TestInMemoryRepository:
 
 
 class TestSqlAlchemyRepository:
+    @pytest.fixture(autouse=True)
+    def _force_sqlalchemy_path(self, monkeypatch):
+        """Unit tests mock the session; do not divert to live Supabase REST."""
+        monkeypatch.setattr(
+            "app.agents.agent4_orchestrator.repository.use_supabase_rest_fallback",
+            lambda: False,
+        )
+        monkeypatch.setattr(
+            "app.agents.agent4_orchestrator.repository.supabase_rest_configured",
+            lambda: False,
+        )
+
+    def _mock_scalar_result(self, value):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = value
+        return result
+
     async def test_get_process_stage(self, process_id) -> None:
         session = AsyncMock()
-        session.get.return_value = SimpleNamespace(current_stage="DRAFT")
+        session.execute.return_value = self._mock_scalar_result(
+            SimpleNamespace(current_stage="DRAFT")
+        )
         repo = SqlAlchemyProcessRepository(session)
 
         stage = await repo.get_process_stage(process_id)
 
         assert stage is WorkflowStage.DRAFT
-        session.get.assert_awaited_once_with(Process, process_id)
+        session.execute.assert_awaited()
 
     async def test_update_process_stage(self, process_id) -> None:
-        process = SimpleNamespace(current_stage="DRAFT")
+        process = SimpleNamespace(current_stage="DRAFT", updated_at=None)
         session = AsyncMock()
-        session.get.return_value = process
+        session.execute.return_value = self._mock_scalar_result(process)
         repo = SqlAlchemyProcessRepository(session)
 
         await repo.update_process_stage(process_id, WorkflowStage.DISCOVERING)
@@ -105,7 +124,7 @@ class TestSqlAlchemyRepository:
 
     async def test_process_not_found(self, process_id) -> None:
         session = AsyncMock()
-        session.get.return_value = None
+        session.execute.return_value = self._mock_scalar_result(None)
         repo = SqlAlchemyProcessRepository(session)
 
         with pytest.raises(ProcessNotFoundError):
@@ -113,7 +132,7 @@ class TestSqlAlchemyRepository:
 
     async def test_database_failure_on_get(self, process_id) -> None:
         session = AsyncMock()
-        session.get.side_effect = RuntimeError("connection lost")
+        session.execute.side_effect = RuntimeError("connection lost")
         repo = SqlAlchemyProcessRepository(session)
 
         with pytest.raises(DatabasePersistenceError):

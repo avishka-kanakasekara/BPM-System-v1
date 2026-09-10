@@ -389,6 +389,44 @@ class OpenAIExplanationGenerator:
             raise LLMExplanationError("Invalid response structure") from None
 
 
+class GeminiExplanationGenerator:
+    """Optional Gemini explanation generator using the shared Agent 2 client."""
+
+    def __init__(
+        self,
+        model: str = "gemini-3.6-flash",
+        timeout: float = 8.0,
+        max_output_tokens: int = 500,
+    ):
+        self.model = model
+        self.timeout = timeout
+        self.max_output_tokens = max_output_tokens
+
+    async def generate_explanation(self, context: ExplanationContext) -> str:
+        from app.agents.agent2_execution.llm.gemini_client import GeminiClient
+
+        sanitized_input = sanitize_explanation_context(context)
+        user_prompt = build_user_prompt(sanitized_input)
+        try:
+            client = GeminiClient(is_offline=False)
+            text = await asyncio.wait_for(
+                client.generate_text(
+                    prompt=user_prompt,
+                    system_instruction=SYSTEM_PROMPT,
+                    model_tier="flash",
+                    max_retries=1,
+                ),
+                timeout=self.timeout,
+            )
+        except asyncio.TimeoutError:
+            raise LLMExplanationError("LLM request timed out") from None
+        except Exception:
+            raise LLMExplanationError("LLM generation request failed") from None
+        if not text or not str(text).strip():
+            raise LLMExplanationError("Empty Gemini explanation")
+        return str(text).strip()[: self.max_output_tokens * 4]
+
+
 # ============================================================================
 # Resilient Fallback Wrapper
 # ============================================================================

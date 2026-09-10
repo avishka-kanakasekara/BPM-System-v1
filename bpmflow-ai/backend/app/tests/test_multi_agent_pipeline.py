@@ -234,7 +234,12 @@ async def test_full_procurement_loop_preserves_correlation_id() -> None:
     assert (executed.agent_response or {}).get("receipt_status") == "SUCCESS"
 
     completed = await workflow.complete_invoice_matching(
-        process_id, reference="INV-DEMO-1"
+        process_id,
+        amount=10.0,
+        expected_amount=10.0,
+        po_reference="PO-DEMO",
+        expected_po_reference="PO-DEMO",
+        notes="INV-DEMO-1",
     )
     assert completed.success is True
     assert completed.current_stage is WorkflowStage.COMPLETED

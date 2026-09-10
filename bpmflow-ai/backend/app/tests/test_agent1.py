@@ -585,14 +585,17 @@ def test_run_discovery_returns_informational_agent_message(db_session, monkeypat
 
 def test_discover_endpoint_end_to_end(db_session, monkeypatch):
     from pathlib import Path
+    from uuid import uuid4
 
     from fastapi.testclient import TestClient
 
     from app.core.config import settings
     from app.core.database import get_sync_db
+    from app.core.security import get_current_user
     from app.llm import client as llm_client
     from app.main import app
     from app.schemas.agent_message import DiscoveryAgentMessage
+    from app.schemas.auth import CurrentUser
 
     monkeypatch.setattr(settings, "MOCK_LLM", True)
     monkeypatch.setattr(llm_client.settings, "MOCK_LLM", True)
@@ -600,7 +603,16 @@ def test_discover_endpoint_end_to_end(db_session, monkeypatch):
     def _override_db():
         yield db_session
 
+    def _override_user() -> CurrentUser:
+        return CurrentUser(
+            id=uuid4(),
+            email="tester@example.com",
+            role="requester",
+            tenant_id=uuid4(),
+        )
+
     app.dependency_overrides[get_sync_db] = _override_db
+    app.dependency_overrides[get_current_user] = _override_user
     csv_bytes = (Path(__file__).parent / "fixtures" / "sample_event_log.csv").read_bytes()
     docx_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     files = [
@@ -627,3 +639,69 @@ def test_discover_endpoint_end_to_end(db_session, monkeypatch):
     assert not _has_forbidden_field(body)
     assert "approve" not in body
     assert "decision" not in body
+
+
+def test_discover_attaches_to_existing_process(db_session, monkeypatch):
+    """Upload with process_id must update the Create Process row, not invent a new id."""
+    from pathlib import Path
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+
+    from app.core.config import settings
+    from app.core.database import get_sync_db
+    from app.core.security import get_current_user
+    from app.llm import client as llm_client
+    from app.main import app
+    from app.models.process import Process
+    from app.schemas.auth import CurrentUser
+
+    monkeypatch.setattr(settings, "MOCK_LLM", True)
+    monkeypatch.setattr(llm_client.settings, "MOCK_LLM", True)
+
+    process_id = uuid4()
+    db_session.add(
+        Process(
+            id=process_id,
+            name="Created by requester",
+            description="Empty draft",
+            process_type="general",
+            status="draft",
+            process_json={},
+            current_stage="DRAFT",
+        )
+    )
+    db_session.commit()
+
+    def _override_db():
+        yield db_session
+
+    def _override_user() -> CurrentUser:
+        return CurrentUser(
+            id=uuid4(),
+            email="tester@example.com",
+            role="requester",
+            tenant_id=uuid4(),
+        )
+
+    app.dependency_overrides[get_sync_db] = _override_db
+    app.dependency_overrides[get_current_user] = _override_user
+    csv_bytes = (Path(__file__).parent / "fixtures" / "sample_event_log.csv").read_bytes()
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/agent1/discover",
+            data={"process_id": str(process_id)},
+            files=[("files", ("sample_event_log.csv", csv_bytes, "text/csv"))],
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["process_id"] == str(process_id)
+    stored = db_session.get(Process, process_id)
+    assert stored is not None
+    assert stored.current_stage == "DRAFT"
+    assert stored.process_json
+    assert stored.discovery_status is not None

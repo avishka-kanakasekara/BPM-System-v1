@@ -36,6 +36,10 @@ NOT_FOUND_DETAIL = "Process not found"
 DATABASE_DETAIL = "Database unavailable"
 INTERNAL_DETAIL = "Internal server error"
 
+_PROCUREMENT_TYPES = frozenset(
+    {"PROCUREMENT", "PURCHASE", "PO", "PURCHASE_ORDER", "BUY"}
+)
+
 
 def _not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_DETAIL)
@@ -46,6 +50,61 @@ def _database_error() -> HTTPException:
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=DATABASE_DETAIL,
     )
+
+
+def _enrich_execute_parameters(
+    process: ProcessResponse | None,
+    parameters: dict | None,
+) -> dict:
+    """Ensure Agent 2 gets actionable tool parameters from the UI.
+
+    Empty execute payloads historically caused Gemini to pick weak tools
+    (e.g. update_task) that advance the stage without creating purchase
+    evidence — breaking invoice matching. For procurement-style processes
+    default to create_po_draft with concrete vendor/amount.
+    """
+    params = dict(parameters or {})
+    if params.get("tool_name"):
+        if process is not None:
+            params.setdefault("process_id", str(process.id))
+        return params
+
+    process_type = (process.process_type if process else "PROCUREMENT").upper()
+    meta = (process.metadata_json if process else None) or {}
+    is_procurement = process_type in _PROCUREMENT_TYPES or process_type.endswith(
+        "PROCUREMENT"
+    )
+    if not is_procurement and process_type not in {"GENERAL", "GENERIC", ""}:
+        return params
+
+    amount = meta.get("amount") or meta.get("required_amount") or meta.get("budget_amount")
+    purchase = meta.get("purchase_order") if isinstance(meta.get("purchase_order"), dict) else {}
+    amount = amount or purchase.get("amount") or 2500
+    vendor = (
+        params.get("vendor_id")
+        or meta.get("vendor_id")
+        or meta.get("vendor")
+        or purchase.get("vendor")
+        or purchase.get("vendor_id")
+        or "VENDOR-ACME"
+    )
+    try:
+        amount_f = float(amount)
+    except (TypeError, ValueError):
+        amount_f = 2500.0
+    if amount_f <= 0:
+        amount_f = 2500.0
+
+    params.setdefault("tool_name", "create_po_draft")
+    params.setdefault("vendor_id", str(vendor))
+    params.setdefault("amount", amount_f)
+    params.setdefault(
+        "items_summary",
+        f"{(process.name if process else 'Procurement')} line items",
+    )
+    if process is not None:
+        params.setdefault("process_id", str(process.id))
+    return params
 
 
 @router.get("", response_model=list[ProcessResponse])
@@ -154,7 +213,23 @@ async def plan_resources(
     fallback for callers whose token has no tenant claim (tests / local).
     Body tenant_id never overrides a JWT tenant.
     """
+    from app.core.config import settings
+
     tenant_id = current_user.tenant_id or payload.tenant_id
+    if tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant context is required for resource planning",
+        )
+    if (
+        settings.is_production
+        and current_user.tenant_id is None
+        and payload.tenant_id is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant context must come from the authenticated session",
+        )
     try:
         return await workflow.run_resource_planning(
             process_id,
@@ -222,6 +297,7 @@ async def execute_workflow(
     process_id: UUID,
     payload: ExecuteWorkflowRequest,
     workflow: Agent4Workflow = Depends(get_agent4_workflow),
+    repository: ProcessRepository = Depends(get_process_repository),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> WorkflowResult:
     """Dispatch the authorized task to real Agent 2 at WORKFLOW_EXECUTION.
@@ -230,10 +306,19 @@ async def execute_workflow(
     (current stage WORKFLOW_EXECUTION). Success advances to INVOICE_MATCHING;
     failure records a BPM exception.
     """
+    _ = current_user
+    try:
+        process = await repository.get_process(process_id)
+    except ProcessNotFoundError as exc:
+        raise _not_found() from exc
+    except DatabasePersistenceError as exc:
+        raise _database_error() from exc
+
+    parameters = _enrich_execute_parameters(process, payload.parameters)
     message_payload = {
         "task_type": payload.task_type,
-        "parameters": payload.parameters,
-        **payload.parameters,
+        "parameters": parameters,
+        **parameters,
     }
     try:
         return await workflow.execute_authorized(
@@ -257,10 +342,23 @@ async def complete_invoice_matching(
     workflow: Agent4Workflow = Depends(get_agent4_workflow),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> WorkflowResult:
-    """INVOICE_MATCHING → COMPLETED as an explicit operator action."""
+    """Match invoice evidence then COMPLETED, or EXCEPTION on mismatch."""
+    _ = current_user
     try:
         return await workflow.complete_invoice_matching(
-            process_id, reference=payload.reference
+            process_id,
+            invoice_number=payload.invoice_number,
+            amount=payload.amount,
+            currency=payload.currency,
+            vendor=payload.vendor,
+            po_reference=payload.po_reference,
+            expected_po_reference=payload.expected_po_reference,
+            expected_amount=payload.expected_amount,
+            expected_currency=payload.expected_currency,
+            expected_vendor=payload.expected_vendor,
+            expected_invoice_number=payload.expected_invoice_number,
+            notes=payload.notes or payload.reference,
+            reference=payload.reference,
         )
     except ProcessNotFoundError as exc:
         raise _not_found() from exc

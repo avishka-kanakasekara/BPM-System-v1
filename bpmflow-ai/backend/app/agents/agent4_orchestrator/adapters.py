@@ -190,9 +190,20 @@ class Agent2Adapter(AgentAdapter):
         try:
             response = await self._get_agent().handle(local_message, session=session)
         except Exception as exc:
-            raise AgentUnavailableError(
-                AGENT_2, f"Agent 2 execution pipeline failed: {exc}"
-            ) from exc
+            # Prefer an honest ERROR envelope over raising — Agent 4 can then
+            # record a BPM exception without turning the HTTP request into 500.
+            return AgentMessage(
+                metadata=_reply_metadata(
+                    message, AGENT_2, AgentMessageType.ERROR
+                ),
+                payload={
+                    "error": "AGENT2_EXECUTION_FAILED",
+                    "detail": str(exc),
+                    "receipt_status": "FAILED",
+                    "error_message": str(exc),
+                },
+                status="ERROR",
+            )
         finally:
             if session is not None:
                 await session.close()

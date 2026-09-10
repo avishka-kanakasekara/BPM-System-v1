@@ -199,40 +199,53 @@ async def get_allocation_service(
 ) -> AllocationServiceProtocol:
     """FastAPI dependency to get the real allocation service.
 
-    This dependency:
-    - Imports ResourceAllocationService lazily (not at import time)
-    - Wires optional LLM explanation generator based on Agent 3 runtime config
-    - Returns the real service for production use
-    - Tests should override with a fake service
-
-    Returns:
-        ResourceAllocationService instance
+    Uses Postgres when reachable; otherwise Supabase REST against real seeded
+    resource tables. Optional explanations prefer Gemini when configured.
     """
     from app.agents.agent3_resources.service import ResourceAllocationService
     from app.agents.agent3_resources.repositories.postgres_resource_repository import (
         PostgresResourceRepository,
+    )
+    from app.agents.agent3_resources.repositories.rest_resource_repository import (
+        RestResourceRepository,
     )
     from app.agents.agent3_resources.runtime_config import (
         get_agent3_llm_config,
         get_shared_openai_client,
     )
     from app.agents.agent3_resources.llm_explainer import (
+        GeminiExplanationGenerator,
         OpenAIExplanationGenerator,
         ResilientFallbackExplainer,
     )
+    from app.core.config import get_settings
+    from app.core.supabase_rest import use_supabase_rest_fallback
 
-    # Get session factory lazily
-    session_factory = get_session_factory()
+    settings = get_settings()
 
-    # Create resource repository with session factory
-    resource_repository = PostgresResourceRepository(session_factory)
+    if use_supabase_rest_fallback():
+        resource_repository = RestResourceRepository()
+    else:
+        session_factory = get_session_factory()
+        resource_repository = PostgresResourceRepository(session_factory)
 
     try:
         config = get_agent3_llm_config()
     except Exception:
         config = None
 
-    if config and config.enabled:
+    gemini_key = (settings.GEMINI_API_KEY or "").strip()
+    gemini_ready = bool(gemini_key) and not gemini_key.startswith("your_")
+
+    # Prefer Gemini whenever configured (same key as Agent1/Agent2).
+    if gemini_ready:
+        explainer = ResilientFallbackExplainer(
+            enabled=True,
+            llm_generator=GeminiExplanationGenerator(
+                model=settings.GEMINI_MODEL_FLASH or "gemini-3.6-flash"
+            ),
+        )
+    elif config and config.enabled:
         client = get_shared_openai_client(config)
         if client is not None:
             generator = OpenAIExplanationGenerator(
@@ -248,51 +261,40 @@ async def get_allocation_service(
     else:
         explainer = ResilientFallbackExplainer(enabled=False)
 
-    # Create and return allocation service with explainer
     return ResourceAllocationService(resource_repository, explainer=explainer)
 
 
 async def get_persistence_service(
 ) -> PersistenceProtocol:
-    """FastAPI dependency to get the real persistence service.
-
-    This dependency:
-    - Imports RecommendationWriteRepository lazily (not at import time)
-    - Returns the real repository for production use
-    - Tests should override with a fake service
-
-    Returns:
-        RecommendationWriteRepository instance
-    """
+    """FastAPI dependency to get the real persistence service."""
     from app.agents.agent3_resources.repositories.recommendation_repository import (
         RecommendationWriteRepository,
     )
+    from app.agents.agent3_resources.repositories.rest_recommendation_repository import (
+        RestRecommendationWriteRepository,
+    )
+    from app.core.supabase_rest import use_supabase_rest_fallback
 
-    # Get session factory lazily
+    if use_supabase_rest_fallback():
+        return RestRecommendationWriteRepository()
+
     session_factory = get_session_factory()
-
-    # Create and return write repository
     return RecommendationWriteRepository(session_factory)
 
 
 async def get_read_repository(
 ) -> ReadRepositoryProtocol:
-    """FastAPI dependency to get the real read repository.
-
-    This dependency:
-    - Imports RecommendationWriteRepository lazily (not at import time)
-    - Returns the real repository for production use
-    - Tests should override with a fake repository
-
-    Returns:
-        RecommendationWriteRepository instance (has read methods)
-    """
+    """FastAPI dependency to get the real read repository."""
     from app.agents.agent3_resources.repositories.recommendation_repository import (
         RecommendationWriteRepository,
     )
+    from app.agents.agent3_resources.repositories.rest_recommendation_repository import (
+        RestRecommendationWriteRepository,
+    )
+    from app.core.supabase_rest import use_supabase_rest_fallback
 
-    # Get session factory lazily
+    if use_supabase_rest_fallback():
+        return RestRecommendationWriteRepository()
+
     session_factory = get_session_factory()
-
-    # Create and return repository (has both read and write methods)
     return RecommendationWriteRepository(session_factory)

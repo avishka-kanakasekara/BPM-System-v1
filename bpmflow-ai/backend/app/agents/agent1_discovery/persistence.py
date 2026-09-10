@@ -75,35 +75,38 @@ def persist_discovery(
     process: ProcessJSON,
     documents: list[dict[str, Any]],
 ) -> Any:
-    """Store the discovered workflow and return the process row."""
+    """Store the discovered workflow on the process identified by message.process_id.
+
+    If a process row already exists (Create Process → upload), discovery fields are
+    updated in place. current_stage is never written here — Agent 4 owns stages.
+    """
     if db is not None:
         return _persist_sqlalchemy(db, message, process, documents)
     return _persist_rest(message, process, documents)
 
 
-def _persist_sqlalchemy(
-    db: Session,
-    message: DiscoveryAgentMessage,
-    process: ProcessJSON,
-    documents: list[dict[str, Any]],
-) -> Process:
-    name = process.process_name or "Discovered process"
-    row = Process(
-        id=message.process_id,
-        name=name,
-        description="Workflow discovered by Agent 1 from uploaded documents",
-        process_type="discovered",
-        status="draft" if message.status != "COMPLETE" else "active",
-        process_json=message.payload,
-        overall_confidence=message.overall_confidence,
-        discovery_status=message.status,
-        trace_id=message.trace_id,
-        message_id=message.message_id,
-        current_stage="DRAFT",
-    )
-    db.add(row)
-    db.flush()
+def _apply_discovery_fields(row: Process, message: DiscoveryAgentMessage, process: ProcessJSON) -> None:
+    name = process.process_name or row.name or "Discovered process"
+    row.name = name
+    if not row.description:
+        row.description = "Workflow discovered by Agent 1 from uploaded documents"
+    if not row.process_type or row.process_type in {"", "general", "standard"}:
+        row.process_type = "discovered"
+    if message.status == "COMPLETE" and row.status == "draft":
+        row.status = "active"
+    row.process_json = message.payload
+    row.overall_confidence = message.overall_confidence
+    row.discovery_status = message.status
+    row.trace_id = message.trace_id
+    row.message_id = message.message_id
 
+
+def _replace_discovery_tasks(db: Session, process_id: UUID, process: ProcessJSON) -> None:
+    """Replace discovery-derived task rows for early-stage processes only."""
+    existing = db.query(ProcessTask).filter(ProcessTask.process_id == process_id).all()
+    for task in existing:
+        db.delete(task)
+    db.flush()
     for index, activity in enumerate(process.activities):
         details: list[str] = []
         if activity.entry_conditions:
@@ -113,7 +116,7 @@ def _persist_sqlalchemy(
         db.add(
             ProcessTask(
                 id=uuid4(),
-                process_id=row.id,
+                process_id=process_id,
                 title=activity.name,
                 description="\n".join(details) or None,
                 status="pending",
@@ -123,6 +126,40 @@ def _persist_sqlalchemy(
                 avg_duration=activity.avg_duration,
             )
         )
+
+
+def _persist_sqlalchemy(
+    db: Session,
+    message: DiscoveryAgentMessage,
+    process: ProcessJSON,
+    documents: list[dict[str, Any]],
+) -> Process:
+    existing = db.get(Process, message.process_id)
+    updated_existing = existing is not None
+    if existing is not None:
+        row = existing
+        _apply_discovery_fields(row, message, process)
+        stage = (row.current_stage or "DRAFT").upper()
+        if stage in {"DRAFT", "DISCOVERING"}:
+            _replace_discovery_tasks(db, row.id, process)
+    else:
+        name = process.process_name or "Discovered process"
+        row = Process(
+            id=message.process_id,
+            name=name,
+            description="Workflow discovered by Agent 1 from uploaded documents",
+            process_type="discovered",
+            status="draft" if message.status != "COMPLETE" else "active",
+            process_json=message.payload,
+            overall_confidence=message.overall_confidence,
+            discovery_status=message.status,
+            trace_id=message.trace_id,
+            message_id=message.message_id,
+            current_stage="DRAFT",
+        )
+        db.add(row)
+        db.flush()
+        _replace_discovery_tasks(db, row.id, process)
 
     for item in process.exceptions:
         db.add(
@@ -171,6 +208,7 @@ def _persist_sqlalchemy(
             "task_count": len(process.activities),
             "document_count": len(documents),
             "store": "postgres",
+            "updated_existing": updated_existing,
         },
     )
     return row
@@ -193,7 +231,7 @@ def _persist_rest(
 ) -> SimpleNamespace:
     import json
 
-    from app.core.supabase_rest import rest_insert
+    from app.core.supabase_rest import rest_insert, rest_select, rest_update
 
     name = process.process_name or "Discovered process"
     process_id = str(message.process_id)
@@ -205,25 +243,51 @@ def _persist_rest(
         "documents": _jsonable_docs(documents),
         "process_json": message.payload,
     }
-    base_row = {
-        "id": process_id,
-        "name": name,
-        "description": json.dumps(meta),
-        "process_type": "discovered",
-        "status": "draft" if message.status != "COMPLETE" else "active",
-    }
-    full_row = {
-        **base_row,
-        "process_json": message.payload,
-        "overall_confidence": message.overall_confidence,
-        "discovery_status": message.status,
-        "trace_id": str(message.trace_id),
-        "message_id": str(message.message_id),
-    }
-    try:
-        stored = rest_insert("processes", full_row)
-    except Exception:
-        stored = rest_insert("processes", base_row)
+    existing_rows = rest_select("processes", {"id": f"eq.{process_id}", "select": "*"})
+    if existing_rows:
+        patch = {
+            "name": name,
+            "process_json": message.payload,
+            "overall_confidence": message.overall_confidence,
+            "discovery_status": message.status,
+            "trace_id": str(message.trace_id),
+            "message_id": str(message.message_id),
+            "description": json.dumps(meta),
+        }
+        try:
+            stored = rest_update("processes", {"id": f"eq.{process_id}"}, patch)
+        except Exception:
+            stored = rest_update(
+                "processes",
+                {"id": f"eq.{process_id}"},
+                {
+                    "name": name,
+                    "description": json.dumps(meta),
+                    "status": "draft" if message.status != "COMPLETE" else "active",
+                },
+            )
+        if not stored:
+            stored = existing_rows[0]
+    else:
+        base_row = {
+            "id": process_id,
+            "name": name,
+            "description": json.dumps(meta),
+            "process_type": "discovered",
+            "status": "draft" if message.status != "COMPLETE" else "active",
+        }
+        full_row = {
+            **base_row,
+            "process_json": message.payload,
+            "overall_confidence": message.overall_confidence,
+            "discovery_status": message.status,
+            "trace_id": str(message.trace_id),
+            "message_id": str(message.message_id),
+        }
+        try:
+            stored = rest_insert("processes", full_row)
+        except Exception:
+            stored = rest_insert("processes", base_row)
 
     for index, activity in enumerate(process.activities):
         details: list[str] = []
@@ -274,6 +338,7 @@ def _persist_rest(
             "task_count": len(process.activities),
             "document_count": len(documents),
             "store": "supabase_rest",
+            "updated_existing": bool(existing_rows),
         },
     )
     return _process_view(stored, message.payload)

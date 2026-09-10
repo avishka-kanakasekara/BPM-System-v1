@@ -3,7 +3,7 @@
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -15,7 +15,9 @@ from app.agents.agent1_discovery.persistence import (
 from app.agents.agent1_discovery.service import run_discovery
 from app.core.config import settings
 from app.core.database import get_sync_db
+from app.core.security import get_current_user
 from app.schemas.agent_message import DiscoveryAgentMessage
+from app.schemas.auth import CurrentUser
 
 router = APIRouter()
 
@@ -74,14 +76,19 @@ class ProcessDetail(BaseModel):
     summary="Discover a process from documents",
     description=(
         "Accepts multipart file uploads (PDF, DOCX, CSV — allow-list from "
-        "`ALLOWED_FILE_TYPES`). Returns an informational discovery message only; "
-        "Agent 1 does not approve or decide. The discovered workflow is stored in Supabase."
+        "`ALLOWED_FILE_TYPES`). Optional form field `process_id` attaches discovery "
+        "to an existing Create Process row. Returns an informational discovery "
+        "message only; Agent 1 does not approve or decide. Does not modify "
+        "current_stage — Agent 4 owns workflow stages."
     ),
 )
 def discover(
     files: UploadFiles,
+    process_id: Annotated[UUID | None, Form()] = None,
     db: Session | None = Depends(get_sync_db),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> DiscoveryAgentMessage:
+    _ = current_user  # authenticated identity required; discovery is informational
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required")
     allowed = settings.allowed_file_types_list
@@ -96,11 +103,26 @@ def discover(
                     f"Allowed: {', '.join(ext.upper() for ext in allowed)}"
                 ),
             )
-    return run_discovery(files, db)
+        size = getattr(upload, "size", None)
+        if isinstance(size, int) and size > settings.max_upload_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File '{name}' exceeds the {settings.MAX_UPLOAD_MB} MB limit.",
+            )
+    if process_id is not None:
+        existing = get_process(db, process_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Process not found")
+    return run_discovery(files, db, process_id=process_id)
 
 
 @router.get("/processes", response_model=list[ProcessSummary])
-def list_processes(db: Session | None = Depends(get_sync_db), limit: int = 20) -> list[ProcessSummary]:
+def list_processes(
+    db: Session | None = Depends(get_sync_db),
+    limit: int = 20,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> list[ProcessSummary]:
+    _ = current_user
     rows = list_recent_processes(db, limit=min(limit, 50))
     summaries: list[ProcessSummary] = []
     for row in rows:
@@ -121,7 +143,12 @@ def list_processes(db: Session | None = Depends(get_sync_db), limit: int = 20) -
 
 
 @router.get("/processes/{process_id}", response_model=ProcessDetail)
-def read_process(process_id: UUID, db: Session | None = Depends(get_sync_db)) -> ProcessDetail:
+def read_process(
+    process_id: UUID,
+    db: Session | None = Depends(get_sync_db),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> ProcessDetail:
+    _ = current_user
     row = get_process(db, process_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Process not found")

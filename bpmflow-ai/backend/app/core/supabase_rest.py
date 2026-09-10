@@ -60,6 +60,17 @@ def rest_insert(table: str, row: dict[str, Any]) -> dict[str, Any]:
         return data if isinstance(data, dict) else row
 
 
+def rest_update(table: str, match: dict[str, str], patch: dict[str, Any]) -> dict[str, Any]:
+    """PATCH rows matching PostgREST filters (e.g. id=eq.<uuid>)."""
+    with _client() as client:
+        response = client.patch(f"/rest/v1/{table}", params=match, json=patch)
+        _raise_for_status(response, f"update {table}")
+        data = response.json()
+        if isinstance(data, list):
+            return data[0] if data else patch
+        return data if isinstance(data, dict) else patch
+
+
 def rest_select(table: str, params: dict[str, str]) -> list[dict[str, Any]]:
     with _client() as client:
         response = client.get(f"/rest/v1/{table}", params=params)
@@ -96,3 +107,10 @@ def ping_rest() -> bool:
     except Exception:
         logger.exception("supabase_rest_ping_failed")
         return False
+
+
+def use_supabase_rest_fallback() -> bool:
+    """True when the Postgres pooler is unreachable but PostgREST works."""
+    from app.core.database import get_sync_engine
+
+    return get_sync_engine() is None and supabase_rest_configured()

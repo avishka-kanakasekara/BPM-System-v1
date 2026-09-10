@@ -38,7 +38,8 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.database import get_db
+from app.core.database import get_db, get_sync_engine
+from app.core.supabase_rest import rest_insert, rest_select, supabase_rest_configured
 from app.models.user import User
 from app.schemas.auth import ALLOWED_USER_ROLES, CurrentUser
 
@@ -240,35 +241,123 @@ async def load_user_profile(
     user_id: UUID,
     *,
     tenant_id: Optional[UUID] = None,
+    claims: Optional[dict] = None,
 ) -> CurrentUser:
-    """Load public.users by id. Does not create profiles.
+    """Load public.users by id. Does not create profiles via ORM.
 
-    tenant_id is the value already extracted from verified JWT
-    app_metadata (or None). It is never read from the users table.
+    When the async Postgres pooler is unreachable, falls back to Supabase
+    PostgREST (same path Agent 1 health already uses). Missing profiles are
+    provisioned from verified JWT claims so sign-up → first API call works.
+    tenant_id is taken only from verified JWT app_metadata (or None).
     """
+    orm_error: Exception | None = None
     try:
         row = await db.get(User, user_id)
+        if row is not None:
+            role = row.role or ""
+            if role not in ALLOWED_USER_ROLES:
+                raise _forbidden(PROFILE_NOT_FOUND_DETAIL)
+            return CurrentUser(
+                id=row.id,
+                email=row.email,
+                full_name=row.full_name,
+                role=role,
+                department=row.department,
+                tenant_id=tenant_id,
+            )
+    except HTTPException:
+        raise
     except Exception as exc:
+        orm_error = exc
+
+    if supabase_rest_configured():
+        try:
+            return await asyncio.to_thread(
+                _load_or_provision_user_rest,
+                user_id,
+                tenant_id,
+                claims,
+            )
+        except HTTPException:
+            raise
+        except Exception as rest_exc:
+            if orm_error is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Database unavailable",
+                ) from rest_exc
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database unavailable",
+            ) from orm_error
+
+    if orm_error is not None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database unavailable",
-        ) from exc
+        ) from orm_error
 
-    if row is None:
-        raise _forbidden(PROFILE_NOT_FOUND_DETAIL)
+    raise _forbidden(PROFILE_NOT_FOUND_DETAIL)
 
-    role = row.role or ""
+
+def _current_user_from_rest_row(
+    row: dict,
+    *,
+    tenant_id: Optional[UUID],
+) -> CurrentUser:
+    role = str(row.get("role") or "")
     if role not in ALLOWED_USER_ROLES:
         raise _forbidden(PROFILE_NOT_FOUND_DETAIL)
-
     return CurrentUser(
-        id=row.id,
-        email=row.email,
-        full_name=row.full_name,
+        id=UUID(str(row["id"])),
+        email=row.get("email"),
+        full_name=row.get("full_name"),
         role=role,
-        department=row.department,
+        department=row.get("department"),
         tenant_id=tenant_id,
     )
+
+
+def _load_or_provision_user_rest(
+    user_id: UUID,
+    tenant_id: Optional[UUID],
+    claims: Optional[dict],
+) -> CurrentUser:
+    """Sync PostgREST load/create for public.users (service role)."""
+    rows = rest_select(
+        "users",
+        {
+            "id": f"eq.{user_id}",
+            "select": "id,email,full_name,role,department",
+            "limit": "1",
+        },
+    )
+    if rows:
+        return _current_user_from_rest_row(rows[0], tenant_id=tenant_id)
+
+    if not claims:
+        raise _forbidden(PROFILE_NOT_FOUND_DETAIL)
+
+    email = claims.get("email")
+    if not email or not isinstance(email, str):
+        email = f"{user_id}@users.local"
+    user_metadata = claims.get("user_metadata")
+    full_name = None
+    if isinstance(user_metadata, dict):
+        raw_name = user_metadata.get("full_name")
+        if isinstance(raw_name, str) and raw_name.strip():
+            full_name = raw_name.strip()
+
+    inserted = rest_insert(
+        "users",
+        {
+            "id": str(user_id),
+            "email": email,
+            "full_name": full_name,
+            "role": "requester",
+        },
+    )
+    return _current_user_from_rest_row(inserted, tenant_id=tenant_id)
 
 
 def tenant_id_from_app_metadata(claims: dict) -> Optional[UUID]:
@@ -290,6 +379,66 @@ def tenant_id_from_app_metadata(claims: dict) -> Optional[UUID]:
         return None
 
 
+def _demo_tenant_id() -> Optional[UUID]:
+    raw = (settings.DEMO_TENANT_ID or "").strip()
+    if not raw:
+        return None
+    try:
+        return UUID(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def ensure_dev_tenant_app_metadata(user_id: UUID) -> Optional[UUID]:
+    """Assign DEMO_TENANT_ID to app_metadata when missing (development only).
+
+    Uses the Supabase Admin API with the service-role key. Returns the
+    provisioned tenant id, or None when provisioning is unavailable.
+    """
+    if not settings.is_development:
+        return None
+    tenant_id = _demo_tenant_id()
+    if tenant_id is None:
+        return None
+    if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_ROLE_KEY:
+        return None
+
+    url = (
+        f"{settings.SUPABASE_URL.rstrip('/')}/auth/v1/admin/users/{user_id}"
+    )
+    headers = {
+        "apikey": settings.SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        with httpx.Client(timeout=20.0, trust_env=False) as client:
+            # Preserve any existing app_metadata keys; only set tenant_id.
+            existing = client.get(url, headers=headers)
+            app_metadata: dict = {}
+            if existing.is_success:
+                body = existing.json()
+                raw_meta = body.get("app_metadata") if isinstance(body, dict) else None
+                if isinstance(raw_meta, dict):
+                    app_metadata = dict(raw_meta)
+            if app_metadata.get("tenant_id"):
+                try:
+                    return UUID(str(app_metadata["tenant_id"]))
+                except (TypeError, ValueError):
+                    pass
+            app_metadata["tenant_id"] = str(tenant_id)
+            response = client.put(
+                url,
+                headers=headers,
+                json={"app_metadata": app_metadata},
+            )
+            if not response.is_success:
+                return None
+            return tenant_id
+    except Exception:
+        return None
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
@@ -301,6 +450,9 @@ async def get_current_user(
     step. Agent 3 additionally requires a tenant via
     ``get_verified_principal`` (same issuer, fail-closed on missing
     app_metadata.tenant_id).
+
+    When the Postgres pooler is down but Supabase REST is healthy, skips the
+    slow async ORM attempt and loads/provisions the profile over REST.
     """
     if credentials is None or credentials.scheme.lower() != "bearer" or not credentials.credentials:
         raise _unauthorized()
@@ -312,7 +464,19 @@ async def get_current_user(
 
     user_id = UUID(str(claims["sub"]))
     tenant_id = tenant_id_from_app_metadata(claims)
-    return await load_user_profile(db, user_id, tenant_id=tenant_id)
+    if tenant_id is None and settings.is_development:
+        tenant_id = await asyncio.to_thread(ensure_dev_tenant_app_metadata, user_id)
+
+    # Avoid a multi-second asyncpg timeout when health already uses REST.
+    if get_sync_engine() is None and supabase_rest_configured():
+        return await asyncio.to_thread(
+            _load_or_provision_user_rest,
+            user_id,
+            tenant_id,
+            claims,
+        )
+
+    return await load_user_profile(db, user_id, tenant_id=tenant_id, claims=claims)
 
 
 def require_roles(*roles: str) -> Callable:
@@ -551,7 +715,25 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
             )
 
         app_metadata = claims.get("app_metadata", {})
-        tenant_id_str = app_metadata.get("tenant_id")
+        tenant_id_str = app_metadata.get("tenant_id") if isinstance(app_metadata, dict) else None
+
+        try:
+            user_id = UUID(sub)
+        except (ValueError, AttributeError):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error_code": "INVALID_TOKEN",
+                    "message": "Invalid user ID in token",
+                    "retryable": False,
+                },
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        if not tenant_id_str and settings.is_development:
+            provisioned = await asyncio.to_thread(ensure_dev_tenant_app_metadata, user_id)
+            if provisioned is not None:
+                tenant_id_str = str(provisioned)
 
         if not tenant_id_str:
             raise HTTPException(
@@ -573,19 +755,6 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
                     "message": "Tenant claim is not a valid UUID",
                     "retryable": False,
                 },
-            )
-
-        try:
-            user_id = UUID(sub)
-        except (ValueError, AttributeError):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={
-                    "error_code": "INVALID_TOKEN",
-                    "message": "Invalid user ID in token",
-                    "retryable": False,
-                },
-                headers={"WWW-Authenticate": "Bearer"},
             )
 
         role_claims = claims.get("role", "authenticated")

@@ -1,3 +1,63 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    --bpm-canvas: #f4f6f8;
+    --bpm-surface: #ffffff;
+    --bpm-border: rgb(226 232 240 / 0.9);
+    --bpm-ink: #0f172a;
+    --bpm-muted: #64748b;
+  }
+
+  html {
+    @apply antialiased;
+    font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply m-0 min-h-screen bg-[var(--bpm-canvas)] text-base-content;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.02em;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-base-content/40;
+  }
+}
+
+@layer components {
+  .bpm-table-wrap {
+    @apply hidden overflow-x-auto md:block;
+  }
+
+  .bpm-table {
+    @apply min-w-full text-left text-sm;
+  }
+
+  .bpm-table thead tr {
+    @apply border-b border-base-200 text-xs font-medium uppercase tracking-wide text-base-content/55;
+  }
+
+  .bpm-table th {
+    @apply pb-3 pr-4 font-medium;
+  }
+
+  .bpm-table tbody tr {
+    @apply border-b border-base-200/70 last:border-0;
+  }
+
+  .bpm-table td {
+    @apply py-3.5 pr-4 align-middle;
+  }
+}

@@ -10,7 +10,7 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-# Shared backend .env (bpmflow-ai/backend/.env) — one env file for all agents.
+# Shared backend .env (bpmflow-ai/backend/.env) — one file for all agents.
 ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     # ── Feature flags ───────────────────────────────────────────────────────
     EMAIL_DRY_RUN: bool = True
     ENVIRONMENT: str = "development"
+    # Align with monolith ENV so production fail-closed checks agree.
+    ENV: str = "development"
 
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
@@ -66,3 +68,17 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Prefer unified core settings when Agent 2's dedicated fields are empty.
+try:
+    from app.core.config import settings as core_settings
+
+    if not settings.GEMINI_API_KEY and getattr(core_settings, "GEMINI_API_KEY", ""):
+        object.__setattr__(settings, "GEMINI_API_KEY", core_settings.GEMINI_API_KEY)
+    if getattr(core_settings, "GEMINI_OFFLINE", False):
+        object.__setattr__(settings, "GEMINI_OFFLINE", True)
+    if getattr(core_settings, "ENV", None):
+        object.__setattr__(settings, "ENV", core_settings.ENV)
+        object.__setattr__(settings, "ENVIRONMENT", core_settings.ENV)
+except Exception:
+    pass

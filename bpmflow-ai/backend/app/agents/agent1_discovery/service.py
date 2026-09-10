@@ -311,6 +311,7 @@ def _wrap_message(
     evidence_references: list[EvidenceReference],
     had_partial_failure: bool,
     discovery_errors: list[str],
+    process_id: UUID | None = None,
 ) -> DiscoveryAgentMessage:
     confidences = list(process.confidence.values()) if process.confidence else [0.0]
     overall = round(sum(confidences) / len(confidences), 4) if confidences else 0.0
@@ -325,15 +326,19 @@ def _wrap_message(
             "evidence_count": len(evidence_references),
             "error_count": len(discovery_errors),
             "overall_confidence": overall,
+            "process_id": str(process_id) if process_id else None,
         },
     )
-    return DiscoveryAgentMessage(
-        sender="agent1_discovery",
-        payload=payload,
-        evidence_references=evidence_references,
-        overall_confidence=overall,
-        status=_message_status(process, had_partial_failure=had_partial_failure),
-    )
+    kwargs: dict[str, Any] = {
+        "sender": "agent1_discovery",
+        "payload": payload,
+        "evidence_references": evidence_references,
+        "overall_confidence": overall,
+        "status": _message_status(process, had_partial_failure=had_partial_failure),
+    }
+    if process_id is not None:
+        kwargs["process_id"] = process_id
+    return DiscoveryAgentMessage(**kwargs)
 
 
 def _wrap_and_persist(
@@ -344,12 +349,14 @@ def _wrap_and_persist(
     had_partial_failure: bool,
     discovery_errors: list[str],
     documents: list[dict[str, Any]],
+    process_id: UUID | None = None,
 ) -> DiscoveryAgentMessage:
     message = _wrap_message(
         process,
         evidence_references=evidence_references,
         had_partial_failure=had_partial_failure,
         discovery_errors=discovery_errors,
+        process_id=process_id,
     )
     try:
         persist_discovery(db, message, process, documents)
@@ -363,14 +370,28 @@ def _wrap_and_persist(
     return message
 
 
-def run_discovery(files: list[Any], db: Session | None) -> DiscoveryAgentMessage:
+def run_discovery(
+    files: list[Any],
+    db: Session | None,
+    *,
+    process_id: UUID | None = None,
+) -> DiscoveryAgentMessage:
     """Ingest documents, discover a process, and return an informational discovery message.
+
+    When ``process_id`` is provided, discovery is persisted onto that existing process
+    row (Create Process → upload). When omitted, a new process id is allocated.
 
     Pipeline per file:
     validate_and_ingest → extract_text → classify_document → extract_entities
     → extract_relations → analyze_event_log (CSV only). Then build_process_json.
     """
-    logger.info("run_discovery_start", extra={"file_count": len(files) if files else 0})
+    logger.info(
+        "run_discovery_start",
+        extra={
+            "file_count": len(files) if files else 0,
+            "process_id": str(process_id) if process_id else None,
+        },
+    )
     discovery_errors: list[str] = []
 
     if not files:
@@ -387,6 +408,7 @@ def run_discovery(files: list[Any], db: Session | None) -> DiscoveryAgentMessage
             had_partial_failure=True,
             discovery_errors=discovery_errors,
             documents=[],
+            process_id=process_id,
         )
 
     all_entities: list[Entity] = []
@@ -599,4 +621,5 @@ def run_discovery(files: list[Any], db: Session | None) -> DiscoveryAgentMessage
         had_partial_failure=had_partial_failure,
         discovery_errors=discovery_errors,
         documents=documents,
+        process_id=process_id,
     )

@@ -1,6 +1,7 @@
 """
 Shared persistence helpers so Agent 2 can write real process, task, and
 workflow evidence to Supabase/Postgres whenever a session is available.
+Falls back to PostgREST when the SQLAlchemy session is unavailable.
 """
 
 from __future__ import annotations
@@ -121,27 +122,91 @@ async def ensure_task(
         return None
 
 
+def _merge_dicts(merged: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(merged)
+    for key, value in patch.items():
+        if isinstance(value, list) and isinstance(out.get(key), list):
+            out[key] = list(out[key]) + value
+        elif isinstance(value, dict) and isinstance(out.get(key), dict):
+            nested = dict(out[key])
+            nested.update(value)
+            out[key] = nested
+        else:
+            out[key] = value
+    return out
+
+
+def _merge_process_metadata_rest(process_id: str, patch: Dict[str, Any]) -> None:
+    """Persist tool evidence via PostgREST when SQLAlchemy session is unavailable."""
+    try:
+        from app.core.supabase_rest import rest_select, rest_update, supabase_rest_configured
+
+        if not supabase_rest_configured():
+            logger.warning("merge_process_metadata: no session and REST unavailable")
+            return
+        rows = rest_select(
+            "processes",
+            {"id": f"eq.{process_id}", "select": "id,metadata_json", "limit": "1"},
+        )
+        if not rows:
+            logger.warning(f"merge_process_metadata REST: process {process_id} not found")
+            return
+        merged = _merge_dicts(dict(rows[0].get("metadata_json") or {}), patch)
+        rest_update(
+            "processes",
+            {"id": f"eq.{process_id}"},
+            {"metadata_json": merged},
+        )
+    except Exception as exc:
+        logger.warning(f"merge_process_metadata REST failed: {exc}")
+
+
+def _record_workflow_event_rest(
+    process_id: str,
+    event_type: str,
+    *,
+    task_id: str = "",
+    actor: str = "agent_2",
+    metadata: Optional[Dict[str, Any]] = None,
+    previous_state: str = "",
+    new_state: str = "",
+) -> None:
+    try:
+        from app.core.supabase_rest import rest_insert, supabase_rest_configured
+
+        if not supabase_rest_configured():
+            return
+        row: Dict[str, Any] = {
+            "process_id": process_id,
+            "event_type": event_type,
+            "actor": actor,
+            "agent": "agent_2",
+            "metadata_json": metadata or {},
+            "previous_state": previous_state or None,
+            "new_state": new_state or None,
+        }
+        if task_id:
+            row["task_id"] = task_id
+        rest_insert("workflow_events", row)
+    except Exception as exc:
+        logger.warning(f"record_workflow_event REST failed: {exc}")
+
+
 async def merge_process_metadata(
     session: Optional[AsyncSession],
     process_id: str,
     patch: Dict[str, Any],
 ) -> None:
-    if session is None or not process_id or not patch:
+    if not process_id or not patch:
+        return
+    if session is None:
+        _merge_process_metadata_rest(process_id, patch)
         return
     proc = await ensure_process_instance(session, process_id, metadata=patch)
     if proc is None:
+        _merge_process_metadata_rest(process_id, patch)
         return
-    merged = dict(proc.metadata_json or {})
-    for key, value in patch.items():
-        if isinstance(value, list) and isinstance(merged.get(key), list):
-            merged[key] = list(merged[key]) + value
-        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
-            nested = dict(merged[key])
-            nested.update(value)
-            merged[key] = nested
-        else:
-            merged[key] = value
-    proc.metadata_json = merged
+    proc.metadata_json = _merge_dicts(dict(proc.metadata_json or {}), patch)
     proc.updated_at = datetime.now(timezone.utc)
     try:
         await session.commit()
@@ -151,6 +216,7 @@ async def merge_process_metadata(
             await session.rollback()
         except Exception:
             pass
+        _merge_process_metadata_rest(process_id, patch)
 
 
 async def record_workflow_event(
@@ -164,7 +230,18 @@ async def record_workflow_event(
     previous_state: str = "",
     new_state: str = "",
 ) -> Optional[WorkflowEvent]:
-    if session is None or not process_id:
+    if not process_id:
+        return None
+    if session is None:
+        _record_workflow_event_rest(
+            process_id,
+            event_type,
+            task_id=task_id,
+            actor=actor,
+            metadata=metadata,
+            previous_state=previous_state,
+            new_state=new_state,
+        )
         return None
     await ensure_process_instance(session, process_id)
     event = WorkflowEvent(
@@ -189,4 +266,13 @@ async def record_workflow_event(
             await session.rollback()
         except Exception:
             pass
-        return event
+        _record_workflow_event_rest(
+            process_id,
+            event_type,
+            task_id=task_id,
+            actor=actor,
+            metadata=metadata,
+            previous_state=previous_state,
+            new_state=new_state,
+        )
+        return None

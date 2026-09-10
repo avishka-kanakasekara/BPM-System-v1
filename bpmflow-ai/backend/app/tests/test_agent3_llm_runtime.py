@@ -64,9 +64,19 @@ def reset_runtime_state(monkeypatch):
     monkeypatch.delenv("AGENT3_LLM_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.delenv("AGENT3_LLM_TEMPERATURE", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    # These OpenAI-path tests must not pick up a real/shared GEMINI_API_KEY
+    # from backend/.env (Gemini is preferred when present).
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    monkeypatch.setenv("GEMINI_OFFLINE", "true")
+    from app.core.config import get_settings
+    import app.core.config as config_mod
+
+    get_settings.cache_clear()
+    config_mod.settings = get_settings()
     yield
     reset_agent3_llm_runtime()
-
+    get_settings.cache_clear()
+    config_mod.settings = get_settings()
 
 class TestAgent3LLMRuntime:
 

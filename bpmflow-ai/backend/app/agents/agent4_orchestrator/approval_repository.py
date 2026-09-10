@@ -1,9 +1,11 @@
 """Approval request persistence for Agent 4.
 
 In-memory for unit tests; SQLAlchemy async for PostgreSQL.
+When the Postgres pooler is unreachable, list/get fall back to Supabase REST.
 """
 
 from abc import ABC, abstractmethod
+import asyncio
 from datetime import datetime, timezone
 from typing import Dict, List
 from uuid import UUID, uuid4
@@ -11,6 +13,13 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.supabase_rest import (
+    rest_insert,
+    rest_select,
+    rest_update,
+    supabase_rest_configured,
+    use_supabase_rest_fallback,
+)
 from app.models.approval import ApprovalRequest
 from app.models.audit import AuditLog
 
@@ -49,6 +58,137 @@ def approval_from_orm(row: ApprovalRequest) -> ApprovalRequestRecord:
         created_at=row.created_at,
         decided_at=row.decided_at,
     )
+
+
+def approval_from_rest(row: dict) -> ApprovalRequestRecord:
+    return ApprovalRequestRecord.model_validate(
+        {
+            "id": row["id"],
+            "process_id": row["process_id"],
+            "task_id": row.get("task_id"),
+            "requested_by": row.get("requested_by"),
+            "approver_id": row.get("approver_id"),
+            "status": row["status"],
+            "risk_level": row["risk_level"],
+            "reason": row["reason"],
+            "decision": row.get("decision"),
+            "comments": row.get("comments"),
+            "created_at": row["created_at"],
+            "decided_at": row.get("decided_at"),
+        }
+    )
+
+
+def _list_approvals_rest(status: ApprovalStatus | None) -> List[ApprovalRequestRecord]:
+    params: dict[str, str] = {
+        "select": "id,process_id,task_id,requested_by,approver_id,status,risk_level,reason,decision,comments,created_at,decided_at",
+        "order": "created_at.desc",
+    }
+    if status is not None:
+        params["status"] = f"eq.{status.value}"
+    return [approval_from_rest(row) for row in rest_select("approval_requests", params)]
+
+
+def _get_approval_rest(approval_id: UUID) -> ApprovalRequestRecord:
+    rows = rest_select(
+        "approval_requests",
+        {
+            "id": f"eq.{approval_id}",
+            "select": "id,process_id,task_id,requested_by,approver_id,status,risk_level,reason,decision,comments,created_at,decided_at",
+            "limit": "1",
+        },
+    )
+    if not rows:
+        raise ApprovalNotFoundError(approval_id)
+    return approval_from_rest(rows[0])
+
+
+def _create_approval_rest(
+    process_id: UUID,
+    risk_level: RiskLevel,
+    reason: str,
+    task_id: UUID | None,
+    requested_by: UUID | None,
+    approver_id: UUID | None,
+) -> ApprovalRequestRecord:
+    safe_task_id: UUID | None = None
+    if task_id is not None:
+        existing = rest_select(
+            "tasks",
+            {"id": f"eq.{task_id}", "select": "id", "limit": "1"},
+        )
+        if existing:
+            safe_task_id = task_id
+    row = rest_insert(
+        "approval_requests",
+        {
+            "process_id": str(process_id),
+            "task_id": str(safe_task_id) if safe_task_id else None,
+            "requested_by": str(requested_by) if requested_by else None,
+            "approver_id": str(approver_id) if approver_id else None,
+            "status": ApprovalStatus.PENDING.value,
+            "risk_level": risk_level.value,
+            "reason": reason,
+        },
+    )
+    rest_insert(
+        "audit_logs",
+        {
+            "entity_type": AUDIT_ENTITY_PROCESS,
+            "entity_id": str(process_id),
+            "action": AUDIT_ACTION_CREATED,
+            "performed_by": str(requested_by) if requested_by else None,
+            "new_values": {
+                "approval_request_id": row.get("id"),
+                "status": ApprovalStatus.PENDING.value,
+                "risk_level": risk_level.value,
+                "reason": reason,
+            },
+        },
+    )
+    return approval_from_rest(row)
+
+
+def _decide_approval_rest(
+    approval_id: UUID,
+    approver_id: UUID,
+    decision: ApprovalStatus,
+    comments: str | None,
+) -> ApprovalRequestRecord:
+    current = _get_approval_rest(approval_id)
+    if current.status is not ApprovalStatus.PENDING:
+        raise ApprovalAlreadyDecidedError(approval_id, current.status.value)
+    decided_at = utc_now().isoformat()
+    row = rest_update(
+        "approval_requests",
+        {"id": f"eq.{approval_id}"},
+        {
+            "status": decision.value,
+            "decision": decision.value,
+            "approver_id": str(approver_id),
+            "comments": comments,
+            "decided_at": decided_at,
+        },
+    )
+    rest_insert(
+        "audit_logs",
+        {
+            "entity_type": AUDIT_ENTITY_PROCESS,
+            "entity_id": str(current.process_id),
+            "action": AUDIT_ACTION_COMPLETED,
+            "performed_by": str(approver_id),
+            "old_values": {"status": ApprovalStatus.PENDING.value, "decision": None},
+            "new_values": {
+                "approval_request_id": str(approval_id),
+                "status": decision.value,
+                "decision": decision.value,
+                "comments": comments,
+            },
+        },
+    )
+    if isinstance(row, dict) and row.get("id"):
+        return approval_from_rest(row)
+    return _get_approval_rest(approval_id)
 
 
 class ApprovalRepository(ABC):
@@ -255,6 +395,9 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    def _prefer_rest(self) -> bool:
+        return use_supabase_rest_fallback()
+
     async def create_approval_request(
         self,
         process_id: UUID,
@@ -264,6 +407,16 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
         requested_by: UUID | None = None,
         approver_id: UUID | None = None,
     ) -> ApprovalRequestRecord:
+        if self._prefer_rest():
+            return await asyncio.to_thread(
+                _create_approval_rest,
+                process_id,
+                risk_level,
+                reason,
+                task_id,
+                requested_by,
+                approver_id,
+            )
         created_at = utc_now()
         row = ApprovalRequest(
             id=uuid4(),
@@ -300,19 +453,45 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
             )
             await self._session.flush()
         except Exception as exc:
+            if supabase_rest_configured():
+                try:
+                    return await asyncio.to_thread(
+                        _create_approval_rest,
+                        process_id,
+                        risk_level,
+                        reason,
+                        task_id,
+                        requested_by,
+                        approver_id,
+                    )
+                except Exception:
+                    pass
             raise DatabasePersistenceError(
                 f"Failed to create approval request for process {process_id}"
             ) from exc
         return approval_from_orm(row)
 
     async def get_approval_request(self, approval_id: UUID) -> ApprovalRequestRecord:
-        row = await self._get_row(approval_id)
-        return approval_from_orm(row)
+        if self._prefer_rest():
+            return await asyncio.to_thread(_get_approval_rest, approval_id)
+        try:
+            row = await self._get_row(approval_id)
+            return approval_from_orm(row)
+        except Exception:
+            if supabase_rest_configured():
+                return await asyncio.to_thread(_get_approval_rest, approval_id)
+            raise
 
     async def get_pending_approval_for_process(
         self,
         process_id: UUID,
     ) -> ApprovalRequestRecord | None:
+        if self._prefer_rest():
+            rows = await asyncio.to_thread(_list_approvals_rest, ApprovalStatus.PENDING)
+            for row in rows:
+                if row.process_id == process_id:
+                    return row
+            return None
         try:
             result = await self._session.execute(
                 select(ApprovalRequest).where(
@@ -322,6 +501,17 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
             )
             row = result.scalars().first()
         except Exception as exc:
+            if supabase_rest_configured():
+                try:
+                    rows = await asyncio.to_thread(
+                        _list_approvals_rest, ApprovalStatus.PENDING
+                    )
+                    for item in rows:
+                        if item.process_id == process_id:
+                            return item
+                    return None
+                except Exception:
+                    pass
             raise DatabasePersistenceError(
                 f"Failed to load pending approval for process {process_id}"
             ) from exc
@@ -333,6 +523,8 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
         self,
         status: ApprovalStatus | None = None,
     ) -> List[ApprovalRequestRecord]:
+        if self._prefer_rest():
+            return await asyncio.to_thread(_list_approvals_rest, status)
         try:
             stmt = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc())
             if status is not None:
@@ -340,6 +532,11 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
             result = await self._session.execute(stmt)
             rows = result.scalars().all()
         except Exception as exc:
+            if supabase_rest_configured():
+                try:
+                    return await asyncio.to_thread(_list_approvals_rest, status)
+                except Exception:
+                    pass
             raise DatabasePersistenceError("Failed to list approval requests") from exc
         return [approval_from_orm(row) for row in rows]
 
@@ -370,6 +567,8 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
         )
 
     async def commit(self) -> None:
+        if self._prefer_rest():
+            return
         try:
             await self._session.commit()
         except Exception as exc:
@@ -379,6 +578,8 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
             ) from exc
 
     async def rollback(self) -> None:
+        if self._prefer_rest():
+            return
         try:
             await self._session.rollback()
         except Exception as exc:
@@ -393,6 +594,14 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
         decision: ApprovalStatus,
         comments: str | None,
     ) -> ApprovalRequestRecord:
+        if self._prefer_rest():
+            return await asyncio.to_thread(
+                _decide_approval_rest,
+                approval_id,
+                approver_id,
+                decision,
+                comments,
+            )
         row = await self._get_row(approval_id)
         if row.status != ApprovalStatus.PENDING.value:
             raise ApprovalAlreadyDecidedError(approval_id, row.status)
@@ -425,6 +634,17 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
         except (ApprovalAlreadyDecidedError, ApprovalNotFoundError):
             raise
         except Exception as exc:
+            if supabase_rest_configured():
+                try:
+                    return await asyncio.to_thread(
+                        _decide_approval_rest,
+                        approval_id,
+                        approver_id,
+                        decision,
+                        comments,
+                    )
+                except Exception:
+                    pass
             raise DatabasePersistenceError(
                 f"Failed to record approval decision {approval_id}"
             ) from exc

@@ -1,4 +1,8 @@
-"""Thin Anthropic wrapper with structured output and optional mock mode."""
+"""Unified LLM client — Gemini-first structured output with optional Anthropic fallback.
+
+Agent 1 discovery and any shared `call_llm` callers use this module.
+Production must not use MOCK_LLM. Live mode prefers GEMINI_API_KEY.
+"""
 
 from __future__ import annotations
 
@@ -56,7 +60,88 @@ def _is_transient(exc: BaseException) -> bool:
     status = getattr(exc, "status_code", None)
     if status in {408, 409, 429, 500, 502, 503, 504, 529}:
         return True
+    text = str(exc)
+    if "RESOURCE_EXHAUSTED" in text or "429" in text:
+        return True
     return isinstance(exc, (TimeoutError, ConnectionError, OSError))
+
+
+def _gemini_configured() -> bool:
+    key = (settings.GEMINI_API_KEY or "").strip()
+    return bool(key) and not key.startswith("your_")
+
+
+def _anthropic_configured() -> bool:
+    key = (settings.ANTHROPIC_API_KEY or "").strip()
+    return bool(key) and not key.startswith("your_")
+
+
+def _extract_gemini_text(response: object) -> str:
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text
+    parts: list[str] = []
+    candidates = getattr(response, "candidates", None) or []
+    for candidate in candidates:
+        content = getattr(candidate, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            part_text = getattr(part, "text", None)
+            if part_text:
+                parts.append(part_text)
+    return "\n".join(parts)
+
+
+def _gemini_text(system_prompt: str, user_content: str) -> str:
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise RuntimeError(
+            "The 'google-genai' package is required for Gemini LLM calls. "
+            "Install it or configure ANTHROPIC_API_KEY as a fallback."
+        ) from exc
+
+    if not _gemini_configured():
+        raise RuntimeError("GEMINI_API_KEY is not set.")
+
+    primary = (settings.GEMINI_MODEL_FLASH or "gemini-3.6-flash").strip()
+    candidates = []
+    for name in (
+        primary,
+        settings.GEMINI_MODEL_PRO,
+        "gemini-3.6-flash",
+        "gemini-3-flash-preview",
+        "gemini-flash-latest",
+    ):
+        cleaned = (name or "").strip()
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+
+    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    last_error: BaseException | None = None
+    for model in candidates:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=user_content,
+                config={
+                    "system_instruction": system_prompt,
+                    "response_mime_type": "application/json",
+                },
+            )
+            raw = _extract_gemini_text(response)
+            if raw.strip():
+                return raw
+            last_error = RuntimeError(f"Gemini model {model} returned empty content")
+        except Exception as exc:
+            last_error = exc
+            err = str(exc)
+            # Per-model free-tier quotas: try the next candidate on 429.
+            if "404" in err or "NOT_FOUND" in err or "429" in err or "RESOURCE_EXHAUSTED" in err:
+                continue
+            raise
+    if last_error is not None:
+        raise RuntimeError(f"Gemini returned no usable content: {last_error}") from last_error
+    raise RuntimeError("Gemini returned empty content")
 
 
 def _anthropic_text(system_prompt: str, user_content: str) -> str:
@@ -64,12 +149,12 @@ def _anthropic_text(system_prompt: str, user_content: str) -> str:
         import anthropic
     except ImportError as exc:
         raise RuntimeError(
-            "The 'anthropic' package is required when MOCK_LLM is false. "
-            "Install it or set MOCK_LLM=true."
+            "The 'anthropic' package is required when Gemini is unavailable. "
+            "Install it or set GEMINI_API_KEY."
         ) from exc
 
-    if not settings.ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set. Add it to .env or enable MOCK_LLM.")
+    if not _anthropic_configured():
+        raise RuntimeError("ANTHROPIC_API_KEY is not set.")
 
     client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     message = client.messages.create(
@@ -86,12 +171,30 @@ def _anthropic_text(system_prompt: str, user_content: str) -> str:
     return "\n".join(parts)
 
 
+def _provider_text(system_prompt: str, user_content: str) -> tuple[str, str]:
+    """Return (raw_text, provider_name). Prefer Gemini when configured."""
+    if _gemini_configured():
+        return _gemini_text(system_prompt, user_content), "gemini"
+    if _anthropic_configured():
+        return _anthropic_text(system_prompt, user_content), "anthropic"
+    raise RuntimeError(
+        "No LLM provider configured. Set GEMINI_API_KEY (preferred) "
+        "or ANTHROPIC_API_KEY for process discovery."
+    )
+
+
 def call_llm(system_prompt: str, user_content: str, response_model: type[T]) -> T:
     """Call the LLM and return JSON validated as `response_model`.
 
-    When `settings.MOCK_LLM` is true, returns a canned fixture instead of the API.
+    Prefer Gemini when `GEMINI_API_KEY` is set. Anthropic is only used when
+    Gemini is not configured. When `MOCK_LLM` is true (development/testing
+    only), returns a canned fixture instead of a live API.
     """
     if settings.MOCK_LLM:
+        if settings.is_production:
+            raise RuntimeError(
+                "Process discovery service is unavailable: MOCK_LLM is not allowed in production."
+            )
         logger.info(
             "llm_mock",
             extra={"response_model": response_model.__name__},
@@ -102,15 +205,20 @@ def call_llm(system_prompt: str, user_content: str, response_model: type[T]) -> 
     last_error: BaseException | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
+            raw, provider = _provider_text(system_prompt, user_content)
             logger.info(
                 "llm_call",
                 extra={
                     "response_model": response_model.__name__,
                     "attempt": attempt,
-                    "model": settings.ANTHROPIC_MODEL,
+                    "provider": provider,
+                    "model": (
+                        settings.GEMINI_MODEL_FLASH
+                        if provider == "gemini"
+                        else settings.ANTHROPIC_MODEL
+                    ),
                 },
             )
-            raw = _anthropic_text(system_prompt, user_content)
             return parse_structured_output(raw, response_model)
         except StructuredOutputError:
             raise

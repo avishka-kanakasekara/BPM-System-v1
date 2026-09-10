@@ -5,6 +5,8 @@ AgentCommunicationService. Does not contain SQL, transition tables, risk
 rules, or allocation logic.
 """
 
+import asyncio
+from typing import Any
 from uuid import UUID, uuid4
 
 from app.schemas.agent_message import (
@@ -38,6 +40,31 @@ from .schemas import (
 )
 from .service import OrchestratorService
 from .state_machine import InvalidTransitionError
+
+
+def _load_invoice_match_context(process_id: UUID) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load metadata_json / process_json for invoice matching when reachable."""
+    try:
+        from app.core.supabase_rest import rest_select, supabase_rest_configured
+
+        if not supabase_rest_configured():
+            return {}, {}
+        rows = rest_select(
+            "processes",
+            {
+                "id": f"eq.{process_id}",
+                "select": "metadata_json,process_json",
+                "limit": "1",
+            },
+        )
+        if not rows:
+            return {}, {}
+        row = rows[0]
+        meta = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
+        payload = row.get("process_json") if isinstance(row.get("process_json"), dict) else {}
+        return meta, payload
+    except Exception:
+        return {}, {}
 
 
 class Agent4Workflow:
@@ -165,13 +192,18 @@ class Agent4Workflow:
 
         The stage only advances to RISK_REVIEW when Agent 3 returns a real
         recommendation; a failed allocation leaves the process at
-        RESOURCE_PLANNING with an honest error result.
+        RESOURCE_PLANNING with an honest error result. Retry is allowed when
+        already at RESOURCE_PLANNING (no second StateMachine hop required).
         """
-        await self._orchestrator.move_process(
-            process_id,
-            WorkflowStage.RESOURCE_PLANNING,
-            reason="Begin resource planning with Agent 3",
-        )
+        stage = await self._orchestrator.get_current_stage(process_id)
+        if stage is WorkflowStage.DISCOVERING:
+            await self._orchestrator.move_process(
+                process_id,
+                WorkflowStage.RESOURCE_PLANNING,
+                reason="Begin resource planning with Agent 3",
+            )
+        elif stage is not WorkflowStage.RESOURCE_PLANNING:
+            raise InvalidTransitionError(stage, WorkflowStage.RESOURCE_PLANNING)
         result = await self.plan_resources(
             process_id,
             payload=payload,
@@ -416,17 +448,122 @@ class Agent4Workflow:
     async def complete_invoice_matching(
         self,
         process_id: UUID,
+        *,
+        invoice_number: str | None = None,
+        amount: float | None = None,
+        currency: str | None = None,
+        vendor: str | None = None,
+        po_reference: str | None = None,
+        expected_po_reference: str | None = None,
+        expected_amount: float | None = None,
+        expected_currency: str | None = None,
+        expected_vendor: str | None = None,
+        expected_invoice_number: str | None = None,
+        notes: str = "",
         reference: str = "",
     ) -> WorkflowResult:
-        """INVOICE_MATCHING → COMPLETED as an explicit, deliberate closure.
+        """Match invoice evidence, then COMPLETED or EXCEPTION.
 
-        No automated invoice-matching logic exists yet; closing the stage is
-        an explicit API action with an operator-supplied reference, never an
-        implicit auto-complete.
+        Never advances to COMPLETED without a deterministic MATCHED result.
         """
-        reason = "Invoice matching closed"
-        if reference:
-            reason = f"Invoice matching closed: {reference}"
+        from decimal import Decimal
+
+        from .invoice_matching import (
+            INSUFFICIENT_EVIDENCE,
+            MISMATCH,
+            InvoiceEvidence,
+            extract_expected_from_process,
+            match_invoice,
+            merge_expected,
+        )
+
+        stage = await self._orchestrator.get_current_stage(process_id)
+        if stage is not WorkflowStage.INVOICE_MATCHING:
+            return WorkflowResult(
+                process_id=process_id,
+                current_stage=stage,
+                success=False,
+                message="Process is not at INVOICE_MATCHING",
+                error_code="INVALID_STAGE",
+                error_message=f"Current stage is {stage.value}",
+            )
+
+        metadata, process_json = await asyncio.to_thread(
+            _load_invoice_match_context, process_id
+        )
+
+        invoice = InvoiceEvidence(
+            invoice_number=invoice_number,
+            amount=Decimal(str(amount)) if amount is not None else None,
+            currency=currency,
+            vendor=vendor,
+            po_reference=po_reference,
+            notes=notes or reference or "",
+        )
+        expected = merge_expected(
+            extract_expected_from_process(
+                metadata=metadata,
+                process_json=process_json,
+            ),
+            expected_po_reference=expected_po_reference,
+            expected_amount=expected_amount,
+            expected_currency=expected_currency,
+            expected_vendor=expected_vendor,
+            expected_invoice_number=expected_invoice_number,
+        )
+        result = match_invoice(invoice, expected)
+        match_payload = {
+            "invoice_match_status": result.status,
+            "message": result.message,
+            "compared_fields": result.compared_fields,
+            "mismatches": result.mismatches,
+            "notes": invoice.notes or None,
+        }
+
+        if result.status == INSUFFICIENT_EVIDENCE:
+            return WorkflowResult(
+                process_id=process_id,
+                current_stage=stage,
+                success=False,
+                message=result.message,
+                error_code="INVOICE_INSUFFICIENT_EVIDENCE",
+                error_message=result.message,
+                agent_response=match_payload,
+            )
+
+        if result.status == MISMATCH:
+            if self._exceptions is not None:
+                failure = await self.capture_failure(
+                    process_id,
+                    description=(
+                        "Invoice matching failed: "
+                        + "; ".join(result.mismatches)
+                    ),
+                    severity=ExceptionSeverity.HIGH,
+                    exception_type=ExceptionType.SYSTEM_ERROR,
+                )
+                return failure.model_copy(
+                    update={
+                        "success": False,
+                        "message": result.message,
+                        "error_code": "INVOICE_MISMATCH",
+                        "error_message": result.message,
+                        "agent_response": match_payload,
+                    }
+                )
+            return WorkflowResult(
+                process_id=process_id,
+                current_stage=stage,
+                success=False,
+                message=result.message,
+                error_code="INVOICE_MISMATCH",
+                error_message=result.message,
+                agent_response=match_payload,
+            )
+
+        reason = "Invoice matched expected purchase data"
+        if invoice.notes:
+            reason = f"{reason}: {invoice.notes}"
         await self._orchestrator.move_process(
             process_id,
             WorkflowStage.COMPLETED,
@@ -437,7 +574,8 @@ class Agent4Workflow:
             process_id=process_id,
             current_stage=stage,
             success=True,
-            message="Process completed",
+            message=result.message,
+            agent_response=match_payload,
         )
 
     async def _request_discovery(self, process_id: UUID) -> WorkflowResult:

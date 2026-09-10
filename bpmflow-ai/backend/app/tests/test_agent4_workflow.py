@@ -169,7 +169,7 @@ class TestExecutionAndInvalid:
     async def test_agent2_unavailable_is_handled_cleanly(
         self, orchestrator, approval_repo
     ) -> None:
-        """A broken Agent 2 pipeline yields an honest AGENT_UNAVAILABLE result."""
+        """A broken Agent 2 pipeline yields an honest ERROR envelope, not a crash."""
         from app.agents.agent4_orchestrator.adapters import Agent2Adapter
         from app.schemas.agent_message import AGENT_2
 
@@ -190,8 +190,10 @@ class TestExecutionAndInvalid:
         )
         result = await workflow.execute_workflow(process_id)
         assert result.success is False
-        assert result.error_code == "AGENT_UNAVAILABLE"
-        assert "Agent 2" in result.message
+        assert result.error_code == "ERROR"
+        assert "agent2" in result.message.lower().replace("_", "")
+        assert result.agent_response is not None
+        assert result.agent_response.get("receipt_status") == "FAILED"
         assert result.current_stage is WorkflowStage.WORKFLOW_EXECUTION
 
     async def test_invalid_transitions_are_rejected(
@@ -271,14 +273,28 @@ class TestExecutionAndInvalid:
         assert result.current_stage is WorkflowStage.INVOICE_MATCHING
         assert result.eligible_for_execution is True
 
-    async def test_complete_invoice_matching_is_explicit(
+    async def test_complete_invoice_matching_requires_real_match(
         self, workflow, orchestrator
     ) -> None:
         process_id = uuid4()
         await orchestrator.create_process(
             process_id, initial_stage=WorkflowStage.INVOICE_MATCHING
         )
-        result = await workflow.complete_invoice_matching(process_id, reference="INV-9")
-        assert result.success is True
-        assert result.current_stage is WorkflowStage.COMPLETED
+        insufficient = await workflow.complete_invoice_matching(
+            process_id, reference="INV-9"
+        )
+        assert insufficient.success is False
+        assert insufficient.error_code == "INVOICE_INSUFFICIENT_EVIDENCE"
+        assert await orchestrator.get_current_stage(process_id) is WorkflowStage.INVOICE_MATCHING
+
+        matched = await workflow.complete_invoice_matching(
+            process_id,
+            amount=100.0,
+            expected_amount=100.0,
+            po_reference="PO-1",
+            expected_po_reference="PO-1",
+            notes="INV-9",
+        )
+        assert matched.success is True
+        assert matched.current_stage is WorkflowStage.COMPLETED
         assert await orchestrator.get_current_stage(process_id) is WorkflowStage.COMPLETED

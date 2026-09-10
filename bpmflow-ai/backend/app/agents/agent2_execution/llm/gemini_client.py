@@ -49,11 +49,11 @@ QUOTA_MARKERS = (
     "too many requests",
 )
 
+# Current Gemini flash IDs only. Free-tier quotas are per-model, so a 429 on
+# one candidate should still try the next. Do not include retired IDs.
 MODEL_FALLBACKS = [
     "gemini-3.6-flash",
     "gemini-3-flash-preview",
-    "gemini-3.1-flash-preview",
-    "gemini-2.5-flash",
     "gemini-flash-latest",
 ]
 
@@ -66,11 +66,43 @@ class GeminiClient:
     def __init__(self, api_key: Optional[str] = None, is_offline: Optional[bool] = None):
         self.api_key = api_key or settings.GEMINI_API_KEY
         env_offline = os.getenv("GEMINI_OFFLINE", "").strip().lower()
-        if is_offline is not None:
-            self.is_offline = is_offline
-        elif getattr(settings, "GEMINI_OFFLINE", False) or env_offline in ["true", "1", "yes"]:
+        env_name = (
+            os.getenv("ENV", "")
+            or getattr(settings, "ENV", "")
+            or getattr(settings, "ENVIRONMENT", "")
+            or "development"
+        ).strip().lower()
+        is_production = env_name in {"production", "prod"}
+
+        explicit_offline = (
+            is_offline is True
+            or getattr(settings, "GEMINI_OFFLINE", False)
+            or env_offline in ["true", "1", "yes"]
+        )
+        missing_key = not self.api_key or self.api_key.startswith("your_")
+
+        if is_offline is False:
+            # Caller explicitly requested live mode.
+            if missing_key:
+                raise RuntimeError(
+                    "Agent 2 execution intelligence is unavailable: "
+                    "GEMINI_API_KEY is required for live Gemini mode."
+                )
+            self.is_offline = False
+        elif is_production and (explicit_offline or missing_key):
+            # Production must never silently fall back to stub responses.
+            raise RuntimeError(
+                "Agent 2 execution intelligence is unavailable: "
+                "GEMINI_API_KEY is required in production and GEMINI_OFFLINE must be false."
+            )
+        elif explicit_offline:
             self.is_offline = True
-        elif not self.api_key or self.api_key.startswith("your_"):
+        elif missing_key:
+            # Development convenience only — never silent in production (handled above).
+            logger.warning(
+                "GEMINI_API_KEY missing; Agent 2 Gemini client entering explicit offline stub mode "
+                "(development/testing only)."
+            )
             self.is_offline = True
         else:
             self.is_offline = False
@@ -82,7 +114,14 @@ class GeminiClient:
                 from google import genai
                 self._sdk_client = genai.Client(api_key=self.api_key)
             except Exception as e:
-                logger.warning(f"Failed to initialize google-genai Client ({e}). Falling back to OFFLINE mode.")
+                if is_production:
+                    raise RuntimeError(
+                        "Agent 2 execution intelligence is unavailable: "
+                        f"failed to initialize Gemini client ({e})."
+                    ) from e
+                logger.warning(
+                    f"Failed to initialize google-genai Client ({e}). Falling back to OFFLINE mode."
+                )
                 self.is_offline = True
 
     def _select_model(self, tier: str) -> str:
@@ -105,38 +144,51 @@ class GeminiClient:
         text = str(error).lower()
         return any(marker.lower() in text for marker in QUOTA_MARKERS)
 
-    def _sanitize_gemini_schema(self, obj: Any) -> Any:
+    def _sanitize_gemini_schema(self, obj: Any, *, in_properties: bool = False) -> Any:
         """Strip JSON Schema fields Gemini Developer API rejects (additionalProperties, etc.)."""
         if isinstance(obj, dict):
             out: Dict[str, Any] = {}
             for key, value in obj.items():
-                if key in {"additionalProperties", "$schema", "title", "default"}:
+                # Only strip schema metadata keys — never property names like "title".
+                if not in_properties and key in {"additionalProperties", "$schema", "default"}:
                     continue
                 if key == "type" and isinstance(value, str):
                     out[key] = value.lower()
+                elif key == "properties" and isinstance(value, dict):
+                    out[key] = {
+                        prop_name: self._sanitize_gemini_schema(prop_schema, in_properties=False)
+                        for prop_name, prop_schema in value.items()
+                    }
                 else:
-                    out[key] = self._sanitize_gemini_schema(value)
+                    out[key] = self._sanitize_gemini_schema(value, in_properties=in_properties)
             if out.get("type") == "object" and "properties" not in out:
                 out["properties"] = {}
+            if isinstance(out.get("properties"), dict) and isinstance(out.get("required"), list):
+                props = out["properties"]
+                out["required"] = [name for name in out["required"] if name in props]
+                if not out["required"]:
+                    out.pop("required", None)
             return out
         if isinstance(obj, list):
-            return [self._sanitize_gemini_schema(item) for item in obj]
+            return [self._sanitize_gemini_schema(item, in_properties=in_properties) for item in obj]
         return obj
 
     def _pydantic_schema_for_gemini(self, response_schema: Type[BaseModel]) -> Dict[str, Any]:
         return self._sanitize_gemini_schema(response_schema.model_json_schema())
 
-        if isinstance(obj, dict):
-            out: Dict[str, Any] = {}
-            for key, value in obj.items():
-                if key == "type" and isinstance(value, str):
-                    out[key] = value.lower()
-                else:
-                    out[key] = self._normalize_schema(value)
-            return out
-        if isinstance(obj, list):
-            return [self._normalize_schema(item) for item in obj]
-        return obj
+    def _normalize_schema(self, obj: Any) -> Any:
+        """Normalize tool/declaration schemas for the google-genai SDK."""
+        return self._sanitize_gemini_schema(obj)
+
+    def _require_live_or_raise(self, last_error: BaseException | None, operation: str) -> None:
+        """When a real API key is configured, never silently return stub output."""
+        if self.is_offline:
+            return
+        detail = str(last_error) if last_error else "unknown error"
+        raise RuntimeError(
+            f"Agent 2 Gemini {operation} failed after retries. "
+            f"Real LLM execution is required (GEMINI_OFFLINE is false). Last error: {detail}"
+        )
 
     def _sdk_tools(self, declarations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if declarations and isinstance(declarations[0], dict) and "function_declarations" in declarations[0]:
@@ -225,10 +277,11 @@ class GeminiClient:
         model_tier: str = "flash",
         max_retries: int = 2,
     ) -> str:
-        """
-        Generate plain text from Gemini, with automatic fallback to a deterministic
-        offline-safe response when the API key is missing, the model is unavailable,
-        or the account is rate/quota limited.
+        """Generate plain text from Gemini.
+
+        Offline stubs are only used when the client was constructed with
+        ``is_offline=True`` or ``GEMINI_OFFLINE=true``. A configured live key
+        must not silently degrade to canned text.
         """
         if self.is_offline:
             return self._generate_offline_text(prompt)
@@ -250,14 +303,15 @@ class GeminiClient:
                 except Exception as e:
                     last_error = e
                     logger.warning(f"Gemini text {model_name} attempt {attempt}/{max_retries} failed: {e}")
-                    if self._is_quota_error(e):
-                        self.is_offline = True
-                        return self._generate_offline_text(prompt)
-                    if "404" in str(e) or "NOT_FOUND" in str(e):
+                    err = str(e)
+                    if "404" in err or "NOT_FOUND" in err:
+                        break
+                    # Free-tier quotas are often per-model — try the next candidate.
+                    if "429" in err or "RESOURCE_EXHAUSTED" in err:
                         break
                     if attempt < max_retries:
                         await asyncio.sleep(2 ** (attempt - 1))
-        logger.error(f"Gemini text generation exhausted models. Last error: {last_error}")
+        self._require_live_or_raise(last_error, "text generation")
         return self._generate_offline_text(prompt)
 
     async def generate_structured_output(
@@ -268,15 +322,9 @@ class GeminiClient:
         model_tier: str = "flash",
         max_retries: int = 2,
     ) -> T:
-        """
-        Generate a validated Pydantic model instance from Gemini structured output.
+        """Generate a validated Pydantic model from Gemini structured output.
 
-        :param prompt: User / task prompt content
-        :param response_schema: Target Pydantic model class
-        :param system_instruction: System prompt instruction
-        :param model_tier: "flash" or "pro"
-        :param max_retries: HTTP retry count
-        :return: Validated Pydantic schema instance
+        Live mode raises on exhaustion. Offline mode (explicit only) returns stubs.
         """
         if self.is_offline:
             logger.info(f"[OFFLINE MODE] Generating canned stub for schema {response_schema.__name__}")
@@ -308,11 +356,11 @@ class GeminiClient:
                         logger.warning(
                             f"Gemini API {model_name} attempt {attempt}/{max_retries} failed for schema {response_schema.__name__}: {e}"
                         )
-                        if self._is_quota_error(e):
-                            self.is_offline = True
-                            return self._generate_offline_stub(response_schema, prompt)
                         err = str(e)
                         if "404" in err or "NOT_FOUND" in err:
+                            break
+                        # Free-tier quotas are often per-model — try the next candidate.
+                        if "429" in err or "RESOURCE_EXHAUSTED" in err:
                             break
                         if "additionalProperties" in err:
                             break
@@ -320,7 +368,12 @@ class GeminiClient:
                             await asyncio.sleep(2 ** (attempt - 1))
                 else:
                     continue
-                if last_error and ("404" in str(last_error) or "NOT_FOUND" in str(last_error)):
+                if last_error and (
+                    "404" in str(last_error)
+                    or "NOT_FOUND" in str(last_error)
+                    or "429" in str(last_error)
+                    or "RESOURCE_EXHAUSTED" in str(last_error)
+                ):
                     break
         try:
             json_prompt = (
@@ -328,13 +381,15 @@ class GeminiClient:
                 + "\n\nReturn ONLY valid JSON matching this schema:\n"
                 + json.dumps(json_schema)
             )
-            raw_text = await self.generate_text(json_prompt, system_instruction=sys_prompt, model_tier=model_tier, max_retries=1)
+            raw_text = await self.generate_text(
+                json_prompt, system_instruction=sys_prompt, model_tier=model_tier, max_retries=1
+            )
             parsed = self._parse_model_json(raw_text, response_schema)
             if parsed is not None:
                 return parsed
         except Exception as e:
             last_error = e
-        logger.error(f"All Gemini structured-output attempts exhausted. Falling back. Last error: {last_error}")
+        self._require_live_or_raise(last_error, f"structured output ({response_schema.__name__})")
         return self._generate_offline_stub(response_schema, prompt)
 
     async def generate_function_call(
@@ -345,16 +400,9 @@ class GeminiClient:
         model_tier: str = "flash",
         max_retries: int = 2,
     ) -> ToolCallContract:
-        """
-        Pass tool declarations to Gemini and receive a proposed ToolCallContract.
-        Does NOT execute anything — returns proposed function call to caller for Tool Guard verification.
+        """Propose a ToolCallContract via Gemini. Does not execute tools.
 
-        :param prompt: Prompt context
-        :param tools: Optional list of tool declaration dicts (defaults to all 12 tools)
-        :param system_instruction: System instruction
-        :param model_tier: "flash" or "pro"
-        :param max_retries: HTTP retry count
-        :return: Proposed ToolCallContract
+        Live mode raises on exhaustion. Offline mode returns an explicit stub.
         """
         tool_declarations = tools or function_declarations.ALL_TOOL_DECLARATIONS
 
@@ -375,6 +423,7 @@ class GeminiClient:
                             "tools": self._sdk_tools(tool_declarations),
                         },
                     )
+                    parsed_call = self._extract_function_call(response)
                     if parsed_call:
                         self._working_model = model_name
                         return parsed_call
@@ -385,15 +434,14 @@ class GeminiClient:
                         return parsed
                 except Exception as e:
                     last_error = e
-                    logger.warning(f"Gemini function call {model_name} attempt {attempt}/{max_retries} failed: {e}")
-                    if self._is_quota_error(e):
-                        self.is_offline = True
-                        return self._generate_offline_tool_call(prompt, tool_declarations)
+                    logger.warning(
+                        f"Gemini function call {model_name} attempt {attempt}/{max_retries} failed: {e}"
+                    )
                     if "404" in str(e) or "NOT_FOUND" in str(e):
                         break
                     if attempt < max_retries:
                         await asyncio.sleep(2 ** (attempt - 1))
-        logger.error(f"Gemini function-call attempts exhausted. Falling back. Last error: {last_error}")
+        self._require_live_or_raise(last_error, "function call proposal")
         return self._generate_offline_tool_call(prompt, tool_declarations)
 
     def _parse_tool_call_json(self, raw_text: str) -> Optional[ToolCallContract]:

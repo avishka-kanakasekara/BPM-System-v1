@@ -37,6 +37,13 @@
     "tailwindcss": "^3.3.5",
     "typescript": "^5.2.2",
     "vite": "^5.0.0",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "daisyui": "file:vendor/daisyui",
+    "css-selector-tokenizer": "file:vendor/css-selector-tokenizer",
+    "culori": "file:vendor/culori",
+    "picocolors": "file:vendor/picocolors",
+    "postcss-js": "file:vendor/postcss-js",
+    "cssesc": "file:vendor/cssesc",
+    "fastparse": "file:vendor/fastparse"
   }
 }

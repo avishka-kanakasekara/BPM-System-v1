@@ -30,6 +30,8 @@ class ProcessResponse(BaseModel):
     created_by: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
+    # Execution / procurement evidence (PO drafts, last tool run, etc.).
+    metadata_json: Optional[dict] = None
 
 
 class ProcessStartResponse(BaseModel):
@@ -81,6 +83,23 @@ class ExecuteWorkflowRequest(BaseModel):
 
 
 class InvoiceMatchingCompleteRequest(BaseModel):
-    """Explicit closure of INVOICE_MATCHING (no automated matching exists)."""
+    """Invoice evidence for deterministic matching at INVOICE_MATCHING.
 
+    Completion requires a real match against expected purchase data stored on
+    the process and/or provided as expected_* fields. A bare reference string
+    alone cannot complete the process.
+    """
+
+    invoice_number: Optional[str] = None
+    amount: Optional[float] = Field(default=None, ge=0)
+    currency: Optional[str] = None
+    vendor: Optional[str] = None
+    po_reference: Optional[str] = None
+    expected_po_reference: Optional[str] = None
+    expected_amount: Optional[float] = Field(default=None, ge=0)
+    expected_currency: Optional[str] = None
+    expected_vendor: Optional[str] = None
+    expected_invoice_number: Optional[str] = None
+    notes: str = ""
+    # Legacy alias used by older clients — treated as notes only, not a match key.
     reference: str = ""

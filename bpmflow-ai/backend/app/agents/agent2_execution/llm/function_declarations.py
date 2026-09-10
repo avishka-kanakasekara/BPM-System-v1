@@ -74,7 +74,7 @@ ALL_TOOL_DECLARATIONS: List[Dict[str, Any]] = [
     },
     {
         "name": "create_po_draft",
-        "description": "Generate a purchase order draft in the mock ERP system.",
+        "description": "Generate a purchase order draft and persist it on the process record.",
         "parameters": {
             "type": "OBJECT",
             "properties": {
@@ -101,7 +101,7 @@ ALL_TOOL_DECLARATIONS: List[Dict[str, Any]] = [
     },
     {
         "name": "update_procurement_record",
-        "description": "Update mock ERP procurement record metadata.",
+        "description": "Update procurement record metadata on the process execution trail.",
         "parameters": {
             "type": "OBJECT",
             "properties": {

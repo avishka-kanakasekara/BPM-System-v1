@@ -98,6 +98,20 @@ async def score_execution_plan(
 
 
 def _context_defaults(ctx: context_engine.ProcessContext) -> Dict[str, Any]:
+    meta = ctx.metadata or {}
+    purchase = meta.get("purchase_order") if isinstance(meta.get("purchase_order"), dict) else {}
+    amount = meta.get("amount") or purchase.get("amount") or 2500.0
+    vendor = (
+        meta.get("vendor_id")
+        or meta.get("vendor")
+        or purchase.get("vendor_id")
+        or purchase.get("vendor")
+        or "VENDOR-ACME"
+    )
+    try:
+        amount_f = float(amount)
+    except (TypeError, ValueError):
+        amount_f = 2500.0
     return {
         "process_id": ctx.process_id,
         "task_id": ctx.task_id,
@@ -116,6 +130,10 @@ def _context_defaults(ctx: context_engine.ProcessContext) -> Dict[str, Any]:
             f"Please action '{ctx.task_title}' for process '{ctx.process_title}'. "
             f"Elapsed {ctx.elapsed_hours}h / SLA {ctx.sla_hours}h. Priority: {ctx.priority}."
         ),
+        "vendor_id": str(vendor),
+        "amount": amount_f if amount_f > 0 else 2500.0,
+        "items_summary": f"{ctx.process_title or 'Procurement'} line items",
+        "currency": purchase.get("currency") or meta.get("currency") or "USD",
     }
 
 
@@ -194,6 +212,7 @@ def _select_tools_to_run(
     tool_name_override: Optional[str],
     incoming_tool_params: Dict[str, Any],
     reasoned_tool: Optional[str] = None,
+    process_type: str = "",
 ) -> List[str]:
     if tool_name_override:
         return [tool_name_override]
@@ -207,6 +226,16 @@ def _select_tools_to_run(
         if reasoned_tool and reasoned_tool in matching:
             return [reasoned_tool]
         return (intersection or matching)[:MAX_PLAN_TOOLS]
+
+    # Prefer a real procurement tool over weak housekeeping tools when the
+    # process is a purchase workflow and Gemini did not pick create_po_draft.
+    proc = (process_type or "").lower()
+    weak = {"update_task", "get_task_history", "get_process_status", "calculate_kpi"}
+    if "procur" in proc or "purchase" in proc or proc in {"po", "buy"}:
+        if "create_po_draft" in planned:
+            return ["create_po_draft"]
+        if reasoned_tool in weak or not reasoned_tool:
+            return ["create_po_draft"]
 
     permitted = [t for t in planned if authorization.is_permitted(t)]
     if permitted:
@@ -353,7 +382,11 @@ async def run_decision_pipeline(
 
     reasoned_tool = decision.selected_tool if decision.decision == "EXECUTE" else None
     tools_to_run = _select_tools_to_run(
-        plan, tool_name_override, incoming_tool_params, reasoned_tool=reasoned_tool
+        plan,
+        tool_name_override,
+        incoming_tool_params,
+        reasoned_tool=reasoned_tool,
+        process_type=ctx.process_type or "",
     )
     plan_for_scoring = plan.model_copy(update={"selected_tools": tools_to_run or plan.selected_tools})
     score_breakdown = await score_execution_plan(plan_for_scoring, ctx, session)

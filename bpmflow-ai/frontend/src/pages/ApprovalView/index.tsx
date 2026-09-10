@@ -98,9 +98,12 @@ function ApprovalView() {
           </p>
           {lastDecision.workflow ? (
             <p className="mt-1">
-              Workflow stage: <span className="font-semibold">{lastDecision.workflow.current_stage}</span>
+              Workflow stage:{' '}
+              <span className="font-semibold">
+                {String(lastDecision.workflow.current_stage ?? '')}
+              </span>
               {' — '}
-              {lastDecision.workflow.message}
+              {String(lastDecision.workflow.message ?? '')}
             </p>
           ) : null}
         </div>

@@ -353,7 +353,16 @@ def test_complete_invoice_matching_closes_process() -> None:
 
     response = client.post(
         f"/api/v1/processes/{created['id']}/complete-invoice-matching",
-        json={"reference": "INV-1001"},
+        json={
+            "invoice_number": "INV-1001",
+            "amount": 250.0,
+            "currency": "USD",
+            "po_reference": "PO-55",
+            "expected_invoice_number": "INV-1001",
+            "expected_amount": 250.0,
+            "expected_currency": "USD",
+            "expected_po_reference": "PO-55",
+        },
     )
     assert response.status_code == 200
     body = response.json()
@@ -361,6 +370,26 @@ def test_complete_invoice_matching_closes_process() -> None:
     assert body["current_stage"] == WorkflowStage.COMPLETED.value
     fetched = client.get(f"/api/v1/processes/{created['id']}").json()
     assert fetched["current_stage"] == WorkflowStage.COMPLETED.value
+
+
+def test_complete_invoice_matching_rejects_bare_reference() -> None:
+    client, repository = _client()
+    created = client.post(
+        "/api/v1/processes",
+        json={"name": "Need evidence", "process_type": "procurement"},
+    ).json()
+    _set_stage(repository, created["id"], WorkflowStage.INVOICE_MATCHING)
+
+    response = client.post(
+        f"/api/v1/processes/{created['id']}/complete-invoice-matching",
+        json={"reference": "INV-1001"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["error_code"] == "INVOICE_INSUFFICIENT_EVIDENCE"
+    fetched = client.get(f"/api/v1/processes/{created['id']}").json()
+    assert fetched["current_stage"] == WorkflowStage.INVOICE_MATCHING.value
 
 
 def test_plan_resources_jwt_tenant_overrides_body() -> None:

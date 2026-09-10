@@ -155,7 +155,7 @@ class TestUnavailableAndUnsupported:
         assert exc_info.value.agent_id == AGENT_1
 
     async def test_agent2_unavailable_is_handled_cleanly(self) -> None:
-        """A broken Agent 2 pipeline surfaces as AgentUnavailableError, never fake success."""
+        """A broken Agent 2 pipeline returns an ERROR envelope, never fake success."""
 
         class BrokenAgent2:
             async def handle(self, message, session=None):
@@ -168,10 +168,10 @@ class TestUnavailableAndUnsupported:
             receiver=AGENT_2,
             message_type=AgentMessageType.WORKFLOW_EXECUTION_REQUEST,
         ).model_copy(update={"status": "AUTHORIZED"})
-        with pytest.raises(AgentUnavailableError) as exc_info:
-            await service.send(request)
-        assert exc_info.value.agent_id == AGENT_2
-
+        response = await service.send(request)
+        assert response.metadata.message_type is AgentMessageType.ERROR
+        assert response.payload.get("error") == "AGENT2_EXECUTION_FAILED"
+        assert response.payload.get("receipt_status") == "FAILED"
     async def test_agent2_never_receives_non_authorized_work(self) -> None:
         """Agent 2 invariant: only status=AUTHORIZED messages reach execution."""
 

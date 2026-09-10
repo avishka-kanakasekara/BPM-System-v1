@@ -61,6 +61,9 @@ function isValidUUID(uuid: string): boolean {
  * @returns Agent3SessionData with requester ID, tenant ID, and token getter
  */
 export async function getAgent3Session(): Promise<Agent3SessionData> {
+  if (!supabase) {
+    throw new SessionError('Supabase is not configured');
+  }
   // Get current session from Supabase
   const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 

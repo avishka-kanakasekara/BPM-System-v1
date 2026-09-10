@@ -19,6 +19,53 @@ from app.agents.agent2_execution.optimization import recommendation_engine
 router = APIRouter(prefix="/agent2", tags=["Agent 2 — Dashboard & Read APIs"])
 
 
+def _list_receipts_rest(
+    process_id: Optional[str],
+    status: Optional[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    try:
+        from app.core.supabase_rest import rest_select, supabase_rest_configured
+
+        if not supabase_rest_configured():
+            return []
+        params: Dict[str, str] = {
+            "select": (
+                "id,process_id,task_id,tool_name,action,attempt_number,"
+                "idempotency_key,status,latency_ms,error_type,error_message,created_at"
+            ),
+            "order": "created_at.desc",
+            "limit": str(limit),
+        }
+        if process_id:
+            params["process_id"] = f"eq.{process_id}"
+        if status:
+            params["status"] = f"eq.{status}"
+        rows = rest_select("execution_receipts", params)
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            created = r.get("created_at") or ""
+            out.append(
+                {
+                    "id": str(r.get("id") or ""),
+                    "process_id": str(r.get("process_id") or ""),
+                    "task_id": str(r.get("task_id") or ""),
+                    "tool_name": r.get("tool_name") or "",
+                    "action": r.get("action") or "",
+                    "attempt_number": r.get("attempt_number") or 1,
+                    "idempotency_key": r.get("idempotency_key") or "",
+                    "status": r.get("status") or "",
+                    "latency_ms": r.get("latency_ms") or 0,
+                    "error_type": r.get("error_type"),
+                    "error_message": r.get("error_message"),
+                    "created_at": created if isinstance(created, str) else str(created),
+                }
+            )
+        return out
+    except Exception:
+        return []
+
+
 @router.get(
     "/receipts",
     summary="Get Execution Receipts",
@@ -31,7 +78,7 @@ async def get_execution_receipts(
     session: Optional[AsyncSession] = Depends(get_db_session),
 ) -> List[Dict[str, Any]]:
     if session is None:
-        return []
+        return _list_receipts_rest(process_id, status, limit)
 
     stmt = select(ExecutionReceipt).order_by(ExecutionReceipt.created_at.desc()).limit(limit)
 
@@ -41,25 +88,28 @@ async def get_execution_receipts(
     if status:
         stmt = stmt.where(ExecutionReceipt.status == status)
 
-    res = await session.execute(stmt)
-    receipts = res.scalars().all()
-    return [
-        {
-            "id": str(r.id),
-            "process_id": str(r.process_id),
-            "task_id": str(r.task_id),
-            "tool_name": r.tool_name,
-            "action": r.action,
-            "attempt_number": r.attempt_number,
-            "idempotency_key": r.idempotency_key,
-            "status": r.status,
-            "latency_ms": r.latency_ms,
-            "error_type": r.error_type,
-            "error_message": r.error_message,
-            "created_at": r.created_at.isoformat() if r.created_at else "",
-        }
-        for r in receipts
-    ]
+    try:
+        res = await session.execute(stmt)
+        receipts = res.scalars().all()
+        return [
+            {
+                "id": str(r.id),
+                "process_id": str(r.process_id),
+                "task_id": str(r.task_id),
+                "tool_name": r.tool_name,
+                "action": r.action,
+                "attempt_number": r.attempt_number,
+                "idempotency_key": r.idempotency_key,
+                "status": r.status,
+                "latency_ms": r.latency_ms,
+                "error_type": r.error_type,
+                "error_message": r.error_message,
+                "created_at": r.created_at.isoformat() if r.created_at else "",
+            }
+            for r in receipts
+        ]
+    except Exception:
+        return _list_receipts_rest(process_id, status, limit)
 
 
 @router.get(

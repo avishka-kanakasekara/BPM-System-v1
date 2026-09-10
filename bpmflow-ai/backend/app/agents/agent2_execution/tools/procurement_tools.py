@@ -32,13 +32,31 @@ async def create_po_draft(
     po_num = f"PO-2026-{uuid.uuid4().hex[:6].upper()}"
     record = {
         "po_number": po_num,
+        "po_reference": po_num,
         "vendor_id": input_data.vendor_id,
+        "vendor": input_data.vendor_id,
         "amount": input_data.amount,
+        "currency": "USD",
         "items_summary": input_data.items_summary,
         "status": "DRAFT",
         "created_at": now.isoformat(),
     }
-    await merge_process_metadata(session, input_data.process_id, {"po_drafts": [record]})
+    # Flat purchase_order is what invoice matching reads; po_drafts keeps history.
+    await merge_process_metadata(
+        session,
+        input_data.process_id,
+        {
+            "po_drafts": [record],
+            "purchase_order": record,
+            "last_execution": {
+                "tool_name": "create_po_draft",
+                "po_number": po_num,
+                "amount": input_data.amount,
+                "vendor": input_data.vendor_id,
+                "currency": "USD",
+            },
+        },
+    )
     await record_workflow_event(
         session,
         input_data.process_id,

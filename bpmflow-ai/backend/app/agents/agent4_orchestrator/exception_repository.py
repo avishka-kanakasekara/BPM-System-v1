@@ -1,6 +1,7 @@
 """Persistence for public.exceptions and related audit_logs events."""
 
 from abc import ABC, abstractmethod
+import asyncio
 from datetime import datetime, timezone
 from typing import Dict, List
 from uuid import UUID, uuid4
@@ -8,6 +9,13 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.supabase_rest import (
+    rest_insert,
+    rest_select,
+    rest_update,
+    supabase_rest_configured,
+    use_supabase_rest_fallback,
+)
 from app.models.audit import AuditLog
 from app.models.exception import ProcessException
 
@@ -37,6 +45,130 @@ def record_from_orm(row: ProcessException) -> ExceptionRecord:
         created_at=row.created_at,
         resolved_at=row.resolved_at,
     )
+
+
+def record_from_rest(row: dict) -> ExceptionRecord:
+    severity_raw = str(row.get("severity") or "medium")
+    type_raw = str(row.get("type") or "system_error")
+    status_raw = str(row.get("status") or "open")
+    try:
+        severity = ExceptionSeverity(severity_raw)
+    except ValueError:
+        severity = ExceptionSeverity.MEDIUM
+    try:
+        exception_type = ExceptionType(type_raw)
+    except ValueError:
+        exception_type = ExceptionType.SYSTEM_ERROR
+    try:
+        status = ExceptionStatus(status_raw)
+    except ValueError:
+        status = ExceptionStatus.OPEN
+    return ExceptionRecord(
+        id=UUID(str(row["id"])),
+        process_id=UUID(str(row["process_id"])) if row.get("process_id") else None,
+        task_id=UUID(str(row["task_id"])) if row.get("task_id") else None,
+        severity=severity,
+        type=exception_type,
+        description=str(row.get("description") or "Exception"),
+        status=status,
+        assigned_to=UUID(str(row["assigned_to"])) if row.get("assigned_to") else None,
+        resolution_notes=row.get("resolution_notes"),
+        created_at=row["created_at"],
+        resolved_at=row.get("resolved_at"),
+    )
+
+
+def _list_exceptions_rest(status: ExceptionStatus | None) -> List[ExceptionRecord]:
+    params: dict[str, str] = {
+        "select": "id,process_id,task_id,severity,type,description,status,assigned_to,resolution_notes,created_at,resolved_at",
+        "order": "created_at.desc",
+    }
+    if status is not None:
+        params["status"] = f"eq.{status.value}"
+    return [record_from_rest(row) for row in rest_select("exceptions", params)]
+
+
+def _get_exception_rest(exception_id: UUID) -> ExceptionRecord:
+    rows = rest_select(
+        "exceptions",
+        {
+            "id": f"eq.{exception_id}",
+            "select": "id,process_id,task_id,severity,type,description,status,assigned_to,resolution_notes,created_at,resolved_at",
+            "limit": "1",
+        },
+    )
+    if not rows:
+        raise BpmExceptionNotFoundError(exception_id)
+    return record_from_rest(rows[0])
+
+
+def _create_exception_rest(
+    process_id: UUID | None,
+    description: str,
+    severity: ExceptionSeverity,
+    exception_type: ExceptionType,
+    task_id: UUID | None,
+    assigned_to: UUID | None,
+) -> ExceptionRecord:
+    # task_id REFERENCES public.tasks — omit when the row does not exist yet
+    # (Agent 2 failures often pass a client-generated task UUID).
+    safe_task_id: UUID | None = None
+    if task_id is not None:
+        existing = rest_select(
+            "tasks",
+            {"id": f"eq.{task_id}", "select": "id", "limit": "1"},
+        )
+        if existing:
+            safe_task_id = task_id
+
+    row = rest_insert(
+        "exceptions",
+        {
+            "process_id": str(process_id) if process_id else None,
+            "task_id": str(safe_task_id) if safe_task_id else None,
+            "severity": severity.value,
+            "type": exception_type.value,
+            "description": description,
+            "status": ExceptionStatus.OPEN.value,
+            "assigned_to": str(assigned_to) if assigned_to else None,
+        },
+    )
+    rest_insert(
+        "audit_logs",
+        {
+            "entity_type": AUDIT_ENTITY_PROCESS,
+            "entity_id": str(process_id or row.get("id")),
+            "action": AUDIT_ACTION_CREATED,
+            "new_values": {
+                "exception_id": row.get("id"),
+                "status": ExceptionStatus.OPEN.value,
+                "type": exception_type.value,
+                "severity": severity.value,
+            },
+        },
+    )
+    return record_from_rest(row)
+
+
+def _update_exception_rest(record: ExceptionRecord) -> ExceptionRecord:
+    row = rest_update(
+        "exceptions",
+        {"id": f"eq.{record.id}"},
+        {
+            "process_id": str(record.process_id) if record.process_id else None,
+            "task_id": str(record.task_id) if record.task_id else None,
+            "severity": record.severity.value,
+            "type": record.type.value,
+            "description": record.description,
+            "status": record.status.value,
+            "assigned_to": str(record.assigned_to) if record.assigned_to else None,
+            "resolution_notes": record.resolution_notes,
+            "resolved_at": record.resolved_at.isoformat() if record.resolved_at else None,
+        },
+    )
+    if isinstance(row, dict) and row.get("id"):
+        return record_from_rest(row)
+    return _get_exception_rest(record.id)
 
 
 class ExceptionRepository(ABC):
@@ -176,6 +308,9 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    def _prefer_rest(self) -> bool:
+        return use_supabase_rest_fallback()
+
     async def create_exception(
         self,
         process_id: UUID | None,
@@ -185,6 +320,16 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
         task_id: UUID | None = None,
         assigned_to: UUID | None = None,
     ) -> ExceptionRecord:
+        if self._prefer_rest():
+            return await asyncio.to_thread(
+                _create_exception_rest,
+                process_id,
+                description,
+                severity,
+                exception_type,
+                task_id,
+                assigned_to,
+            )
         created_at = utc_now()
         row = ProcessException(
             id=uuid4(),
@@ -215,17 +360,41 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
             )
             await self._session.flush()
         except Exception as exc:
+            if supabase_rest_configured():
+                try:
+                    return await asyncio.to_thread(
+                        _create_exception_rest,
+                        process_id,
+                        description,
+                        severity,
+                        exception_type,
+                        task_id,
+                        assigned_to,
+                    )
+                except Exception:
+                    pass
             raise DatabasePersistenceError("Failed to create exception") from exc
         return record_from_orm(row)
 
     async def get_exception(self, exception_id: UUID) -> ExceptionRecord:
-        row = await self._get_row(exception_id)
-        return record_from_orm(row)
+        if self._prefer_rest():
+            return await asyncio.to_thread(_get_exception_rest, exception_id)
+        try:
+            row = await self._get_row(exception_id)
+            return record_from_orm(row)
+        except BpmExceptionNotFoundError:
+            raise
+        except Exception:
+            if supabase_rest_configured():
+                return await asyncio.to_thread(_get_exception_rest, exception_id)
+            raise
 
     async def list_exceptions(
         self,
         status: ExceptionStatus | None = None,
     ) -> List[ExceptionRecord]:
+        if self._prefer_rest():
+            return await asyncio.to_thread(_list_exceptions_rest, status)
         try:
             stmt = select(ProcessException).order_by(ProcessException.created_at.desc())
             if status is not None:
@@ -233,12 +402,19 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
             result = await self._session.execute(stmt)
             rows = result.scalars().all()
         except Exception as exc:
+            if supabase_rest_configured():
+                try:
+                    return await asyncio.to_thread(_list_exceptions_rest, status)
+                except Exception:
+                    pass
             raise DatabasePersistenceError("Failed to list exceptions") from exc
         return [record_from_orm(row) for row in rows]
 
     async def update_exception(self, record: ExceptionRecord) -> ExceptionRecord:
-        row = await self._get_row(record.id)
+        if self._prefer_rest():
+            return await asyncio.to_thread(_update_exception_rest, record)
         try:
+            row = await self._get_row(record.id)
             row.process_id = record.process_id
             row.task_id = record.task_id
             row.severity = record.severity.value
@@ -249,7 +425,14 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
             row.resolution_notes = record.resolution_notes
             row.resolved_at = record.resolved_at
             await self._session.flush()
+        except BpmExceptionNotFoundError:
+            raise
         except Exception as exc:
+            if supabase_rest_configured():
+                try:
+                    return await asyncio.to_thread(_update_exception_rest, record)
+                except Exception:
+                    pass
             raise DatabasePersistenceError("Failed to update exception") from exc
         return record_from_orm(row)
 
@@ -262,6 +445,20 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
         new_values: dict | None,
         performed_by: UUID | None = None,
     ) -> None:
+        if self._prefer_rest():
+            await asyncio.to_thread(
+                rest_insert,
+                "audit_logs",
+                {
+                    "entity_type": AUDIT_ENTITY_PROCESS,
+                    "entity_id": str(process_id or exception_id),
+                    "action": action,
+                    "performed_by": str(performed_by) if performed_by else None,
+                    "old_values": old_values,
+                    "new_values": new_values,
+                },
+            )
+            return
         try:
             self._session.add(
                 AuditLog(
@@ -276,9 +473,28 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
                 )
             )
         except Exception as exc:
+            if supabase_rest_configured():
+                try:
+                    await asyncio.to_thread(
+                        rest_insert,
+                        "audit_logs",
+                        {
+                            "entity_type": AUDIT_ENTITY_PROCESS,
+                            "entity_id": str(process_id or exception_id),
+                            "action": action,
+                            "performed_by": str(performed_by) if performed_by else None,
+                            "old_values": old_values,
+                            "new_values": new_values,
+                        },
+                    )
+                    return
+                except Exception:
+                    pass
             raise DatabasePersistenceError("Failed to record exception audit") from exc
 
     async def commit(self) -> None:
+        if self._prefer_rest():
+            return
         try:
             await self._session.commit()
         except Exception as exc:
@@ -286,6 +502,8 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
             raise DatabasePersistenceError("Failed to commit exception change") from exc
 
     async def rollback(self) -> None:
+        if self._prefer_rest():
+            return
         try:
             await self._session.rollback()
         except Exception as exc:

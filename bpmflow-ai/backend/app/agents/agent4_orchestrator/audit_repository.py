@@ -4,6 +4,7 @@ Write paths remain in process, approval, and exception repositories.
 """
 
 from abc import ABC, abstractmethod
+import asyncio
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.supabase_rest import rest_select, supabase_rest_configured, use_supabase_rest_fallback
 from app.models.audit import AuditLog
 
 from .exceptions import DatabasePersistenceError
@@ -44,6 +46,40 @@ def audit_from_orm(row: AuditLog) -> AuditLogRecord:
         new_values=row.new_values,
         timestamp=row.timestamp,
     )
+
+
+def audit_from_rest(row: dict) -> AuditLogRecord:
+    return AuditLogRecord.model_validate(
+        {
+            "id": row["id"],
+            "entity_type": row["entity_type"],
+            "entity_id": row["entity_id"],
+            "action": row["action"],
+            "performed_by": row.get("performed_by"),
+            "old_values": row.get("old_values"),
+            "new_values": row.get("new_values"),
+            "timestamp": row["timestamp"],
+        }
+    )
+
+
+def _list_audit_rest(
+    entity_type: str | None,
+    entity_id: UUID | None,
+    limit: int,
+    offset: int,
+) -> List[AuditLogRecord]:
+    params: dict[str, str] = {
+        "select": "id,entity_type,entity_id,action,performed_by,old_values,new_values,timestamp",
+        "order": "timestamp.desc",
+        "limit": str(limit),
+        "offset": str(offset),
+    }
+    if entity_type is not None:
+        params["entity_type"] = f"eq.{entity_type}"
+    if entity_id is not None:
+        params["entity_id"] = f"eq.{entity_id}"
+    return [audit_from_rest(row) for row in rest_select("audit_logs", params)]
 
 
 class AuditRepository(ABC):
@@ -100,6 +136,14 @@ class SqlAlchemyAuditRepository(AuditRepository):
     ) -> List[AuditLogRecord]:
         bounded_limit = min(max(limit, 1), MAX_AUDIT_LIMIT)
         bounded_offset = max(offset, 0)
+        if use_supabase_rest_fallback():
+            return await asyncio.to_thread(
+                _list_audit_rest,
+                entity_type,
+                entity_id,
+                bounded_limit,
+                bounded_offset,
+            )
         try:
             stmt = select(AuditLog).order_by(AuditLog.timestamp.desc())
             if entity_type is not None:
@@ -110,5 +154,16 @@ class SqlAlchemyAuditRepository(AuditRepository):
             result = await self._session.execute(stmt)
             rows = result.scalars().all()
         except Exception as exc:
+            if supabase_rest_configured():
+                try:
+                    return await asyncio.to_thread(
+                        _list_audit_rest,
+                        entity_type,
+                        entity_id,
+                        bounded_limit,
+                        bounded_offset,
+                    )
+                except Exception:
+                    pass
             raise DatabasePersistenceError("Failed to list audit logs") from exc
         return [audit_from_orm(row) for row in rows]

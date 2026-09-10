@@ -17,6 +17,11 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     """Startup: lazy async engine. Shutdown: dispose engine and Agent 3 LLM if present."""
     try:
+        settings.assert_production_llm_config()
+    except RuntimeError:
+        logger.exception("production_llm_config_invalid")
+        raise
+    try:
         await init_db()
     except Exception:
         logger.warning("async_db_init_skipped", exc_info=True)
@@ -45,6 +50,12 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
+    # Local Vite / CRA hosts often alternate between localhost and 127.0.0.1.
+    allow_origin_regex=(
+        r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+        if settings.is_development
+        else None
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

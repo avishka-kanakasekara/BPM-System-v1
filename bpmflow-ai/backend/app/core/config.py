@@ -43,12 +43,18 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MB: int = 20
     ALLOWED_FILE_TYPES: str = "pdf,docx,csv"
     ENV: str = "development"
+    # Demo / default tenant used for Agent 3 seeded resources. In development,
+    # missing JWT app_metadata.tenant_id is auto-provisioned to this value.
+    DEMO_TENANT_ID: str = "00000000-0000-0000-0000-000000000001"
 
     CORS_ORIGINS: List[str] = Field(
         default_factory=lambda: [
             "http://localhost:3000",
+            "http://127.0.0.1:3000",
             "http://localhost:5173",
+            "http://127.0.0.1:5173",
             "http://localhost:5174",
+            "http://127.0.0.1:5174",
         ]
     )
 
@@ -76,6 +82,35 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.ENV.lower() in {"development", "dev", "local"}
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENV.lower() in {"production", "prod"}
+
+    def assert_production_llm_config(self) -> None:
+        """Fail closed when production would use mock/offline LLM seams.
+
+        Gemini is the required live LLM for all agents (discovery, execution,
+        optional explanations). Anthropic remains an optional Agent 1 fallback
+        only when Gemini is unavailable in non-production environments.
+        """
+        if not self.is_production:
+            return
+        if self.MOCK_LLM:
+            raise RuntimeError(
+                "MOCK_LLM cannot be enabled when ENV=production. "
+                "Configure GEMINI_API_KEY for real LLM calls."
+            )
+        if self.GEMINI_OFFLINE:
+            raise RuntimeError(
+                "GEMINI_OFFLINE cannot be enabled when ENV=production. "
+                "Configure GEMINI_API_KEY for real Agent 2 execution intelligence."
+            )
+        if not (self.GEMINI_API_KEY or "").strip() or self.GEMINI_API_KEY.startswith("your_"):
+            raise RuntimeError(
+                "GEMINI_API_KEY is required when ENV=production "
+                "(used for Agent 1 discovery and Agent 2 execution)."
+            )
 
     @property
     def async_database_url(self) -> str:

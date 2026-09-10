@@ -74,7 +74,7 @@ def _ensure_sslmode(url: str) -> str:
     return f"{url}{sep}sslmode=require"
 
 
-def _create_sync_engine(url: str, *, connect_timeout: int = 5) -> Engine:
+def _create_sync_engine(url: str, *, connect_timeout: int = 2) -> Engine:
     url = _ensure_sslmode(url)
     connect_args: dict = {}
     kwargs: dict = {"pool_pre_ping": True}
@@ -220,7 +220,7 @@ def get_engine() -> AsyncEngine:
                 "statement_cache_size": 0,
                 "prepared_statement_cache_size": 0,
                 "ssl": ssl_ctx,
-                "timeout": 15,
+                "timeout": 3,
             }
             # Strip sslmode from the URL so asyncpg does not reject unknown kwargs.
             if "?" in database_url:
