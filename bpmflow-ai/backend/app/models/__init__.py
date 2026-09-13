@@ -2,17 +2,24 @@
 
 from app.models.agent_message import AgentMessageRecord
 from app.models.audit import AuditLog, IngestionAuditLog
-from app.models.document import DiscoveredDocument
+from app.models.document import DiscoveredDocument, DocumentChunk
 from app.models.process import Process, ProcessExceptionRow, ProcessTask
+from app.models.workflow import WorkflowPlan, WorkflowStep, WorkflowStepDependency
+from app.models.tool_registry import ToolRegistryEntry
 
 __all__ = [
     "AgentMessageRecord",
     "AuditLog",
     "IngestionAuditLog",
     "DiscoveredDocument",
+    "DocumentChunk",
     "Process",
     "ProcessExceptionRow",
     "ProcessTask",
+    "WorkflowPlan",
+    "WorkflowStep",
+    "WorkflowStepDependency",
+    "ToolRegistryEntry",
 ]
 
 try:

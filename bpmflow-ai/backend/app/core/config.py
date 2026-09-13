@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     # --- Uploads ---------------------------------------------------------------
     MAX_UPLOAD_MB: int = 20
     MAX_REQUEST_MB: int = 25
-    ALLOWED_FILE_TYPES: str = "pdf,docx,csv"
+    ALLOWED_FILE_TYPES: str = "pdf,docx,csv,txt"
 
     # --- Rate limiting ---------------------------------------------------------
     RATE_LIMIT_AUTH_PER_MINUTE: int = 20

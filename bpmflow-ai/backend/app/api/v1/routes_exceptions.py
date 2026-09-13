@@ -9,13 +9,14 @@ from app.agents.agent4_orchestrator.exception_repository import ExceptionReposit
 from app.agents.agent4_orchestrator.exception_service import ExceptionService
 from app.agents.agent4_orchestrator.exceptions import (
     BpmExceptionNotFoundError,
+    CrossTenantExceptionError,
     DatabasePersistenceError,
     InvalidExceptionStatusError,
     InvalidRetryError,
 )
 from app.agents.agent4_orchestrator.state_machine import InvalidTransitionError
 from app.api.v1.deps import get_exception_repository, get_exception_service
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_roles
 from app.schemas.auth import CurrentUser
 from app.schemas.exception import (
     ExceptionActionResponse,
@@ -53,6 +54,13 @@ def _database_error() -> HTTPException:
     )
 
 
+def _cross_tenant() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="CROSS_TENANT_DENIED",
+    )
+
+
 @router.get("", response_model=list[ExceptionResponse])
 async def list_exceptions(
     status: ExceptionStatus | None = Query(default=None),
@@ -60,7 +68,9 @@ async def list_exceptions(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> list[ExceptionResponse]:
     try:
-        records = await repository.list_exceptions(status=status)
+        records = await repository.list_exceptions(
+            status=status, tenant_id=current_user.tenant_id
+        )
     except DatabasePersistenceError as exc:
         raise _database_error() from exc
     return [exception_from_record(record) for record in records]
@@ -69,13 +79,15 @@ async def list_exceptions(
 @router.get("/{exception_id}", response_model=ExceptionResponse)
 async def get_exception(
     exception_id: UUID,
-    repository: ExceptionRepository = Depends(get_exception_repository),
+    service: ExceptionService = Depends(get_exception_service),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> ExceptionResponse:
     try:
-        record = await repository.get_exception(exception_id)
+        record = await service.get_exception(exception_id, tenant_id=current_user.tenant_id)
     except BpmExceptionNotFoundError as exc:
         raise _not_found() from exc
+    except CrossTenantExceptionError as exc:
+        raise _cross_tenant() from exc
     except DatabasePersistenceError as exc:
         raise _database_error() from exc
     return exception_from_record(record)
@@ -86,7 +98,7 @@ async def resolve_exception(
     exception_id: UUID,
     payload: ExceptionResolveRequest,
     service: ExceptionService = Depends(get_exception_service),
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ExceptionActionResponse:
     """Resolve an exception without auto-completing the process."""
     try:
@@ -94,6 +106,8 @@ async def resolve_exception(
             exception_id,
             resolution_notes=payload.resolution_notes,
             performed_by=current_user.id,
+            tenant_id=current_user.tenant_id,
+            resolved_by_employee_id=current_user.id,
         )
     except BpmExceptionNotFoundError as exc:
         raise _not_found() from exc
@@ -116,13 +130,14 @@ async def retry_exception(
     exception_id: UUID,
     payload: ExceptionRetryRequest,
     service: ExceptionService = Depends(get_exception_service),
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ExceptionActionResponse:
     """Retry an eligible exception via the existing recovery flow."""
     try:
         record = await service.retry_exception(
             exception_id,
             notes=payload.notes,
+            tenant_id=current_user.tenant_id,
         )
     except BpmExceptionNotFoundError as exc:
         raise _not_found() from exc
@@ -145,13 +160,14 @@ async def fail_exception(
     exception_id: UUID,
     payload: ExceptionFailRequest,
     service: ExceptionService = Depends(get_exception_service),
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ExceptionActionResponse:
     """Map terminal failure to ignored without auto-completing the process."""
     try:
         record = await service.fail_exception(
             exception_id,
             notes=payload.resolution_notes,
+            tenant_id=current_user.tenant_id,
         )
     except BpmExceptionNotFoundError as exc:
         raise _not_found() from exc

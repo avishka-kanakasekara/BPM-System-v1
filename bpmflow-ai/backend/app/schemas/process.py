@@ -32,6 +32,9 @@ class ProcessResponse(BaseModel):
     updated_at: datetime
     # Execution / procurement evidence (PO drafts, last tool run, etc.).
     metadata_json: dict | None = None
+    tenant_id: UUID | None = None
+    process_context: dict | None = None
+    designated_approver_id: UUID | None = None
 
 
 class ProcessStartResponse(BaseModel):
@@ -55,6 +58,7 @@ class ResourcePlanningRequest(BaseModel):
     task_id: UUID
     tenant_id: UUID
     correlation_id: UUID | None = None
+    process_context_ref: UUID | None = None
     human_requirements: dict | None = None
     budget_requirements: dict | None = None
 
@@ -81,6 +85,7 @@ class ExecuteWorkflowRequest(BaseModel):
     task_type: str = "EXECUTE_TASK"
     correlation_id: UUID | None = None
     parameters: dict = Field(default_factory=dict)
+    process_context_ref: UUID | None = None
 
 
 class AdvanceProcessRequest(BaseModel):

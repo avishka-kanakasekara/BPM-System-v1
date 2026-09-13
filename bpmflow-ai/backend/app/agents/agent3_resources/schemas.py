@@ -88,6 +88,19 @@ class HumanResourceRequirement(BaseModel):
     task_deadline: datetime
     estimated_effort_hours: Decimal = Field(ge=Decimal("0"))
     process_stage: str
+    process_id: UUID | None = None
+    process_context_ref: UUID | None = None
+    task_purpose: str | None = None
+    required_department_code: str | None = None
+    required_department_id: UUID | None = None
+    required_authority_code: str | None = None
+    minimum_authority_amount: Decimal | None = Field(default=None, ge=Decimal("0"))
+    authority_currency: str | None = None
+    availability_required: bool = True
+    assignment_kind: Literal["allocation", "approver"] = "allocation"
+    required_approval_type: str | None = None
+    requester_employee_id: UUID | None = None
+    require_requester_identity: bool = False
 
     @field_validator("task_deadline", mode="after")
     @classmethod
@@ -122,6 +135,7 @@ class AllocationRequest(BaseModel):
     metadata: AgentMessageMetadata
     human_requirements: HumanResourceRequirement | None = None
     budget_requirements: BudgetResourceRequirement | None = None
+    process_context_ref: UUID | None = None
 
 
 # ============================================================================
@@ -149,6 +163,13 @@ class HumanResourceEvidence(BaseModel):
     evidence_checked_at: datetime
     evidence_valid_until: datetime
     evidence_references: dict[str, Any] = Field(default_factory=dict)
+    employee_id: UUID | None = None
+    employee_number: str | None = None
+    employee_email: str | None = None
+    department_code: str | None = None
+    department_id: UUID | None = None
+    authority_max_amount: Decimal | None = None
+    authority_currency: str | None = None
 
     @field_validator(
         "available_from",
@@ -211,6 +232,7 @@ class ExcludedResource(BaseModel):
     resource_type: ResourceType
     name: str
     exclusion_reasons: list[ExclusionReasonEntry] = Field(default_factory=list)
+    employee_id: UUID | None = None
 
 
 # ============================================================================
@@ -274,6 +296,16 @@ class RankedHumanCandidate(BaseModel):
     available_from: datetime
     available_until: datetime | None = None
     evidence_refs: dict[str, Any] = Field(default_factory=dict)
+    employee_id: UUID | None = None
+    employee_number: str | None = None
+    employee_email: str | None = None
+    role: str | None = None
+    department: str | None = None
+    eligibility: str = "ELIGIBLE"
+    matched_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    authority_match: bool | None = None
+    availability_status: str | None = None
 
     @field_validator("available_from", "available_until", mode="after")
     @classmethod
@@ -326,6 +358,7 @@ class RequirementResult(BaseModel):
     eligible_candidates: list[RankedHumanCandidate] = Field(default_factory=list)
     excluded_resources: list[ExcludedResource] = Field(default_factory=list)
     budget_validation: BudgetValidationResult | None = None
+    outcome_code: str | None = None
 
     @model_validator(mode="after")
     def validate_result_shape(self) -> "RequirementResult":

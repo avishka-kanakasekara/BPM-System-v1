@@ -74,15 +74,72 @@ def persist_discovery(
     message: DiscoveryAgentMessage,
     process: ProcessJSON,
     documents: list[dict[str, Any]],
+    *,
+    tenant_id: UUID | None = None,
+    requester_user_id: UUID | None = None,
+    requester_email: str | None = None,
+    requester_name: str | None = None,
+    requester_department: str | None = None,
+    entities: list[Any] | None = None,
+    doc_types: list[str] | None = None,
 ) -> Any:
     """Store the discovered workflow on the process identified by message.process_id.
 
     If a process row already exists (Create Process → upload), discovery fields are
     updated in place. current_stage is never written here — Agent 4 owns stages.
     """
+    extras = dict(
+        tenant_id=tenant_id,
+        requester_user_id=requester_user_id,
+        requester_email=requester_email,
+        requester_name=requester_name,
+        requester_department=requester_department,
+        entities=entities,
+        doc_types=doc_types,
+    )
     if db is not None:
-        return _persist_sqlalchemy(db, message, process, documents)
-    return _persist_rest(message, process, documents)
+        return _persist_sqlalchemy(db, message, process, documents, **extras)
+    return _persist_rest(message, process, documents, **extras)
+
+
+def _store_process_context(
+    row: Process,
+    message: DiscoveryAgentMessage,
+    process: ProcessJSON,
+    documents: list[dict[str, Any]],
+    *,
+    tenant_id: UUID | None = None,
+    requester_user_id: UUID | None = None,
+    requester_email: str | None = None,
+    requester_name: str | None = None,
+    requester_department: str | None = None,
+    entities: list[Any] | None = None,
+    doc_types: list[str] | None = None,
+) -> dict[str, Any]:
+    from app.process_context.from_discovery import context_from_discovery
+    from app.process_context.service import context_from_process_row, merge_process_context
+
+    existing = context_from_process_row(row)
+    patch = context_from_discovery(
+        process,
+        message,
+        tenant_id=tenant_id or getattr(row, "tenant_id", None),
+        requester_user_id=requester_user_id or getattr(row, "created_by", None),
+        requester_email=requester_email or getattr(row, "requester_email", None),
+        requester_name=requester_name,
+        requester_department=requester_department or getattr(row, "department", None),
+        documents=documents,
+        entities=entities,
+        doc_types=doc_types,
+    )
+    merged = merge_process_context(existing, patch, incoming_source="extracted_evidence")
+    payload = merged.model_dump(mode="json")
+    row.process_context = payload
+    if merged.tenant_id:
+        row.tenant_id = merged.tenant_id
+    if merged.approver.user_id:
+        row.designated_approver_id = merged.approver.user_id
+    return payload
 
 
 def _apply_discovery_fields(row: Process, message: DiscoveryAgentMessage, process: ProcessJSON) -> None:
@@ -133,12 +190,33 @@ def _persist_sqlalchemy(
     message: DiscoveryAgentMessage,
     process: ProcessJSON,
     documents: list[dict[str, Any]],
+    *,
+    tenant_id: UUID | None = None,
+    requester_user_id: UUID | None = None,
+    requester_email: str | None = None,
+    requester_name: str | None = None,
+    requester_department: str | None = None,
+    entities: list[Any] | None = None,
+    doc_types: list[str] | None = None,
 ) -> Process:
     existing = db.get(Process, message.process_id)
     updated_existing = existing is not None
     if existing is not None:
         row = existing
         _apply_discovery_fields(row, message, process)
+        _store_process_context(
+            row,
+            message,
+            process,
+            documents,
+            tenant_id=tenant_id,
+            requester_user_id=requester_user_id,
+            requester_email=requester_email,
+            requester_name=requester_name,
+            requester_department=requester_department,
+            entities=entities,
+            doc_types=doc_types,
+        )
         stage = (row.current_stage or "DRAFT").upper()
         if stage in {"DRAFT", "DISCOVERING"}:
             _replace_discovery_tasks(db, row.id, process)
@@ -156,9 +234,24 @@ def _persist_sqlalchemy(
             trace_id=message.trace_id,
             message_id=message.message_id,
             current_stage="DRAFT",
+            tenant_id=tenant_id,
+            process_context={},
         )
         db.add(row)
         db.flush()
+        _store_process_context(
+            row,
+            message,
+            process,
+            documents,
+            tenant_id=tenant_id,
+            requester_user_id=requester_user_id,
+            requester_email=requester_email,
+            requester_name=requester_name,
+            requester_department=requester_department,
+            entities=entities,
+            doc_types=doc_types,
+        )
         _replace_discovery_tasks(db, row.id, process)
 
     for item in process.exceptions:
@@ -175,18 +268,54 @@ def _persist_sqlalchemy(
 
     for doc in documents:
         file_id = doc.get("file_id")
-        db.add(
-            DiscoveredDocument(
-                id=file_id if isinstance(file_id, UUID) else uuid4(),
-                process_id=row.id,
-                original_filename=doc.get("original_filename"),
-                sanitized_filename=doc.get("sanitized_filename"),
-                mime_type=doc.get("mime_type"),
-                size_bytes=doc.get("size_bytes"),
-                ingest_status=doc.get("ingest_status"),
-                doc_type=doc.get("doc_type"),
+        doc_uuid = file_id if isinstance(file_id, UUID) else uuid4()
+        existing_doc = db.get(DiscoveredDocument, doc_uuid)
+        if existing_doc is None:
+            existing_doc = DiscoveredDocument(id=doc_uuid)
+            db.add(existing_doc)
+        existing_doc.process_id = row.id
+        existing_doc.original_filename = doc.get("original_filename")
+        existing_doc.sanitized_filename = doc.get("sanitized_filename")
+        existing_doc.mime_type = doc.get("mime_type")
+        existing_doc.size_bytes = doc.get("size_bytes")
+        existing_doc.ingest_status = doc.get("ingest_status")
+        existing_doc.doc_type = doc.get("doc_type")
+        existing_doc.tenant_id = tenant_id
+        existing_doc.content_hash = doc.get("content_hash")
+        existing_doc.source = doc.get("source") or "upload"
+        existing_doc.version = str(doc.get("version") or "1")
+        existing_doc.is_active = True
+        existing_doc.evidence_ref = str(doc_uuid)
+
+    if tenant_id is not None:
+        from app.ir.corpus import get_document_corpus
+        from app.models.document import DocumentChunk
+
+        indexed_ids = {
+            (doc.get("file_id") if isinstance(doc.get("file_id"), UUID) else None)
+            for doc in documents
+        }
+        for chunk in get_document_corpus().active_chunks(tenant_id):
+            if chunk.document_id not in indexed_ids:
+                continue
+            if db.get(DocumentChunk, chunk.chunk_id) is not None:
+                continue
+            db.add(
+                DocumentChunk(
+                    id=chunk.chunk_id,
+                    tenant_id=chunk.tenant_id,
+                    document_id=chunk.document_id,
+                    process_id=row.id,
+                    chunk_index=chunk.chunk_index,
+                    page_number=chunk.page,
+                    section_title=chunk.section,
+                    text_content=chunk.text,
+                    embedding=list(chunk.embedding),
+                    metadata_json=chunk.metadata,
+                    document_version=chunk.document_version,
+                    is_active=True,
+                )
             )
-        )
 
     db.add(
         AgentMessageRecord(
@@ -228,13 +357,51 @@ def _persist_rest(
     message: DiscoveryAgentMessage,
     process: ProcessJSON,
     documents: list[dict[str, Any]],
+    *,
+    tenant_id: UUID | None = None,
+    requester_user_id: UUID | None = None,
+    requester_email: str | None = None,
+    requester_name: str | None = None,
+    requester_department: str | None = None,
+    entities: list[Any] | None = None,
+    doc_types: list[str] | None = None,
 ) -> SimpleNamespace:
     import json
 
     from app.core.supabase_rest import rest_insert, rest_select, rest_update
+    from app.process_context.from_discovery import context_from_discovery
+    from app.process_context.schemas import ProcessContext
+    from app.process_context.service import empty_process_context, merge_process_context
 
     name = process.process_name or "Discovered process"
     process_id = str(message.process_id)
+    existing_rows = rest_select("processes", {"id": f"eq.{process_id}", "select": "*"})
+    existing_ctx: dict[str, Any] = {}
+    existing_tenant = tenant_id
+    if existing_rows:
+        existing_ctx = existing_rows[0].get("process_context") or {}
+        existing_tenant = existing_tenant or existing_rows[0].get("tenant_id")
+    tenant_uuid = UUID(str(existing_tenant)) if existing_tenant else None
+    current = (
+        ProcessContext.model_validate(existing_ctx)
+        if isinstance(existing_ctx, dict) and existing_ctx.get("process_id")
+        else empty_process_context(message.process_id, tenant_id=tenant_uuid)
+    )
+    patch_ctx = context_from_discovery(
+        process,
+        message,
+        tenant_id=tenant_uuid,
+        requester_user_id=requester_user_id,
+        requester_email=requester_email,
+        requester_name=requester_name,
+        requester_department=requester_department,
+        documents=documents,
+        entities=entities,
+        doc_types=doc_types,
+    )
+    context_payload = merge_process_context(
+        current, patch_ctx, incoming_source="extracted_evidence"
+    ).model_dump(mode="json")
     meta = {
         "overall_confidence": message.overall_confidence,
         "discovery_status": message.status,
@@ -243,7 +410,6 @@ def _persist_rest(
         "documents": _jsonable_docs(documents),
         "process_json": message.payload,
     }
-    existing_rows = rest_select("processes", {"id": f"eq.{process_id}", "select": "*"})
     if existing_rows:
         patch = {
             "name": name,
@@ -253,7 +419,10 @@ def _persist_rest(
             "trace_id": str(message.trace_id),
             "message_id": str(message.message_id),
             "description": json.dumps(meta),
+            "process_context": context_payload,
         }
+        if tenant_uuid:
+            patch["tenant_id"] = str(tenant_uuid)
         try:
             stored = rest_update("processes", {"id": f"eq.{process_id}"}, patch)
         except Exception:
@@ -283,7 +452,10 @@ def _persist_rest(
             "discovery_status": message.status,
             "trace_id": str(message.trace_id),
             "message_id": str(message.message_id),
+            "process_context": context_payload,
         }
+        if tenant_uuid:
+            full_row["tenant_id"] = str(tenant_uuid)
         try:
             stored = rest_insert("processes", full_row)
         except Exception:

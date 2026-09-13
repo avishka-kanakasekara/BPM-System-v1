@@ -15,17 +15,28 @@ from app.agents.agent4_orchestrator.exceptions import (
     ProcessNotFoundError,
 )
 from app.agents.agent4_orchestrator.execution_payload import enrich_execute_parameters
+from app.process_context.exceptions import MissingRequiredContextError
 from app.agents.agent4_orchestrator.repository import ProcessRepository
 from app.agents.agent4_orchestrator.schemas import RiskEvaluationContext, WorkflowResult
 from app.agents.agent4_orchestrator.state_machine import InvalidTransitionError
 from app.agents.agent4_orchestrator.workflow import Agent4Workflow
+from app.agents.agent4_orchestrator.workflow_plan.exceptions import CrossTenantWorkflowError
+from app.agents.agent4_orchestrator.workflow_plan.schemas import WorkflowPlanRecord
+from app.agents.agent4_orchestrator.workflow_plan.service import WorkflowPlanService
+from app.agents.agent4_orchestrator.workflow_plan.planner import WorkflowPlanner
+from app.agents.agent4_orchestrator.workflow_plan.planning_schemas import WorkflowPlanningResult
+from app.agents.agent4_orchestrator.exception_service import ExceptionService
 from app.api.v1.deps import (
     get_agent4_workflow,
+    get_exception_service,
     get_process_advancement_engine,
     get_process_repository,
+    get_workflow_plan_service,
+    get_workflow_planner,
 )
 from app.core.security import get_current_user
 from app.schemas.auth import CurrentUser
+from app.schemas.exception import ExceptionResponse, exception_from_record
 from app.schemas.process import (
     AdvanceProcessRequest,
     AdvanceProcessResponse,
@@ -100,9 +111,64 @@ async def create_process(
             process_type=payload.process_type,
             description=payload.description,
             created_by=current_user.id,
+            tenant_id=current_user.tenant_id,
         )
     except DatabasePersistenceError as exc:
         raise _database_error() from exc
+
+
+@router.post("/{process_id}/workflow/plan", response_model=WorkflowPlanningResult)
+async def generate_process_workflow_plan(
+    process_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    planner: WorkflowPlanner = Depends(get_workflow_planner),
+) -> WorkflowPlanningResult:
+    if current_user.tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant context is required for workflow planning",
+        )
+    try:
+        return await planner.generate_plan(process_id=process_id, tenant_id=current_user.tenant_id)
+    except ProcessNotFoundError as exc:
+        raise _not_found() from exc
+    except CrossTenantWorkflowError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.as_dict()) from exc
+
+
+@router.get("/{process_id}/workflow", response_model=WorkflowPlanRecord)
+async def get_process_workflow(
+    process_id: UUID,
+    version: int | None = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: WorkflowPlanService = Depends(get_workflow_plan_service),
+) -> WorkflowPlanRecord:
+    if current_user.tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant context is required for workflow operations",
+        )
+    try:
+        if version is not None:
+            plan = await service.get_plan_version(
+                tenant_id=current_user.tenant_id, process_id=process_id, version=version
+            )
+        else:
+            plan = await service.get_active_plan(
+                tenant_id=current_user.tenant_id, process_id=process_id
+            )
+            if plan is None:
+                plans = await service.list_plans_for_process(
+                    tenant_id=current_user.tenant_id, process_id=process_id
+                )
+                plan = plans[-1] if plans else None
+        if plan is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow plan not found")
+        return plan
+    except ProcessNotFoundError as exc:
+        raise _not_found() from exc
+    except CrossTenantWorkflowError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.as_dict()) from exc
 
 
 @router.get("/{process_id}", response_model=ProcessResponse)
@@ -363,7 +429,13 @@ async def execute_workflow(
     except DatabasePersistenceError as exc:
         raise _database_error() from exc
 
-    parameters = _enrich_execute_parameters(process, payload.parameters)
+    try:
+        parameters = _enrich_execute_parameters(process, payload.parameters)
+    except MissingRequiredContextError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.as_dict(),
+        ) from exc
     message_payload = {
         "task_type": payload.task_type,
         "parameters": parameters,
@@ -391,8 +463,7 @@ async def complete_invoice_matching(
     workflow: Agent4Workflow = Depends(get_agent4_workflow),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> WorkflowResult:
-    """Match invoice evidence then COMPLETED, or EXCEPTION on mismatch."""
-    _ = current_user
+    """Match persisted invoice to persisted PO then COMPLETED, or EXCEPTION on mismatch."""
     try:
         return await workflow.complete_invoice_matching(
             process_id,
@@ -408,6 +479,7 @@ async def complete_invoice_matching(
             expected_invoice_number=payload.expected_invoice_number,
             notes=payload.notes or payload.reference,
             reference=payload.reference,
+            tenant_id=current_user.tenant_id,
         )
     except ProcessNotFoundError as exc:
         raise _not_found() from exc
@@ -415,3 +487,60 @@ async def complete_invoice_matching(
         raise _invalid_transition() from exc
     except DatabasePersistenceError as exc:
         raise _database_error() from exc
+
+
+@router.get("/{process_id}/quotations")
+def list_process_quotations(
+    process_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Tenant-scoped quotation records for a process. Read-only."""
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant context is required")
+    from app.procurement.service import get_procurement
+
+    return get_procurement().list_quotations(tenant_id=current_user.tenant_id, process_id=process_id)
+
+
+@router.get("/{process_id}/purchase-order")
+def get_process_purchase_order(
+    process_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Authoritative purchase order for a process. Creation is Agent2-only."""
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant context is required")
+    from app.procurement.service import get_procurement
+
+    record = get_procurement().get_purchase_order_for_process(
+        tenant_id=current_user.tenant_id, process_id=process_id
+    )
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Purchase order not found")
+    return record
+
+
+@router.get("/{process_id}/invoices")
+def list_process_invoices(
+    process_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant context is required")
+    from app.procurement.service import get_procurement
+
+    return get_procurement().list_invoices(tenant_id=current_user.tenant_id, process_id=process_id)
+
+
+@router.get("/{process_id}/exceptions", response_model=list[ExceptionResponse])
+async def list_process_exceptions(
+    process_id: UUID,
+    current_user: CurrentUser = Depends(get_current_user),
+    service: ExceptionService = Depends(get_exception_service),
+):
+    if current_user.tenant_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant context is required")
+    records = await service.list_exceptions(
+        tenant_id=current_user.tenant_id, process_id=process_id
+    )
+    return [exception_from_record(record) for record in records]

@@ -27,10 +27,11 @@ def test_list_tools_endpoint(mock_user_override):
     res = client.get("/api/v1/agent2/tools")
     assert res.status_code == 200
     tools = res.json()
-    assert len(tools) == 12
+    assert len(tools) == 13
     names = {t["name"] for t in tools}
     assert "send_email" in names
     assert "create_po_draft" in names
+    assert "match_invoice" in names
 
 
 def test_dashboard_endpoint(mock_user_override):

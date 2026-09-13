@@ -36,6 +36,7 @@ EXTRACTION_EMPTY_FILE = "EMPTY_FILE"
 EXTRACTION_FILE_NOT_FOUND = "FILE_NOT_FOUND"
 EXTRACTION_CORRUPT = "CORRUPT_OR_UNREADABLE"
 EXTRACTION_UNSUPPORTED = "UNSUPPORTED_TYPE"
+EXTRACTION_INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
 
 _UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -43,6 +44,7 @@ _MIME_BY_EXTENSION = {
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "csv": "text/csv",
+    "txt": "text/plain",
 }
 
 _MAGIC_PREFIXES: dict[str, tuple[bytes, ...]] = {
@@ -60,7 +62,7 @@ def _mime_matches_extension(mime_type: str | None, extension: str) -> bool:
 
 
 def _verify_magic_bytes(extension: str, content: bytes) -> bool:
-    if extension == "csv":
+    if extension in {"csv", "txt"}:
         sample = content[:8192]
         if b"\x00" in sample:
             return False
@@ -300,8 +302,8 @@ def _extract_pdf(path: Path) -> tuple[list[PageText], float, str]:
     if not pages:
         raise ValueError("PDF has no pages")
     if total_chars == 0:
-        # Scanned / image-only PDF: keep going with low confidence for an OCR step later.
-        return pages, 0.2, "pypdf_no_text_layer"
+        # Image-only / empty text layer: Phase 9 does not invent OCR content.
+        return pages, 0.0, "pypdf_no_text_layer"
     return pages, 0.9, "pypdf"
 
 
@@ -324,6 +326,93 @@ def _extract_csv(path: Path) -> tuple[list[PageText], float, str]:
     return [PageText(page_num=1, text=text)], 1.0, "csv"
 
 
+def _extract_txt(path: Path) -> tuple[list[PageText], float, str]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    pages = [
+        PageText(page_num=index, text=part)
+        for index, part in enumerate(text.split("\f") or [text], start=1)
+        if True
+    ]
+    if not pages:
+        pages = [PageText(page_num=1, text=text)]
+    confidence = 1.0 if text.strip() else 0.0
+    return pages, confidence, "text"
+
+
+def extract_text_from_bytes(
+    file_id: UUID,
+    content: bytes,
+    *,
+    suffix: str,
+    filename: str | None = None,
+) -> ExtractedDocument:
+    """Extract text from in-memory bytes. Does not read arbitrary filesystem paths."""
+    from io import BytesIO
+    from tempfile import NamedTemporaryFile
+
+    extension = (suffix or "").lower().lstrip(".")
+    if not content:
+        return _failed_extraction(file_id, EXTRACTION_EMPTY_FILE)
+    if extension == "pdf":
+        try:
+            from pypdf import PdfReader
+
+            if content[:5] != b"%PDF-":
+                return _failed_extraction(file_id, EXTRACTION_CORRUPT)
+            reader = PdfReader(BytesIO(content))
+            pages: list[PageText] = []
+            total_chars = 0
+            for index, page in enumerate(reader.pages, start=1):
+                try:
+                    text = page.extract_text() or ""
+                except Exception:
+                    text = ""
+                pages.append(PageText(page_num=index, text=text))
+                total_chars += len(text.strip())
+            if not pages or total_chars == 0:
+                return ExtractedDocument(
+                    file_id=file_id,
+                    pages=pages,
+                    extraction_confidence=0.0,
+                    extraction_method="pypdf_no_text_layer",
+                    status="failed",
+                    failure_reason=EXTRACTION_INSUFFICIENT_EVIDENCE,
+                )
+            return ExtractedDocument(
+                file_id=file_id,
+                pages=pages,
+                extraction_confidence=0.9,
+                extraction_method="pypdf",
+                status="extracted",
+            )
+        except Exception:
+            return _failed_extraction(file_id, EXTRACTION_INSUFFICIENT_EVIDENCE)
+    if extension == "txt":
+        text = content.decode("utf-8", errors="replace")
+        if not text.strip():
+            return _failed_extraction(file_id, EXTRACTION_INSUFFICIENT_EVIDENCE)
+        return ExtractedDocument(
+            file_id=file_id,
+            pages=[PageText(page_num=1, text=text)],
+            extraction_confidence=1.0,
+            extraction_method="text",
+            status="extracted",
+        )
+
+    suffix_name = f".{extension}" if extension else ".bin"
+    tmp_path = None
+    try:
+        with NamedTemporaryFile(suffix=suffix_name, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        result = extract_text(file_id, tmp_path)
+        _ = filename
+        return result
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
 def extract_text(file_id: UUID, file_path: str | Path) -> ExtractedDocument:
     """Extract raw text and page layout from an accepted upload.
 
@@ -343,8 +432,20 @@ def extract_text(file_id: UUID, file_path: str | Path) -> ExtractedDocument:
             pages, confidence, method = _extract_docx(path)
         elif extension == "csv":
             pages, confidence, method = _extract_csv(path)
+        elif extension == "txt":
+            pages, confidence, method = _extract_txt(path)
         else:
             return _failed_extraction(file_id, EXTRACTION_UNSUPPORTED)
+
+        if method == "pypdf_no_text_layer" or not any((page.text or "").strip() for page in pages):
+            return ExtractedDocument(
+                file_id=file_id,
+                pages=pages,
+                extraction_confidence=0.0,
+                extraction_method=method,
+                status="failed",
+                failure_reason=EXTRACTION_INSUFFICIENT_EVIDENCE,
+            )
 
         return ExtractedDocument(
             file_id=file_id,

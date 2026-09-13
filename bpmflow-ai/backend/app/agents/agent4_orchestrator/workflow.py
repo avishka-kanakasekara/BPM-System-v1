@@ -54,7 +54,7 @@ def _load_invoice_match_context(process_id: UUID) -> tuple[dict[str, Any], dict[
             "processes",
             {
                 "id": f"eq.{process_id}",
-                "select": "metadata_json,process_json",
+                "select": "metadata_json,process_json,process_context,tenant_id",
                 "limit": "1",
             },
         )
@@ -63,6 +63,9 @@ def _load_invoice_match_context(process_id: UUID) -> tuple[dict[str, Any], dict[
         row = rows[0]
         meta = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else {}
         payload = row.get("process_json") if isinstance(row.get("process_json"), dict) else {}
+        context = row.get("process_context")
+        if isinstance(context, dict) and context:
+            meta = {**meta, "process_context": context}
         return meta, payload
     except Exception:
         return {}, {}
@@ -100,10 +103,20 @@ class Agent4Workflow:
         severity: ExceptionSeverity | None = None,
         exception_type: ExceptionType | None = None,
         task_id: UUID | None = None,
+        *,
+        tenant_id: UUID | None = None,
+        workflow_plan_id: UUID | None = None,
+        workflow_step_id: UUID | None = None,
+        exception_code: str | None = None,
+        source_agent: str = "agent4",
+        source_operation: str | None = None,
+        evidence_refs: list[str] | None = None,
+        details: dict | None = None,
     ) -> WorkflowResult:
         """Record a BPM exception and halt the process when the StateMachine allows it."""
         if self._exceptions is None:
             raise ValueError("ExceptionService is required for capture_failure")
+        code = exception_code or (exception_type.value if exception_type else ExceptionType.SYSTEM_ERROR.value)
         record = await self._exceptions.create_exception(
             process_id=process_id,
             description=description,
@@ -111,6 +124,14 @@ class Agent4Workflow:
             exception_type=exception_type or ExceptionType.SYSTEM_ERROR,
             task_id=task_id,
             halt_process=True,
+            tenant_id=tenant_id,
+            workflow_plan_id=workflow_plan_id,
+            workflow_step_id=workflow_step_id,
+            exception_code=code,
+            source_agent=source_agent,
+            source_operation=source_operation,
+            evidence_refs=evidence_refs,
+            details=details,
         )
         stage = await self._orchestrator.get_current_stage(process_id)
         return WorkflowResult(
@@ -483,6 +504,25 @@ class Agent4Workflow:
             discovery_confidence=discovery_confidence,
         )
         enriched = context.model_copy(update=updates) if updates else context
+        ctx_raw = meta.get("process_context") if isinstance(meta, dict) else None
+        if isinstance(ctx_raw, dict) and ctx_raw.get("purchase"):
+            purchase = ctx_raw.get("purchase") or {}
+            ctx_updates: dict[str, Any] = {}
+            if enriched.purchase_amount is None and purchase.get("amount") is not None:
+                ctx_updates["purchase_amount"] = Decimal(str(purchase["amount"]))
+            if not enriched.currency and purchase.get("currency"):
+                ctx_updates["currency"] = purchase["currency"]
+            budget = ctx_raw.get("budget") if isinstance(ctx_raw.get("budget"), dict) else {}
+            if enriched.available_budget is None and budget.get("available_amount") is not None:
+                ctx_updates["available_budget"] = Decimal(str(budget["available_amount"]))
+            quotations = ctx_raw.get("quotations") or []
+            if quotations:
+                provided = list(enriched.provided_evidence)
+                if "quotation" not in provided:
+                    provided.append("quotation")
+                ctx_updates["provided_evidence"] = provided
+            if ctx_updates:
+                enriched = enriched.model_copy(update=ctx_updates)
 
         if enriched.policy_snapshot is not None:
             return enriched
@@ -515,11 +555,18 @@ class Agent4Workflow:
                 return None
             rows = rest_select(
                 "processes",
-                {"id": f"eq.{process_id}", "select": "metadata_json", "limit": "1"},
+                {"id": f"eq.{process_id}", "select": "metadata_json,process_context", "limit": "1"},
             )
             if not rows:
                 return None
-            meta = rows[0].get("metadata_json") if isinstance(rows[0], dict) else None
+            row = rows[0] if isinstance(rows[0], dict) else {}
+            context = row.get("process_context")
+            if isinstance(context, dict):
+                budget = context.get("budget") if isinstance(context.get("budget"), dict) else {}
+                raw_ctx = budget.get("available_amount")
+                if raw_ctx is not None:
+                    return Decimal(str(raw_ctx))
+            meta = row.get("metadata_json") if isinstance(row.get("metadata_json"), dict) else None
             if not isinstance(meta, dict):
                 return None
             allocation = meta.get("agent3_allocation")
@@ -643,14 +690,27 @@ class Agent4Workflow:
                     approval_status=ApprovalStatus.APPROVED
                 ),
             )
-            result = await self.execute_authorized(
-                process_id,
-                payload=execution_payload,
-                task_id=approval.task_id,
-                correlation_id=correlation_id,
-            )
-            return result.model_copy(
-                update={"approval": approval, "eligible_for_execution": True}
+            stage = await self._orchestrator.get_current_stage(process_id)
+            payload = execution_payload or {}
+            step_id = payload.get("workflow_step_id")
+            plan_id = payload.get("workflow_plan_id")
+            if step_id and plan_id:
+                return await self.execute_authorized(
+                    process_id,
+                    payload=payload,
+                    task_id=approval.task_id,
+                    correlation_id=correlation_id,
+                )
+            return WorkflowResult(
+                process_id=process_id,
+                current_stage=stage,
+                success=True,
+                message=(
+                    "Human approval granted. Process is at WORKFLOW_EXECUTION. "
+                    "Execute a single WorkflowStep via POST /workflows/{plan_id}/steps/{step_id}/execute"
+                ),
+                approval=approval,
+                eligible_for_execution=True,
             )
         if approval.status is ApprovalStatus.REJECTED:
             await self._orchestrator.move_process(
@@ -690,8 +750,30 @@ class Agent4Workflow:
 
         The message carries status="AUTHORIZED" — Agent 4 is the only agent
         allowed to mark work as authorized, and it only calls this after the
-        risk/approval gate.
+        risk/approval gate. Bulk/full-suite execution is forbidden.
         """
+        payload = dict(payload or {})
+        tool_name = str(
+            payload.get("tool_name")
+            or (payload.get("parameters") or {}).get("tool_name")
+            or ""
+        )
+        from app.agents.agent2_execution.agent.planner_fallback import is_full_task_suite
+
+        step_id = payload.get("workflow_step_id") or (payload.get("parameters") or {}).get(
+            "workflow_step_id"
+        )
+        if is_full_task_suite(tool_name) or not step_id:
+            stage = await self._orchestrator.get_current_stage(process_id)
+            return WorkflowResult(
+                process_id=process_id,
+                current_stage=stage,
+                success=False,
+                message="Agent 2 executes exactly one WorkflowStep; full workflow execution is forbidden",
+                error_code="FULL_WORKFLOW_EXECUTION_FORBIDDEN",
+                error_message="Provide workflow_plan_id and workflow_step_id. __full_task_suite__ is forbidden.",
+                eligible_for_execution=False,
+            )
         return await self._send_to_agent(
             process_id=process_id,
             receiver=AGENT_2,
@@ -735,22 +817,16 @@ class Agent4Workflow:
             task_id=task_id,
             correlation_id=correlation_id,
         )
+        if result.error_code == "FULL_WORKFLOW_EXECUTION_FORBIDDEN":
+            return result
 
         receipt_status = ""
         if result.agent_response:
             receipt_status = str(result.agent_response.get("receipt_status") or "")
 
         if result.success and receipt_status == "SUCCESS":
-            await self._orchestrator.move_process(
-                process_id,
-                WorkflowStage.INVOICE_MATCHING,
-                reason="Agent 2 execution succeeded",
-                transition_context=TransitionContext(
-                    execution_receipt_status="SUCCESS"
-                ),
-            )
-            stage = await self._orchestrator.get_current_stage(process_id)
-            return result.model_copy(update={"current_stage": stage})
+            # One-step completion is reported; the orchestrator does not chain the next step.
+            return result
 
         failure_detail = (
             result.error_message
@@ -766,8 +842,12 @@ class Agent4Workflow:
                     process_id,
                     description=str(failure_detail),
                     severity=ExceptionSeverity.HIGH,
-                    exception_type=ExceptionType.SYSTEM_ERROR,
+                    exception_type=ExceptionType.EXECUTION_FAILURE,
+                    exception_code=ExceptionType.EXECUTION_FAILURE.value,
                     task_id=task_id,
+                    source_agent="agent2",
+                    source_operation="execute_authorized",
+                    details={"receipt_status": receipt_status, "execution_event_id": str(task_id or process_id)},
                 )
             return result.model_copy(update={"success": False})
 
@@ -794,8 +874,12 @@ class Agent4Workflow:
                 process_id,
                 description=str(failure_detail),
                 severity=ExceptionSeverity.HIGH,
-                exception_type=ExceptionType.SYSTEM_ERROR,
+                exception_type=ExceptionType.EXECUTION_FAILURE,
+                exception_code=ExceptionType.TOOL_FAILURE.value,
                 task_id=task_id,
+                source_agent="agent2",
+                source_operation="execute_authorized",
+                details={"receipt_status": receipt_status, "execution_event_id": str(task_id or process_id)},
             )
         return result.model_copy(update={"success": False})
 
@@ -857,20 +941,20 @@ class Agent4Workflow:
     ) -> WorkflowResult:
         """Match invoice evidence, then COMPLETED or EXCEPTION.
 
-        Never advances to COMPLETED without a deterministic MATCHED result.
+        Never advances to COMPLETED without a deterministic MATCHED result
+        against persisted purchase_orders and invoices rows.
+        Caller expected_* fields are not the source of truth.
         """
         from decimal import Decimal
 
-        from .invoice_matching import (
-            INSUFFICIENT_EVIDENCE,
-            MISMATCH,
-            InvoiceEvidence,
-            extract_expected_from_process,
-            extract_receipt_from_process,
-            merge_expected,
-            three_way_match,
-            tolerance_from_policy_rules,
+        from app.agents.agent4_orchestrator.completion_gate import evaluate_procurement_completion
+        from app.agents.agent4_orchestrator.constants import exception_type_from_code
+        from app.procurement.exceptions import (
+            CrossTenantProcurementError,
+            PurchaseOrderNotFoundError,
         )
+        from app.procurement.schemas import CreateInvoiceInput, LineItemInput
+        from app.procurement.service import get_procurement
 
         stage = await self._orchestrator.get_current_stage(process_id)
         if stage is not WorkflowStage.INVOICE_MATCHING:
@@ -883,128 +967,165 @@ class Agent4Workflow:
                 error_message=f"Current stage is {stage.value}",
             )
 
-        metadata, process_json = await asyncio.to_thread(
-            _load_invoice_match_context, process_id
-        )
-
-        invoice = InvoiceEvidence(
-            invoice_number=invoice_number,
-            amount=Decimal(str(amount)) if amount is not None else None,
-            currency=currency,
-            vendor=vendor,
-            po_reference=po_reference,
-            notes=notes or reference or "",
-        )
-        expected = merge_expected(
-            extract_expected_from_process(
-                metadata=metadata,
-                process_json=process_json,
-            ),
-            expected_po_reference=expected_po_reference,
-            expected_amount=expected_amount,
-            expected_currency=expected_currency,
-            expected_vendor=expected_vendor,
-            expected_invoice_number=expected_invoice_number,
-        )
-        receipt = extract_receipt_from_process(
-            metadata=metadata,
-            process_json=process_json,
-        )
-        if receipt.amount is None and expected.amount is not None:
-            receipt.amount = expected.amount
-        if receipt.po_reference is None:
-            receipt.po_reference = expected.po_reference
-        if receipt.vendor is None:
-            receipt.vendor = expected.vendor
-        if receipt.currency is None:
-            receipt.currency = expected.currency
-        if receipt.receipt_status is None:
-            receipt.receipt_status = "SUCCESS"
-
-        policy_rules = None
-        if self._policy_retrieval is not None and tenant_id is not None:
-            try:
-                snapshot = await self._policy_retrieval.build_risk_snapshot(
-                    tenant_id=tenant_id,
-                    purchase_amount=expected.amount,
-                )
-                policy_rules = snapshot.rules
-            except Exception:
-                policy_rules = None
-
-        amount_tolerance = tolerance_from_policy_rules(policy_rules)
-        result = three_way_match(
-            po=expected,
-            receipt=receipt,
-            invoice=invoice,
-            amount_tolerance=amount_tolerance,
-        )
-        match_payload = {
-            "invoice_match_status": result.status,
-            "message": result.message,
-            "compared_fields": result.compared_fields,
-            "mismatches": result.mismatches,
-            "three_way": result.three_way,
-            "amount_tolerance": str(amount_tolerance),
-            "notes": invoice.notes or None,
-        }
-
-        if result.status == INSUFFICIENT_EVIDENCE:
+        process = None
+        try:
+            process = await self._orchestrator._repository.get_process(process_id)
+        except ProcessNotFoundError:
+            process = None
+        resolved_tenant = tenant_id or (None if process is None else process.tenant_id)
+        if resolved_tenant is None:
             return WorkflowResult(
                 process_id=process_id,
                 current_stage=stage,
                 success=False,
-                message=result.message,
+                message="Tenant context is required for invoice matching",
                 error_code="INVOICE_INSUFFICIENT_EVIDENCE",
-                error_message=result.message,
-                agent_response=match_payload,
+                error_message="tenant_id is missing",
             )
 
-        if result.status == MISMATCH:
-            if self._exceptions is not None:
-                failure = await self.capture_failure(
-                    process_id,
-                    description=(
-                        "Invoice matching failed: "
-                        + "; ".join(result.mismatches)
-                    ),
-                    severity=ExceptionSeverity.HIGH,
-                    exception_type=ExceptionType.SYSTEM_ERROR,
-                )
-                return failure.model_copy(
-                    update={
-                        "success": False,
-                        "message": result.message,
-                        "error_code": "INVOICE_MISMATCH",
-                        "error_message": result.message,
-                        "agent_response": match_payload,
-                    }
-                )
+        procurement = get_procurement()
+        try:
+            po = procurement.get_purchase_order_for_process(
+                tenant_id=resolved_tenant, process_id=process_id
+            )
+        except Exception:
+            po = None
+        if po is None:
             return WorkflowResult(
                 process_id=process_id,
                 current_stage=stage,
                 success=False,
-                message=result.message,
-                error_code="INVOICE_MISMATCH",
-                error_message=result.message,
+                message="No purchase order exists for this process",
+                error_code="INVOICE_INSUFFICIENT_EVIDENCE",
+                error_message="MISSING_PO",
+            )
+
+        invoices = procurement.list_invoices(tenant_id=resolved_tenant, process_id=process_id)
+        invoice = invoices[0] if invoices else None
+        if invoice is None and invoice_number and (amount is not None or currency):
+            items = []
+            for po_item in po.items:
+                items.append(
+                    LineItemInput(
+                        description=po_item.description,
+                        quantity=po_item.quantity,
+                        unit_price=po_item.unit_price,
+                        purchase_order_item_id=po_item.item_id,
+                    )
+                )
+            try:
+                invoice = procurement.create_invoice(
+                    CreateInvoiceInput(
+                        tenant_id=resolved_tenant,
+                        process_id=process_id,
+                        purchase_order_id=po.purchase_order_id,
+                        vendor_ref=vendor or str(po.vendor_id),
+                        invoice_number=invoice_number,
+                        currency=(currency or po.currency),
+                        total=Decimal(str(amount)) if amount is not None else po.total,
+                        items=items if amount is None or Decimal(str(amount)) == po.total else [],
+                    )
+                )
+            except (PurchaseOrderNotFoundError, CrossTenantProcurementError) as exc:
+                return WorkflowResult(
+                    process_id=process_id,
+                    current_stage=stage,
+                    success=False,
+                    message=str(exc),
+                    error_code=exc.error_code,
+                    error_message=str(exc),
+                )
+        if invoice is None:
+            return WorkflowResult(
+                process_id=process_id,
+                current_stage=stage,
+                success=False,
+                message="Invoice matching cannot complete: no invoice record exists",
+                error_code="INVOICE_INSUFFICIENT_EVIDENCE",
+                error_message="MISSING_INVOICE",
+            )
+
+        result = procurement.match_invoice(
+            tenant_id=resolved_tenant,
+            invoice_id=invoice.invoice_id,
+        )
+        match_payload = result.model_dump(mode="json")
+
+        if result.matched:
+            blocking = []
+            if self._exceptions is not None:
+                blocking = await self._exceptions.list_blocking_exceptions(process_id)
+            gate = evaluate_procurement_completion(
+                tenant_id=resolved_tenant,
+                process_id=process_id,
+                current_stage=stage,
+                exceptions=blocking,
+            )
+            if not gate.allowed:
+                return WorkflowResult(
+                    process_id=process_id,
+                    current_stage=stage,
+                    success=False,
+                    message="; ".join(gate.reasons) or "Completion gate rejected",
+                    error_code=gate.error_code,
+                    error_message=gate.error_code,
+                    agent_response=match_payload,
+                )
+            reason = "Invoice matched purchase order"
+            if notes:
+                reason = f"{reason}: {notes}"
+            await self._orchestrator.move_process(
+                process_id,
+                WorkflowStage.COMPLETED,
+                reason=reason,
+                transition_context=TransitionContext(invoice_match_status="MATCHED"),
+            )
+            stage = await self._orchestrator.get_current_stage(process_id)
+            return WorkflowResult(
+                process_id=process_id,
+                current_stage=stage,
+                success=True,
+                message="PO ↔ Invoice match succeeded",
                 agent_response=match_payload,
             )
 
-        reason = "Invoice matched expected purchase data"
-        if invoice.notes:
-            reason = f"{reason}: {invoice.notes}"
-        await self._orchestrator.move_process(
-            process_id,
-            WorkflowStage.COMPLETED,
-            reason=reason,
-            transition_context=TransitionContext(invoice_match_status="MATCHED"),
-        )
-        stage = await self._orchestrator.get_current_stage(process_id)
+        description = "Invoice matching failed: " + "; ".join(result.discrepancy_details or result.discrepancy_codes)
+        primary = result.discrepancy_codes[0] if result.discrepancy_codes else "INVOICE_MISMATCH"
+        if self._exceptions is not None:
+            failure = await self.capture_failure(
+                process_id,
+                description=description,
+                severity=ExceptionSeverity.HIGH,
+                exception_type=exception_type_from_code(primary),
+                exception_code=primary,
+                tenant_id=resolved_tenant,
+                source_agent="agent4",
+                source_operation="complete_invoice_matching",
+                evidence_refs=list(result.evidence_refs or []),
+                details={
+                    "invoice_id": str(result.invoice_id),
+                    "purchase_order_id": str(result.purchase_order_id),
+                    "discrepancy_codes": list(result.discrepancy_codes),
+                    "trace_id": result.trace_id,
+                    "match_status": result.status,
+                },
+            )
+            return failure.model_copy(
+                update={
+                    "success": False,
+                    "message": description,
+                    "error_code": primary,
+                    "error_message": description,
+                    "agent_response": match_payload,
+                }
+            )
         return WorkflowResult(
             process_id=process_id,
             current_stage=stage,
-            success=True,
-            message=result.message,
+            success=False,
+            message=description,
+            error_code=result.discrepancy_codes[0] if result.discrepancy_codes else "INVOICE_MISMATCH",
+            error_message=description,
             agent_response=match_payload,
         )
 

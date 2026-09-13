@@ -269,6 +269,8 @@ async def _default_agent3_handler(message: AgentMessage) -> AgentMessage:
             metadata=local_metadata,
             human_requirements=message.payload.get("human_requirements"),
             budget_requirements=message.payload.get("budget_requirements"),
+            process_context_ref=message.payload.get("process_context_ref")
+            or md.process_instance_id,
         )
     except ValidationError as exc:
         return _error_reply(

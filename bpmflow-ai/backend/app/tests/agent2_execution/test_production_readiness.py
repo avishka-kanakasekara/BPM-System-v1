@@ -120,10 +120,23 @@ def test_po_totals_computed_server_side():
 
 @pytest.mark.asyncio
 async def test_create_po_draft_status_is_always_draft():
+    from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+    from app.procurement.schemas import CreateVendorInput
+    from app.procurement.service import get_procurement
+
+    get_procurement().create_vendor(
+        CreateVendorInput(
+            tenant_id=BPMFLOW_DEMO_TENANT_ID,
+            vendor_code="VENDOR-1",
+            legal_name="Vendor 1 Test Fixture",
+        )
+    )
     inp = CreatePODraftInput(
         vendor_id="VENDOR-1",
         process_id=str(uuid.uuid4()),
         amount=100.0,
+        currency="LKR",
+        tenant_id=str(BPMFLOW_DEMO_TENANT_ID),
     )
     out = await create_po_draft(session=None, input_data=inp)
     assert out.status == "DRAFT"

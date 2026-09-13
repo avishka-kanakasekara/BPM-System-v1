@@ -146,8 +146,9 @@ class TestResolveAndFail:
         process_id = await _process_at(orchestrator, WorkflowStage.WORKFLOW_EXECUTION)
         record = await exception_service.create_exception(process_id, "Done")
         await exception_service.resolve_exception(record.id, "fixed")
-        with pytest.raises(InvalidExceptionStatusError):
-            await exception_service.resolve_exception(record.id, "again")
+        again = await exception_service.resolve_exception(record.id, "again")
+        assert again.status is ExceptionStatus.RESOLVED
+        assert again.resolution_notes == "fixed"
         with pytest.raises(InvalidExceptionStatusError):
             await exception_service.fail_exception(record.id)
 

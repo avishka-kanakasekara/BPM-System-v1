@@ -8,6 +8,9 @@ import uuid
 
 import pytest
 
+from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+from app.procurement.schemas import CreateVendorInput
+from app.procurement.service import get_procurement
 from app.agents.agent2_execution.agent.agent import Agent2
 from app.agents.agent2_execution.agent.cognitive_pipeline import node_catalog
 from app.agents.agent2_execution.agent.planner_fallback import (
@@ -37,6 +40,14 @@ def _reset_memory_stores():
 @pytest.mark.asyncio
 async def test_g4_authorized_po_draft_dispatch_success_receipt_and_metadata():
     """Single AUTHORIZED dispatch creates PO draft evidence and SUCCESS receipt."""
+    get_procurement().create_vendor(
+        CreateVendorInput(
+            tenant_id=BPMFLOW_DEMO_TENANT_ID,
+            vendor_code="VENDOR-ACME",
+            legal_name="Acme Test Fixture Vendor",
+            notes="Explicit G4 test fixture. Not a production fallback.",
+        )
+    )
     proc_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
 
@@ -58,6 +69,7 @@ async def test_g4_authorized_po_draft_dispatch_success_receipt_and_metadata():
                 "currency": "USD",
                 "process_id": proc_id,
                 "task_id": task_id,
+                "tenant_id": str(BPMFLOW_DEMO_TENANT_ID),
             },
         },
         confidence=1.0,
@@ -72,23 +84,39 @@ async def test_g4_authorized_po_draft_dispatch_success_receipt_and_metadata():
     assert response.payload["tool_name"] == "create_po_draft"
     assert "create_po_draft" in response.payload.get("tools_executed", [])
 
+    record = get_procurement().get_purchase_order_for_process(
+        tenant_id=BPMFLOW_DEMO_TENANT_ID, process_id=uuid.UUID(proc_id)
+    )
+    assert record is not None
+    assert record.status == "DRAFT"
+    assert str(record.po_number).startswith("PO-")
     meta = get_memory_process_metadata(proc_id)
-    purchase_order = meta.get("purchase_order") or {}
+    purchase_order = meta.get("purchase_order_ref") or meta.get("purchase_order") or {}
     assert purchase_order.get("status") == "DRAFT"
     assert purchase_order.get("vendor_id") == "VENDOR-ACME"
-    assert float(purchase_order.get("amount") or 0) > 0
+    assert float(purchase_order.get("total") or purchase_order.get("amount") or 0) > 0
     assert purchase_order.get("po_number", "").startswith("PO-")
 
 
 @pytest.mark.asyncio
 async def test_g4_idempotency_replay_returns_same_success_receipt():
+    get_procurement().create_vendor(
+        CreateVendorInput(
+            tenant_id=BPMFLOW_DEMO_TENANT_ID,
+            vendor_code="VENDOR-ACME",
+            legal_name="Acme Test Fixture Vendor",
+            notes="Explicit G4 test fixture. Not a production fallback.",
+        )
+    )
     proc_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
     params = {
         "vendor_id": "VENDOR-ACME",
         "amount": 1200.0,
+        "currency": "USD",
         "process_id": proc_id,
         "task_id": task_id,
+        "tenant_id": str(BPMFLOW_DEMO_TENANT_ID),
     }
     guard = ExecutionGuardContext(
         message_status="AUTHORIZED",

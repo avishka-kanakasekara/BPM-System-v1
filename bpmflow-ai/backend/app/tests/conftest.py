@@ -17,7 +17,20 @@ from app.agents.agent3_resources import (
 )
 from app.agents.agent3_resources.fixtures import FIXTURE_REFERENCE_TIMESTAMP
 
-UTC = UTC
+@pytest.fixture(autouse=True)
+def isolate_company_directory():
+    """Keep pytest on an in-memory fixture directory. Production never uses this path."""
+    from app.company_directory.service import reset_company_directory
+    from app.ir.corpus import reset_document_corpus
+    from app.procurement.service import reset_procurement
+
+    reset_company_directory()
+    reset_procurement()
+    reset_document_corpus()
+    yield
+    reset_company_directory()
+    reset_procurement()
+    reset_document_corpus()
 
 
 def utc_datetime(*args, **kwargs) -> datetime:

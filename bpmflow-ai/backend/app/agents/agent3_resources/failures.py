@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .constants import FAILURE_RETRYABLE, FailureErrorCode, ResourceLookupError
+from .directory_bridge import human_requirement_is_incomplete
 from .schemas import (
     AgentMessageMetadata,
     AllocationRecommendation,
@@ -50,6 +51,16 @@ def detect_invalid_request(
             return FailureSpec(
                 error_code=FailureErrorCode.INVALID_REQUEST,
                 error_message="Human resource task deadline is in the past",
+            )
+        company_path = bool(
+            request.process_context_ref
+            or request.human_requirements.process_id
+            or request.human_requirements.process_context_ref
+        )
+        if company_path and human_requirement_is_incomplete(request.human_requirements):
+            return FailureSpec(
+                error_code=FailureErrorCode.RESOURCE_REQUIREMENT_INCOMPLETE,
+                error_message="RESOURCE_REQUIREMENT_INCOMPLETE: role, department, skill, or authority is required",
             )
 
     if request.budget_requirements is not None:

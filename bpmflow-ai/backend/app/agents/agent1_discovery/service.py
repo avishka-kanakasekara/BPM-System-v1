@@ -26,6 +26,7 @@ from app.agents.agent1_discovery.extractors import (
     extract_entities,
     extract_relations,
 )
+from app.agents.agent1_discovery.ingest import content_sha256, ingest_extracted
 from app.agents.agent1_discovery.persistence import persist_discovery
 from app.agents.agent1_discovery.process_mining import analyze_event_log
 from app.agents.agent1_discovery.schemas import (
@@ -44,6 +45,7 @@ from app.agents.agent1_discovery.schemas import (
 from app.agents.agent1_discovery.step_selection import select_process_steps
 from app.agents.agent4_orchestrator.risk_facts import RiskFacts, validate_risk_facts
 from app.core.logging import get_logger
+from app.ir.corpus import get_document_corpus
 from app.schemas.agent_message import AgentMessageStatus, DiscoveryAgentMessage, EvidenceReference
 
 logger = get_logger(__name__)
@@ -518,6 +520,144 @@ def _evidence_for_entities(file_id: UUID, entities: list[Entity]) -> list[Eviden
     return refs
 
 
+_POLICY_RETRIEVAL_QUERY = (
+    "approval threshold quotation requirements budget constraints "
+    "segregation of duties high-value purchase approval authority evidence requirements"
+)
+_UNSCOPED_TENANT = UUID("00000000-0000-0000-0000-000000000000")
+
+
+def _index_extracted_document(
+    *,
+    tenant_id: UUID | None,
+    filename: str,
+    content: bytes,
+    extracted: ExtractedDocument,
+    document_type: str | None,
+    mime_type: str | None,
+) -> list[Any]:
+    scoped = tenant_id or _UNSCOPED_TENANT
+    _, chunks, _ = ingest_extracted(
+        tenant_id=scoped,
+        filename=filename,
+        content_hash=content_sha256(content),
+        extracted=extracted,
+        document_type=document_type,
+        source="upload",
+        mime_type=mime_type,
+        size_bytes=len(content),
+        db=None,
+    )
+    return list(chunks)
+
+
+def _document_intelligence(
+    *,
+    tenant_id: UUID | None,
+    chunks: list[Any],
+    parse_failures: list[str],
+    extracted_documents: list[ExtractedDocument] | None = None,
+) -> dict[str, Any]:
+    from app.agents.agent1_discovery.chunking import chunk_extracted_document
+    from app.agents.agent1_discovery.procurement_facts import extract_procurement_facts
+
+    scoped = tenant_id or _UNSCOPED_TENANT
+    working = list(chunks)
+    for extracted in extracted_documents or []:
+        working.extend(
+            chunk_extracted_document(
+                extracted,
+                tenant_id=scoped,
+                document_id=extracted.file_id,
+                source="upload",
+            )
+        )
+    extraction = extract_procurement_facts(working)
+    policy_hits = get_document_corpus().search(
+        tenant_id=scoped,
+        query=_POLICY_RETRIEVAL_QUERY,
+        top_k=8,
+    )
+    status = extraction.status
+    if parse_failures and status == "OK" and not any(
+        fact.field == "amount" and fact.value for fact in extraction.facts
+    ):
+        status = "INSUFFICIENT_EVIDENCE"
+    return {
+        "status": status,
+        "facts": [fact.model_dump(mode="json") for fact in extraction.facts],
+        "conflicts": [item.model_dump(mode="json") for item in extraction.conflicts],
+        "missing": extraction.missing,
+        "policy_refs": [ref.model_dump(mode="json") for ref in extraction.policy_refs],
+        "policy_hits": [hit.model_dump(mode="json") for hit in policy_hits],
+        "parse_failures": parse_failures,
+        "current_stage": None,
+        "workflow_state": None,
+        "completion_state": None,
+        "exception_state": None,
+        "extraction": extraction,
+        "policy_hits_models": policy_hits,
+    }
+
+
+def _overlay_risk_facts(risk_facts: dict[str, Any], intelligence: dict[str, Any]) -> dict[str, Any]:
+    from app.agents.agent1_discovery.procurement_facts import fact_map
+
+    extraction = intelligence.get("extraction")
+    if extraction is None:
+        return risk_facts
+    verified = fact_map(extraction)
+    updated = dict(risk_facts)
+    amount = verified.get("amount")
+    if amount is not None:
+        updated["purchase_amount"] = str(amount.value)
+    currency = verified.get("currency")
+    if currency is not None:
+        updated["currency"] = str(currency.value)
+    requester = verified.get("requester")
+    if requester is not None:
+        updated["requester"] = str(requester.value)
+    vendor = verified.get("vendor")
+    if vendor is not None and not updated.get("vendor_name"):
+        updated["vendor_name"] = str(vendor.value)
+    pr_id = verified.get("process_request_id")
+    if pr_id is not None:
+        updated["purchase_request_id"] = str(pr_id.value)
+    budget = verified.get("budget")
+    if budget is not None:
+        updated["budget_amount"] = str(budget.value)
+    quotes = verified.get("quotation_count")
+    if quotes is not None:
+        updated["quotation_count"] = int(quotes.value)
+    return updated
+
+
+def _evidence_from_intelligence(intelligence: dict[str, Any]) -> list[EvidenceReference]:
+    refs: list[EvidenceReference] = []
+    for fact in intelligence.get("facts") or []:
+        for pointer in fact.get("evidence_refs") or []:
+            refs.append(
+                EvidenceReference(
+                    field=str(fact.get("field") or "fact"),
+                    file_id=UUID(str(pointer["document_id"])),
+                    page=pointer.get("page"),
+                    chunk_id=UUID(str(pointer["chunk_id"])) if pointer.get("chunk_id") else None,
+                    document_version=pointer.get("document_version"),
+                )
+            )
+    for hit in intelligence.get("policy_hits") or []:
+        refs.append(
+            EvidenceReference(
+                field="policy",
+                file_id=UUID(str(hit["document_id"])),
+                page=hit.get("page"),
+                chunk_id=UUID(str(hit["chunk_id"])) if hit.get("chunk_id") else None,
+                document_version=hit.get("document_version"),
+            )
+        )
+    return refs
+
+
 def _message_status(process: ProcessJSON, *, had_partial_failure: bool) -> AgentMessageStatus:
     if process.missing_or_contradictory_fields:
         return "NEEDS_CLARIFICATION"
@@ -571,6 +711,13 @@ def _wrap_and_persist(
     discovery_errors: list[str],
     documents: list[dict[str, Any]],
     process_id: UUID | None = None,
+    requester_user_id: UUID | None = None,
+    tenant_id: UUID | None = None,
+    requester_email: str | None = None,
+    requester_name: str | None = None,
+    requester_department: str | None = None,
+    entities: list[Any] | None = None,
+    doc_types: list[str] | None = None,
 ) -> DiscoveryAgentMessage:
     message = _wrap_message(
         process,
@@ -580,7 +727,19 @@ def _wrap_and_persist(
         process_id=process_id,
     )
     try:
-        persist_discovery(db, message, process, documents)
+        persist_discovery(
+            db,
+            message,
+            process,
+            documents,
+            tenant_id=tenant_id,
+            requester_user_id=requester_user_id,
+            requester_email=requester_email,
+            requester_name=requester_name,
+            requester_department=requester_department,
+            entities=entities,
+            doc_types=doc_types,
+        )
     except Exception:
         logger.exception("persist_discovery_failed")
         payload = dict(message.payload)
@@ -596,6 +755,11 @@ def run_discovery(
     db: Session | None,
     *,
     process_id: UUID | None = None,
+    requester_user_id: UUID | None = None,
+    tenant_id: UUID | None = None,
+    requester_email: str | None = None,
+    requester_name: str | None = None,
+    requester_department: str | None = None,
 ) -> DiscoveryAgentMessage:
     """Ingest documents, discover a process, and return an informational discovery message.
 
@@ -631,6 +795,11 @@ def run_discovery(
             discovery_errors=discovery_errors,
             documents=[],
             process_id=process_id,
+            requester_user_id=requester_user_id,
+            tenant_id=tenant_id,
+            requester_email=requester_email,
+            requester_name=requester_name,
+            requester_department=requester_department,
         )
 
     all_entities: list[Entity] = []
@@ -643,6 +812,8 @@ def run_discovery(
     had_partial_failure = False
     extracted_any = False
     stage_results: dict[str, StageExecutionMeta] = {}
+    indexed_chunks: list[Any] = []
+    parse_failures: list[str] = []
 
     with TemporaryDirectory(prefix="agent1_ingest_") as staging:
         staging_path = Path(staging)
@@ -733,6 +904,9 @@ def run_discovery(
                 discovery_errors.append(
                     f"extract_text failed for {buffered.filename}: {extracted.failure_reason}"
                 )
+                parse_failures.append(
+                    extracted.failure_reason or "INSUFFICIENT_EVIDENCE"
+                )
                 continue
 
             extracted_any = True
@@ -746,6 +920,25 @@ def run_discovery(
             doc_types.append(classification.doc_type)
             if documents:
                 documents[-1]["doc_type"] = classification.doc_type
+            try:
+                indexed_chunks.extend(
+                    _index_extracted_document(
+                        tenant_id=tenant_id,
+                        filename=buffered.filename,
+                        content=buffered.content,
+                        extracted=extracted,
+                        document_type=classification.doc_type,
+                        mime_type=ingested.mime_type,
+                    )
+                )
+                if documents:
+                    documents[-1]["content_hash"] = content_sha256(buffered.content)
+                    documents[-1]["tenant_id"] = str(tenant_id) if tenant_id else None
+                    documents[-1]["version"] = "1"
+                    documents[-1]["source"] = "upload"
+            except Exception:
+                logger.exception("document_index_failed", extra={"file_id": str(ingested.file_id)})
+                discovery_errors.append(f"document index failed for {buffered.filename}")
             stage_results[f"classify_document:{ingested.file_id}"] = StageExecutionMeta(
                 degraded=False,
                 confidence=classification.confidence,
@@ -932,19 +1125,59 @@ def run_discovery(
         risk_facts = validate_risk_facts(risk_facts_model.model_dump(mode="json")).model_dump(
             mode="json"
         )
+        intelligence = _document_intelligence(
+            tenant_id=tenant_id,
+            chunks=indexed_chunks,
+            parse_failures=parse_failures,
+            extracted_documents=extracted_documents,
+        )
+        risk_facts = _overlay_risk_facts(risk_facts, intelligence)
+        evidence_references.extend(_evidence_from_intelligence(intelligence))
+        serializable = {
+            key: value
+            for key, value in intelligence.items()
+            if key not in {"extraction", "policy_hits_models"}
+        }
+        process.analytics = {
+            **(process.analytics or {}),
+            "risk_facts": risk_facts,
+            "document_intelligence": serializable,
+            "discovery_stages": {
+                name: meta.model_dump(mode="json") for name, meta in stage_results.items()
+            },
+            "degraded": pipeline_degraded,
+        }
+        if intelligence.get("status") == "DISCOVERY_CONFLICT":
+            process.missing_or_contradictory_fields = list(
+                dict.fromkeys(
+                    [
+                        *(process.missing_or_contradictory_fields or []),
+                        *(f"conflict:{item.field}" for item in intelligence["extraction"].conflicts),
+                    ]
+                )
+            )
+        elif intelligence.get("status") == "INSUFFICIENT_EVIDENCE":
+            process.missing_or_contradictory_fields = list(
+                dict.fromkeys(
+                    [
+                        *(process.missing_or_contradictory_fields or []),
+                        *intelligence.get("missing", []),
+                    ]
+                )
+            )
     except Exception:
         logger.exception("step_failed", extra={"step": "extract_risk_facts"})
         discovery_errors.append("extract_risk_facts crashed")
         had_partial_failure = True
         risk_facts = RiskFacts(degraded=True, confidence=0.0).model_dump(mode="json")
-    process.analytics = {
-        **(process.analytics or {}),
-        "risk_facts": risk_facts,
-        "discovery_stages": {
-            name: meta.model_dump(mode="json") for name, meta in stage_results.items()
-        },
-        "degraded": pipeline_degraded,
-    }
+        process.analytics = {
+            **(process.analytics or {}),
+            "risk_facts": risk_facts,
+            "discovery_stages": {
+                name: meta.model_dump(mode="json") for name, meta in stage_results.items()
+            },
+            "degraded": True,
+        }
     logger.info(
         "step_end",
         extra={
@@ -965,4 +1198,11 @@ def run_discovery(
         discovery_errors=discovery_errors,
         documents=documents,
         process_id=process_id,
+        requester_user_id=requester_user_id,
+        tenant_id=tenant_id,
+        requester_email=requester_email,
+        requester_name=requester_name,
+        requester_department=requester_department,
+        entities=all_entities,
+        doc_types=doc_types,
     )

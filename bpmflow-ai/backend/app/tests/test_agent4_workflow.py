@@ -190,10 +190,7 @@ class TestExecutionAndInvalid:
         )
         result = await workflow.execute_workflow(process_id)
         assert result.success is False
-        assert result.error_code == "ERROR"
-        assert "agent2" in result.message.lower().replace("_", "")
-        assert result.agent_response is not None
-        assert result.agent_response.get("receipt_status") == "FAILED"
+        assert result.error_code == "FULL_WORKFLOW_EXECUTION_FORBIDDEN"
         assert result.current_stage is WorkflowStage.WORKFLOW_EXECUTION
 
     async def test_invalid_transitions_are_rejected(
@@ -269,31 +266,33 @@ class TestExecutionAndInvalid:
             gate.approval.id, approver_id=uuid4()
         )
         result = await workflow.apply_approval_outcome(process_id, decided.approval)
-        assert captured and captured[0].status == "AUTHORIZED"
-        assert result.current_stage is WorkflowStage.INVOICE_MATCHING
+        assert captured == []
+        assert result.current_stage is WorkflowStage.WORKFLOW_EXECUTION
         assert result.eligible_for_execution is True
 
     async def test_complete_invoice_matching_requires_real_match(
         self, workflow, orchestrator
     ) -> None:
+        from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+        from app.tests.test_phase8c_invoice_matching import _invoice, _po
+
         process_id = uuid4()
         await orchestrator.create_process(
             process_id, initial_stage=WorkflowStage.INVOICE_MATCHING
         )
         insufficient = await workflow.complete_invoice_matching(
-            process_id, reference="INV-9"
+            process_id, tenant_id=BPMFLOW_DEMO_TENANT_ID, reference="INV-9"
         )
         assert insufficient.success is False
         assert insufficient.error_code == "INVOICE_INSUFFICIENT_EVIDENCE"
         assert await orchestrator.get_current_stage(process_id) is WorkflowStage.INVOICE_MATCHING
 
+        po = _po(process_id=process_id)
+        _invoice(process_id=process_id, po_id=po.purchase_order_id, number="INV-9")
         matched = await workflow.complete_invoice_matching(
             process_id,
-            amount=100.0,
-            expected_amount=100.0,
-            po_reference="PO-1",
-            expected_po_reference="PO-1",
-            notes="INV-9",
+            tenant_id=BPMFLOW_DEMO_TENANT_ID,
+            invoice_number="INV-9",
         )
         assert matched.success is True
         assert matched.current_stage is WorkflowStage.COMPLETED

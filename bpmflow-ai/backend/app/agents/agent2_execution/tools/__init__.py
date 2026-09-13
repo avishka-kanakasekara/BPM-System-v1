@@ -1,7 +1,7 @@
 """
 Agent 2 — Tool System Initialization & Registration
 
-Registers all 12 tools in the central ToolRegistry.
+Registers all 13 tools in the central ToolRegistry.
 """
 
 from app.agents.agent2_execution.tools.history_tools import get_process_history, get_task_history
@@ -11,6 +11,7 @@ from app.agents.agent2_execution.tools.notification_tools import (
     send_email,
     send_reminder,
 )
+from app.agents.agent2_execution.tools.invoice_tools import match_invoice
 from app.agents.agent2_execution.tools.procurement_tools import (
     create_po_draft,
     request_quotation,
@@ -31,6 +32,8 @@ from app.agents.agent2_execution.tools.schemas import (
     GetProcessHistoryOutput,
     GetTaskHistoryInput,
     GetTaskHistoryOutput,
+    MatchInvoiceInput,
+    MatchInvoiceOutput,
     RequestQuotationInput,
     RequestQuotationOutput,
     ScheduleEscalationInput,
@@ -91,6 +94,14 @@ def _register_all_tools():
         input_schema=CreatePODraftInput,
         output_schema=CreatePODraftOutput,
         handler=create_po_draft,
+    )
+
+    registry.register(
+        name="match_invoice",
+        description="Deterministically match a persisted invoice to a persisted purchase order",
+        input_schema=MatchInvoiceInput,
+        output_schema=MatchInvoiceOutput,
+        handler=match_invoice,
     )
 
     # 6. request_quotation

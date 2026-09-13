@@ -18,8 +18,7 @@ from app.agents.agent2_execution.communication.schemas import EmailRequest, Emai
 from app.agents.agent2_execution.llm import prompts
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
 from app.agents.agent2_execution.security import audit
-from app.agents.agent2_execution.security.tool_guard import load_allowed_email_recipients
-from app.agents.agent2_execution.tools.email_provider import dispatch_email
+from app.agents.agent2_execution.tools.email_provider import dispatch_email, email_configured, email_dry_run_enabled
 
 logger = logging.getLogger("agent_2.tools.email_service")
 
@@ -44,28 +43,24 @@ class EmailService:
     SMTP dispatch / dry-run logging, and database tracking.
     """
 
-    def __init__(self, session: AsyncSession | None = None):
+    def __init__(
+        self,
+        session: AsyncSession | None = None,
+        *,
+        allowed_recipients: set[str] | None = None,
+    ):
         self.session = session
-        self.allowed_recipients = load_allowed_email_recipients()
+        self.allowed_recipients = {item.strip().lower() for item in (allowed_recipients or set()) if item}
 
     def validate_recipient(self, email: str, recipient_role: str = "") -> tuple[bool, str]:
-        """
-        Enforce Rule #6 recipient allow-list validation.
-        
-        :param email: Target email address
-        :param recipient_role: Optional recipient role
-        :return: (is_valid, reason_message)
-        """
         if not email:
             return False, "Recipient email address cannot be empty"
 
         email_clean = email.strip().lower()
-
-        # If org directory is populated, recipient must be in directory
-        if self.allowed_recipients and email_clean not in self.allowed_recipients:
+        if email_clean not in self.allowed_recipients:
             return (
                 False,
-                f"Recipient {email!r} is not in the allowed organizational directory by role (Rule #6)",
+                f"Recipient {email!r} is not a verified Company Directory employee email (Rule #6)",
             )
 
         return True, "Recipient authorized"
@@ -110,6 +105,21 @@ class EmailService:
                 payload=request.model_dump(),
             )
             return EmailResult(status="FAILED", message_id="", error=val_reason)
+
+        if not email_dry_run_enabled() and not email_configured():
+            await audit.log_audit_event(
+                self.session,
+                actor="email_service",
+                action="send_email",
+                allowed=False,
+                reason="EMAIL_PROVIDER_NOT_CONFIGURED",
+                payload={"recipient": request.recipient},
+            )
+            return EmailResult(
+                status="FAILED",
+                message_id="",
+                error="EMAIL_PROVIDER_NOT_CONFIGURED",
+            )
 
         # Step 2: Render Jinja2 Template
         template_name = request.template_name or "task_assignment.html"

@@ -65,7 +65,11 @@ async def authorize_tool_execution(
     """Validate Agent 4 execution gate for a tool invocation."""
     tool = tool_name.strip().lower()
     if is_full_task_suite(tool):
-        tool = FULL_TASK_SUITE_TOOL
+        return AuthorizationResult(
+            authorized=False,
+            error_code="FULL_WORKFLOW_EXECUTION_FORBIDDEN",
+            message="Agent 2 executes exactly one WorkflowStep. __full_task_suite__ is forbidden.",
+        )
     if tool in READ_ONLY_TOOLS:
         try:
             await repository.get_process(uuid.UUID(process_id))

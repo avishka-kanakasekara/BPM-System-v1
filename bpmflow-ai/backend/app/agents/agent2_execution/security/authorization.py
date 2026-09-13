@@ -22,6 +22,7 @@ class ActionPermission(str, Enum):
     SEND_REMINDER = "send_reminder"
     SCHEDULE_REMINDER = "schedule_reminder"
     CREATE_PO_DRAFT = "create_po_draft"
+    MATCH_INVOICE = "match_invoice"
     REQUEST_QUOTATION = "request_quotation"
     UPDATE_MOCK_ERP = "update_mock_erp"
     ANALYZE_PROCESS = "analyze_process"
@@ -46,6 +47,7 @@ ACTION_ALIASES = {
     "schedule_reminder": ActionPermission.SCHEDULE_REMINDER.value,
     "schedule_escalation": ActionPermission.SCHEDULE_REMINDER.value,
     "create_po_draft": ActionPermission.CREATE_PO_DRAFT.value,
+    "match_invoice": ActionPermission.MATCH_INVOICE.value,
     "request_quotation": ActionPermission.REQUEST_QUOTATION.value,
     "update_procurement_record": ActionPermission.UPDATE_MOCK_ERP.value,
     "update_mock_erp": ActionPermission.UPDATE_MOCK_ERP.value,
@@ -64,6 +66,7 @@ ALLOWED_ACTIONS: set[str] = {
     ActionPermission.SEND_REMINDER.value,
     ActionPermission.SCHEDULE_REMINDER.value,
     ActionPermission.CREATE_PO_DRAFT.value,
+    ActionPermission.MATCH_INVOICE.value,
     ActionPermission.REQUEST_QUOTATION.value,
     ActionPermission.UPDATE_MOCK_ERP.value,
     ActionPermission.ANALYZE_PROCESS.value,

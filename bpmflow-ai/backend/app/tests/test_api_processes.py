@@ -350,37 +350,42 @@ def test_execute_dispatches_authorized_agent2_and_advances() -> None:
     ):
         response = client.post(
             f"/api/v1/processes/{created['id']}/execute",
-            json={"task_type": "EXECUTE_TASK", "parameters": {"note": "ok"}},
+            json={
+                "task_type": "EXECUTE_TASK",
+                "parameters": {
+                    "note": "ok",
+                    "vendor_id": "V-EXTRACTED",
+                    "amount": 2500000,
+                    "currency": "LKR",
+                },
+            },
         )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["success"] is True
-    assert body["current_stage"] == WorkflowStage.INVOICE_MATCHING.value
+    assert body["success"] is False
+    assert body["error_code"] == "FULL_WORKFLOW_EXECUTION_FORBIDDEN"
     fetched = client.get(f"/api/v1/processes/{created['id']}").json()
-    assert fetched["current_stage"] == WorkflowStage.INVOICE_MATCHING.value
+    assert fetched["current_stage"] == WorkflowStage.WORKFLOW_EXECUTION.value
 
 
 def test_complete_invoice_matching_closes_process() -> None:
-    client, repository = _client()
+    from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+    from app.tests.test_phase8c_invoice_matching import _invoice, _po
+
+    client, repository = _client(tenant_id=BPMFLOW_DEMO_TENANT_ID)
     created = client.post(
         "/api/v1/processes",
         json={"name": "Close me", "process_type": "procurement"},
     ).json()
     _set_stage(repository, created["id"], WorkflowStage.INVOICE_MATCHING)
+    process_id = UUID(created["id"])
+    po = _po(process_id=process_id)
+    _invoice(process_id=process_id, po_id=po.purchase_order_id, number="INV-1001")
 
     response = client.post(
         f"/api/v1/processes/{created['id']}/complete-invoice-matching",
-        json={
-            "invoice_number": "INV-1001",
-            "amount": 250.0,
-            "currency": "USD",
-            "po_reference": "PO-55",
-            "expected_invoice_number": "INV-1001",
-            "expected_amount": 250.0,
-            "expected_currency": "USD",
-            "expected_po_reference": "PO-55",
-        },
+        json={"invoice_number": "INV-1001"},
     )
     assert response.status_code == 200
     body = response.json()

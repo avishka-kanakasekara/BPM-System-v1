@@ -16,6 +16,7 @@ from app.agents.agent2_execution.agent.cognitive_pipeline import plan_with_valid
 from app.agents.agent2_execution.agent.memory import ShortTermMemory
 from app.agents.agent2_execution.agent.planner_fallback import (
     FULL_TASK_SUITE_TOOLS,
+    FullWorkflowForbidden,
     PlanValidationError,
     is_full_task_suite,
 )
@@ -110,16 +111,17 @@ async def score_execution_plan(
     )
 
 
-_DEFAULT_MANAGER = "frank.miller@acmeglobal.com"
-_DEFAULT_REQUESTER = "alice.johnson@acmeglobal.com"
-_DEFAULT_VENDOR_CONTACT = "jack.thomas@acmeglobal.com"
+_DEFAULT_MANAGER = ""
+_DEFAULT_REQUESTER = ""
+_DEFAULT_VENDOR_CONTACT = ""
 
 
-def _org_safe_email(value: str | None, fallback: str) -> str:
+def _org_safe_email(value: str | None, fallback: str = "") -> str:
+    """Do not invent company emails. Return the provided address or empty."""
     email = (value or "").strip()
-    if email.endswith("@acmeglobal.com"):
+    if "@" in email:
         return email
-    return fallback
+    return (fallback or "").strip()
 
 
 def _context_defaults(ctx: context_engine.ProcessContext) -> dict[str, Any]:
@@ -131,7 +133,7 @@ def _context_defaults(ctx: context_engine.ProcessContext) -> dict[str, Any]:
         or meta.get("vendor")
         or purchase.get("vendor_id")
         or purchase.get("vendor")
-        or "VENDOR-ACME"
+        or ""
     )
     try:
         amount_f = float(amount)
@@ -301,11 +303,7 @@ def _select_tools_to_run(
     process_type: str = "",
 ) -> list[str]:
     if is_full_task_suite(tool_name_override):
-        planned = [t for t in (plan.selected_tools or []) if t]
-        suite = _full_suite_tools()
-        if len(planned) >= len(suite):
-            return planned
-        return suite
+        return []
 
     if tool_name_override:
         return [tool_name_override.strip().lower()]
@@ -520,6 +518,39 @@ async def run_decision_pipeline(
             client,
             "plan",
         )
+    except FullWorkflowForbidden as exc:
+        logger.warning("full_workflow_forbidden: %s", exc)
+        from datetime import UTC, datetime
+
+        from app.agents.agent2_execution.execution import receipt_manager
+
+        now = datetime.now(UTC)
+        blocked = await receipt_manager.create_receipt(
+            session=session,
+            process_id=ctx.process_id,
+            task_id=ctx.task_id or ctx.process_id,
+            agent_id=message.sender or "agent_2",
+            tool_name="__full_task_suite__",
+            action="__full_task_suite__",
+            attempt_number=1,
+            idempotency_key=f"{ctx.process_id}-{ctx.task_id}-full-suite-forbidden",
+            started_at=now,
+            completed_at=now,
+            status="BLOCKED",
+            error_type="FULL_WORKFLOW_EXECUTION_FORBIDDEN",
+            error_message=str(exc),
+            latency_ms=0,
+        )
+        score = PlanScoreBreakdown(
+            total_score=0.0,
+            safety=0.0,
+            sla_suitability=0.0,
+            reliability=0.0,
+            efficiency=0.0,
+            historical_success=0.0,
+            details={"tools_executed": [], "decision_reason": str(exc)},
+        )
+        return blocked, score
     except PlanValidationError as exc:
         logger.error("PLAN validation failed: %s", exc)
         failed_receipt = await execute_with_recovery(
@@ -587,7 +618,7 @@ async def run_decision_pipeline(
         incoming_tool_params,
         reasoned_tool=reasoned_tool,
         process_type=ctx.process_type or "",
-    )
+    )[:1]
     plan_for_scoring = plan.model_copy(update={"selected_tools": tools_to_run or plan.selected_tools})
     score_breakdown = await score_execution_plan(plan_for_scoring, ctx, session)
     score_breakdown.details["decision"] = decision.decision
@@ -599,7 +630,7 @@ async def run_decision_pipeline(
     executed: list[str] = []
     last_receipt: ExecutionReceipt | None = None
     critic_notes = ""
-    suite_mode = is_full_task_suite(tool_name_override) or len(tools_to_run) > MAX_PLAN_TOOLS
+    suite_mode = False
 
     working.current_state = "ACTING"
     for tool_name in tools_to_run:
@@ -620,7 +651,8 @@ async def run_decision_pipeline(
                 break
 
     if (
-        last_receipt is not None
+        False
+        and last_receipt is not None
         and last_receipt.status != "BLOCKED"
         and not suite_mode
         and not tool_name_override

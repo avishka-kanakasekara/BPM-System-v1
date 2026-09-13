@@ -143,19 +143,19 @@ class TestG5RiskEngine:
 
 
 class TestG5ExecutionEnrichment:
-    def test_missing_discovery_metadata_uses_workflow_defaults(self) -> None:
-        enriched = require_enrich_execute_parameters(
-            process_id=str(uuid4()),
-            process_type="PROCUREMENT",
-            process_name="Test",
-            metadata_json={},
-            parameters={},
-        )
-        assert enriched["tool_name"] == "__full_task_suite__"
-        assert enriched["vendor_id"]
-        assert enriched["amount"] > 0
-        assert enriched["currency"] == "USD"
-        assert enriched["cost_centre"] == "IT-OPS"
+    def test_missing_discovery_metadata_does_not_invent_defaults(self) -> None:
+        with pytest.raises(ExecutionEnrichmentError) as exc:
+            require_enrich_execute_parameters(
+                process_id=str(uuid4()),
+                process_type="PROCUREMENT",
+                process_name="Test",
+                metadata_json={},
+                parameters={},
+            )
+        assert "purchase.amount" in exc.value.missing_fields
+        assert "VENDOR-ACME" not in str(exc.value)
+        assert "5000" not in str(exc.value)
+        assert "2500" not in str(exc.value)
 
     def test_risk_facts_fill_enrichment(self) -> None:
         enriched = require_enrich_execute_parameters(
@@ -176,7 +176,7 @@ class TestG5ExecutionEnrichment:
             },
             parameters={},
         )
-        assert enriched["tool_name"] == "__full_task_suite__"
+        assert "tool_name" not in enriched or enriched.get("tool_name") != "__full_task_suite__"
         assert enriched["vendor_id"] == "V-001"
         assert enriched["amount"] == 1500.0
         assert enriched["currency"] == "LKR"

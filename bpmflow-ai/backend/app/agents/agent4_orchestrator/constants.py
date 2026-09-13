@@ -46,12 +46,50 @@ class ExceptionSeverity(str, Enum):
 
 
 class ExceptionType(str, Enum):
-    """Issue types from public.exceptions comments, plus workflow failures."""
+    """Controlled exception codes. Legacy lowercase values remain valid."""
 
     TIMEOUT = "timeout"
     RESOURCE_CONFLICT = "resource_conflict"
     APPROVAL_DENIED = "approval_denied"
     SYSTEM_ERROR = "system_error"
+    POLICY_VIOLATION = "POLICY_VIOLATION"
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    MISSING_EVIDENCE = "MISSING_EVIDENCE"
+    APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+    SOD_VIOLATION = "SOD_VIOLATION"
+    NO_ELIGIBLE_RESOURCE = "NO_ELIGIBLE_RESOURCE"
+    TOOL_FAILURE = "TOOL_FAILURE"
+    EXECUTION_FAILURE = "EXECUTION_FAILURE"
+    INVOICE_MISMATCH = "INVOICE_MISMATCH"
+    INVOICE_TOTAL_INVALID = "INVOICE_TOTAL_INVALID"
+    VENDOR_MISMATCH = "VENDOR_MISMATCH"
+    CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
+    AMOUNT_MISMATCH = "AMOUNT_MISMATCH"
+    QUANTITY_MISMATCH = "QUANTITY_MISMATCH"
+    WORKFLOW_FAILURE = "WORKFLOW_FAILURE"
+
+
+def exception_type_from_code(code: str | None) -> ExceptionType:
+    """Map a discrepancy/error code onto the controlled ExceptionType set."""
+    raw = (code or "").strip()
+    if not raw:
+        return ExceptionType.SYSTEM_ERROR
+    try:
+        return ExceptionType(raw)
+    except ValueError:
+        pass
+    aliases = {
+        "MISSING_PO": ExceptionType.MISSING_EVIDENCE,
+        "MISSING_INVOICE": ExceptionType.MISSING_EVIDENCE,
+        "MISSING_PO_ITEM": ExceptionType.INVOICE_MISMATCH,
+        "MISSING_INVOICE_ITEM": ExceptionType.INVOICE_MISMATCH,
+        "UNIT_PRICE_MISMATCH": ExceptionType.AMOUNT_MISMATCH,
+        "LINE_TOTAL_MISMATCH": ExceptionType.AMOUNT_MISMATCH,
+        "INSUFFICIENT_BUDGET": ExceptionType.BUDGET_EXCEEDED,
+        "SAME_PERSON": ExceptionType.SOD_VIOLATION,
+        "INSUFFICIENT_EVIDENCE": ExceptionType.MISSING_EVIDENCE,
+    }
+    return aliases.get(raw.upper(), ExceptionType.WORKFLOW_FAILURE)
 
 
 class RiskLevel(str, Enum):

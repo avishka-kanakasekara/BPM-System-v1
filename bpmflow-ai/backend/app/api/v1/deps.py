@@ -143,6 +143,80 @@ async def get_process_advancement_engine(
     )
 
 
+async def get_workflow_plan_service(
+    db: AsyncSession = Depends(get_db),
+):
+    from app.agents.agent4_orchestrator.workflow_plan.repository import (
+        SqlAlchemyWorkflowPlanRepository,
+    )
+    from app.agents.agent4_orchestrator.workflow_plan.service import WorkflowPlanService
+    from app.company_directory.service import get_company_directory
+
+    return WorkflowPlanService(
+        SqlAlchemyWorkflowPlanRepository(db),
+        directory=get_company_directory(),
+    )
+
+
+async def get_tool_registry_service(
+    db: AsyncSession = Depends(get_db),
+):
+    from app.tool_registry.repository import SqlAlchemyToolRegistryRepository
+    from app.tool_registry.service import ToolRegistryService
+
+    return ToolRegistryService(SqlAlchemyToolRegistryRepository(db))
+
+
+async def get_workflow_step_executor(
+    db: AsyncSession = Depends(get_db),
+    plan_service=Depends(get_workflow_plan_service),
+    process_repository: ProcessRepository = Depends(get_process_repository),
+    tool_registry=Depends(get_tool_registry_service),
+):
+    from app.agents.agent2_execution.workflow_step.executor import WorkflowStepExecutor
+    from app.company_directory.service import get_company_directory
+
+    return WorkflowStepExecutor(
+        plan_service=plan_service,
+        process_repository=process_repository,
+        tool_registry=tool_registry,
+        directory=get_company_directory(),
+        session=db,
+    )
+
+
+async def get_workflow_planner(
+    plan_service=Depends(get_workflow_plan_service),
+    process_repository: ProcessRepository = Depends(get_process_repository),
+    policy_retrieval=Depends(get_policy_retrieval_service),
+    tool_registry=Depends(get_tool_registry_service),
+):
+    from app.agents.agent3_resources.repositories.postgres_resource_repository import (
+        PostgresResourceRepository,
+    )
+    from app.agents.agent3_resources.repositories.rest_resource_repository import (
+        RestResourceRepository,
+    )
+    from app.agents.agent3_resources.service import ResourceAllocationService
+    from app.company_directory.service import get_company_directory
+    from app.core.database import get_session_factory
+    from app.core.supabase_rest import use_supabase_rest_fallback
+
+    directory = get_company_directory()
+    if use_supabase_rest_fallback():
+        resource_repository = RestResourceRepository()
+    else:
+        resource_repository = PostgresResourceRepository(get_session_factory())
+    return WorkflowPlanner(
+        plan_service=plan_service,
+        process_repository=process_repository,
+        policy_retrieval=policy_retrieval,
+        tool_registry=tool_registry,
+        directory=directory,
+        allocator=ResourceAllocationService(resource_repository, directory=directory),
+    )
+
+
 __all__ = [
     "resolve_approver_id",
     "get_current_user",
@@ -161,4 +235,8 @@ __all__ = [
     "get_agent4_workflow",
     "get_advancement_repository_dep",
     "get_process_advancement_engine",
+    "get_workflow_plan_service",
+    "get_tool_registry_service",
+    "get_workflow_planner",
+    "get_workflow_step_executor",
 ]

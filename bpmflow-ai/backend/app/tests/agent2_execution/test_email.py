@@ -19,9 +19,14 @@ from app.agents.agent2_execution.tools.email_service import EmailService, Intell
 @pytest.fixture
 def email_service():
     """Returns an EmailService instance in dry-run mode."""
-    # Ensure dry run is active
     settings.EMAIL_DRY_RUN = True
-    return EmailService(session=None)
+    return EmailService(
+        session=None,
+        allowed_recipients={
+            "alice.johnson@acmeglobal.com",
+            "frank.miller@acmeglobal.com",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +45,7 @@ def test_validate_recipient_allowed_org_user(email_service):
 def test_validate_recipient_unauthorized_external(email_service):
     is_valid, reason = email_service.validate_recipient("attacker@external-domain.com", "unknown")
     assert is_valid is False
-    assert "not in the allowed organizational directory" in reason
+    assert "not a verified Company Directory employee email" in reason
 
 
 def test_validate_recipient_empty(email_service):

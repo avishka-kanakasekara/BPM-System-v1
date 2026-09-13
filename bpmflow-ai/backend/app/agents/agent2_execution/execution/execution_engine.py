@@ -39,6 +39,7 @@ async def execute_with_recovery(
     idempotency_key: str | None = None,
     gemini_client: GeminiClient | None = None,
     guard_context: ExecutionGuardContext | None = None,
+    directory=None,
 ) -> ExecutionReceipt:
     """
     Main entry point for tool execution with security gating, idempotency checking,
@@ -65,7 +66,7 @@ async def execute_with_recovery(
         return existing_receipt
 
     # Step 2: Tool Guard Security Check (Rules #1, #2, #4, #6, #7)
-    guard = ToolGuard(session=session)
+    guard = ToolGuard(session=session, directory=directory)
     ctx = guard_context or ExecutionGuardContext(process_id=process_id)
     if not ctx.process_id:
         ctx = ExecutionGuardContext(

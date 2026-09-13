@@ -61,6 +61,8 @@ class AgentMessageMetadata(BaseModel):
     process_instance_id: UUID
     task_id: UUID | None = None
     tenant_id: UUID | None = None
+    workflow_plan_id: UUID | None = None
+    workflow_step_id: UUID | None = None
     sender: str = Field(min_length=1)
     receiver: str = Field(min_length=1)
     message_type: AgentMessageType
@@ -103,6 +105,8 @@ class EvidenceReference(BaseModel):
     page: int | None = None
     span_start: int | None = None
     span_end: int | None = None
+    chunk_id: UUID | None = None
+    document_version: str | None = None
 
 
 class DiscoveryAgentMessage(BaseModel):

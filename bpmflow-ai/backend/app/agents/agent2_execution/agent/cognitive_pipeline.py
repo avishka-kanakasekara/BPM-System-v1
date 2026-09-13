@@ -11,6 +11,7 @@ from app.agents.agent2_execution.agent import context_engine, memory, planner
 from app.agents.agent2_execution.agent.context_engine import ProcessContext
 from app.agents.agent2_execution.agent.planner_fallback import (
     PlanValidationError,
+    FullWorkflowForbidden,
     build_deterministic_plan,
     is_full_task_suite,
     validate_execution_plan,
@@ -74,8 +75,8 @@ async def plan_with_validation(
     """PLAN node: LLM plan with deterministic offline fallback; never returns empty tools."""
     client = gemini_client or GeminiClient()
     if is_full_task_suite(tool_override):
-        return validate_execution_plan(
-            build_deterministic_plan(context, evidence, tool_override=tool_override)
+        raise FullWorkflowForbidden(
+            "FULL_WORKFLOW_EXECUTION_FORBIDDEN: Agent 2 executes one WorkflowStep only"
         )
     try:
         if client.is_offline:

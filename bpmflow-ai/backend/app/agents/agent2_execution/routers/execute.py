@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.agent2_execution.agent.planner_fallback import FULL_TASK_SUITE_TOOL
+from app.agents.agent2_execution.agent.planner_fallback import FULL_TASK_SUITE_TOOL, is_full_task_suite
 from app.agents.agent2_execution.analytics import kpi_engine
 from app.agents.agent2_execution.config import settings as agent2_settings
 from app.agents.agent2_execution.database.ids import parse_uuid
@@ -45,12 +45,18 @@ router = APIRouter(prefix="/agent2", tags=["Agent 2 — Execution"])
 class ExecuteToolRequest(BaseModel):
     process_id: str = Field(..., description="Process instance UUID")
     task_id: str = Field(..., description="Task UUID")
-    tool_name: str = Field(
-        default=FULL_TASK_SUITE_TOOL,
-        description="Registered Agent 2 tool name, or __full_task_suite__ to run all 12 tools",
+    tool_name: str | None = Field(
+        default=None,
+        description="Legacy single-tool name. Forbidden: __full_task_suite__. Prefer workflow_step_id.",
     )
     parameters: dict[str, Any] = Field(default_factory=dict)
     correlation_id: str = Field(default="", description="Client idempotency / correlation id")
+    process_context_ref: str | None = Field(
+        default=None,
+        description="Canonical ProcessContext process_id; Agent 2 does not own the context.",
+    )
+    workflow_plan_id: str | None = None
+    workflow_step_id: str | None = None
 
 
 class RetryExecutionRequest(BaseModel):
@@ -244,14 +250,42 @@ async def get_receipt_detail(
     return detail
 
 
-@router.post("/execute", summary="Execute an authorized Agent 2 tool via cognitive pipeline")
+@router.post("/execute", summary="Execute one authorized Agent 2 tool (legacy) or one WorkflowStep")
 async def execute_tool_endpoint(
     payload: ExecuteToolRequest,
     session: AsyncSession | None = Depends(get_db_session),
     repository: ProcessRepository = Depends(get_process_repository),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    tool_name = payload.tool_name.strip().lower()
+    tool_name = (payload.tool_name or payload.parameters.get("tool_name") or "").strip().lower()
+    if is_full_task_suite(tool_name) or is_full_task_suite(str(payload.parameters.get("tool_name") or "")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "FULL_WORKFLOW_EXECUTION_FORBIDDEN",
+                "message": "Agent 2 executes exactly one WorkflowStep. __full_task_suite__ is forbidden.",
+            },
+        )
+
+    if payload.workflow_plan_id and payload.workflow_step_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "USE_WORKFLOW_STEP_EXECUTE",
+                "message": (
+                    "Use POST /api/v1/workflows/{workflow_plan_id}/steps/{workflow_step_id}/execute"
+                ),
+            },
+        )
+
+    if not tool_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "WORKFLOW_STEP_REQUIRED",
+                "message": "Provide workflow_plan_id and workflow_step_id, or a single tool_name.",
+            },
+        )
     auth = await authorize_tool_execution(repository, payload.process_id, tool_name)
     if not auth.authorized:
         raise HTTPException(

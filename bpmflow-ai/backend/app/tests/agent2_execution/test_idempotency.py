@@ -9,6 +9,9 @@ import uuid
 
 import pytest
 
+from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+from app.procurement.schemas import CreateVendorInput
+from app.procurement.service import get_procurement
 from app.agents.agent2_execution.execution.execution_engine import execute_with_recovery
 from app.agents.agent2_execution.execution.idempotency import (
     clear_memory_receipts,
@@ -29,14 +32,23 @@ def test_idempotency_key_generation():
 @pytest.mark.asyncio
 async def test_idempotency_short_circuit():
     clear_memory_receipts()
+    get_procurement().create_vendor(
+        CreateVendorInput(
+            tenant_id=BPMFLOW_DEMO_TENANT_ID,
+            vendor_code="vendor-100",
+            legal_name="Idempotency Test Vendor",
+        )
+    )
     proc_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
     tool_name = "create_po_draft"
     params = {
         "vendor_id": "vendor-100",
         "amount": 1500.00,
+        "currency": "LKR",
         "process_id": proc_id,
         "task_id": task_id,
+        "tenant_id": str(BPMFLOW_DEMO_TENANT_ID),
     }
     gemini_client = GeminiClient(is_offline=True)
     guard = ExecutionGuardContext(
@@ -77,14 +89,23 @@ async def test_concurrent_idempotency_replays():
     import asyncio
 
     clear_memory_receipts()
+    get_procurement().create_vendor(
+        CreateVendorInput(
+            tenant_id=BPMFLOW_DEMO_TENANT_ID,
+            vendor_code="vendor-100",
+            legal_name="Idempotency Test Vendor",
+        )
+    )
     proc_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
     tool_name = "create_po_draft"
     params = {
         "vendor_id": "vendor-100",
         "amount": 1500.00,
+        "currency": "LKR",
         "process_id": proc_id,
         "task_id": task_id,
+        "tenant_id": str(BPMFLOW_DEMO_TENANT_ID),
     }
     gemini_client = GeminiClient(is_offline=True)
     guard = ExecutionGuardContext(

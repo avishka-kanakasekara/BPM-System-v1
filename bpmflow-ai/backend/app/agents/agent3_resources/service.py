@@ -6,9 +6,10 @@ from decimal import Decimal
 from typing import Any
 
 from .advisory import assert_advisory_recommendation
-from .constants import MessageType
+from .constants import FailureErrorCode, MessageType
 from .explainer_template import ExplanationContext, TemplateExplainer
 from .failures import (
+    FailureSpec,
     build_failed_recommendation,
     build_internal_error_failure,
     build_resource_lookup_failure,
@@ -41,6 +42,7 @@ class ResourceAllocationService:
         self,
         repository: ResourceRepository,
         explainer: Any | None = None,
+        directory: Any | None = None,
     ):
         """Initialize with a resource repository and optional explanation generator.
 
@@ -48,9 +50,10 @@ class ResourceAllocationService:
         are explicitly wrapped via TemplateExplainerAdapter for backward compatibility.
         """
         self.repository = repository
-        self.human_strategy = HumanResourceStrategy(repository)
+        self.human_strategy = HumanResourceStrategy(repository, directory=directory)
         self.budget_strategy = BudgetResourceStrategy(repository)
         self.gap_detector = GapDetector()
+        self.directory = directory
 
         if explainer is None:
             self.explainer: ExplanationGenerator = ResilientFallbackExplainer()
@@ -88,6 +91,11 @@ class ResourceAllocationService:
             if invalid_request is not None:
                 return build_failed_recommendation(response_metadata, invalid_request)
 
+            request = self._bind_requester_identity(request)
+            identity_failure = self._identity_failure(request)
+            if identity_failure is not None:
+                return build_failed_recommendation(response_metadata, identity_failure)
+
             human_result = None
             if request.human_requirements is not None:
                 try:
@@ -103,6 +111,18 @@ class ResourceAllocationService:
                             str(exc),
                         )
                     return build_internal_error_failure(response_metadata)
+                if (
+                    human_result is not None
+                    and human_result.outcome_code == "APPROVER_NOT_RESOLVED"
+                    and request.human_requirements.assignment_kind == "approver"
+                ):
+                    return build_failed_recommendation(
+                        response_metadata,
+                        FailureSpec(
+                            error_code=FailureErrorCode.APPROVER_NOT_RESOLVED,
+                            error_message="APPROVER_NOT_RESOLVED",
+                        ),
+                    )
 
             budget_result = None
             if request.budget_requirements is not None:
@@ -222,3 +242,32 @@ class ResourceAllocationService:
         confidence = max(Decimal("0"), min(Decimal("1"), confidence))
 
         return confidence.quantize(Decimal("0.01"))
+
+    def _bind_requester_identity(self, request: AllocationRequest) -> AllocationRequest:
+        human = request.human_requirements
+        if human is None or self.directory is None or human.requester_employee_id is not None:
+            return request
+        employee = self.directory.resolve_employee_by_user_id(
+            tenant_id=request.metadata.tenant_id,
+            user_id=human.requester_id,
+        )
+        if employee is None:
+            return request
+        return request.model_copy(
+            update={
+                "human_requirements": human.model_copy(
+                    update={"requester_employee_id": employee.employee_id}
+                )
+            }
+        )
+
+    def _identity_failure(self, request: AllocationRequest) -> FailureSpec | None:
+        human = request.human_requirements
+        if human is None or not human.require_requester_identity:
+            return None
+        if human.requester_employee_id is not None:
+            return None
+        return FailureSpec(
+            error_code=FailureErrorCode.IDENTITY_NOT_RESOLVED,
+            error_message="Authenticated requester is not mapped to a company employee",
+        )

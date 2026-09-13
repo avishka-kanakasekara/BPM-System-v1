@@ -1,16 +1,17 @@
-"""Build Agent 2 execution payloads from process metadata.
+"""Build Agent 2 execution payloads from canonical ProcessContext.
 
 Shared by POST /processes/{id}/execute, process autopilot (Agent 4), and the
-post-approval dispatch path. Workflow execution always runs the full Agent 2
-tool suite (__full_task_suite__) with parameters derived from Agent 1 discovery.
+post-approval dispatch path. Missing business facts are never invented.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from app.agents.agent2_execution.agent.planner_fallback import FULL_TASK_SUITE_TOOL
+from app.process_context.exceptions import MissingRequiredContextError
+from app.process_context.schemas import ProcessContext
+from app.process_context.service import context_from_process_row
 
 from .exceptions import ExecutionEnrichmentError
 
@@ -18,23 +19,26 @@ _PROCUREMENT_TYPES = frozenset(
     {"PROCUREMENT", "PURCHASE", "PO", "PURCHASE_ORDER", "BUY"}
 )
 
-_REQUIRED_PROCUREMENT_FIELDS = ("vendor_id", "amount", "currency", "cost_centre")
-
-_DEFAULT_CURRENCY = "USD"
-_DEFAULT_COST_CENTRE = "IT-OPS"
-_DEFAULT_VENDOR_ID = "VENDOR-ACME"
-_DEFAULT_AMOUNT = 2500.0
+_REQUIRED_PROCUREMENT_FIELDS = ("vendor_id", "amount", "currency")
 
 # Legacy single-tool dispatch names upgraded to the workflow suite automatically.
 _LEGACY_SUITE_ALIASES = frozenset({"create_po_draft", "execute_task", "execute_po_draft"})
 
 
 def build_process_execution_metadata(process: Any) -> dict[str, Any]:
-    """Merge metadata_json and process_json for enrichment (Agent 1 discovery output)."""
+    """Merge metadata_json, process_json, and process_context for enrichment."""
     meta = dict(getattr(process, "metadata_json", None) or {})
     process_json = getattr(process, "process_json", None)
     if isinstance(process_json, dict):
         meta = meta | {"process_json": process_json}
+    context = getattr(process, "process_context", None)
+    if isinstance(context, dict) and context:
+        meta = meta | {"process_context": context}
+    elif process is not None:
+        try:
+            meta = meta | {"process_context": context_from_process_row(process).model_dump(mode="json")}
+        except Exception:
+            pass
     return meta
 
 
@@ -50,6 +54,13 @@ def _extract_risk_facts(metadata_json: dict[str, Any] | None) -> dict[str, Any]:
     return facts if isinstance(facts, dict) else {}
 
 
+def _context_from_meta(metadata_json: dict[str, Any] | None) -> ProcessContext | None:
+    raw = (metadata_json or {}).get("process_context")
+    if isinstance(raw, dict) and raw.get("process_id"):
+        return ProcessContext.model_validate(raw)
+    return None
+
+
 def _is_procurement(process_type: str | None) -> bool:
     process_type_u = (process_type or "PROCUREMENT").upper()
     if process_type_u in _PROCUREMENT_TYPES or process_type_u.endswith("PROCUREMENT"):
@@ -57,18 +68,11 @@ def _is_procurement(process_type: str | None) -> bool:
     return process_type_u in {"GENERAL", "GENERIC", ""}
 
 
-def _vendor_from_name(name: str | None) -> str | None:
-    if not name or not str(name).strip():
-        return None
-    slug = re.sub(r"[^A-Z0-9]+", "-", str(name).upper()).strip("-")
-    return f"VENDOR-{slug[:32]}" if slug else None
-
-
 def _normalize_workflow_tool_name(tool_name: str | None) -> str | None:
-    """Map workflow dispatch to the full Agent 2 suite unless a specific tool was requested."""
+    """Reject bulk suite names. A specific allow-listed tool may still be named."""
     clean = (tool_name or "").strip().lower()
     if not clean or clean in _LEGACY_SUITE_ALIASES or clean == FULL_TASK_SUITE_TOOL:
-        return FULL_TASK_SUITE_TOOL
+        return None
     return clean
 
 
@@ -77,9 +81,11 @@ def _resolve_procurement_fields(
     params: dict[str, Any],
     meta: dict[str, Any],
     risk_facts: dict[str, Any],
+    context: ProcessContext | None,
     strict: bool,
-) -> tuple[Any, Any, str, str]:
+) -> tuple[Any, Any, str | None, str | None]:
     purchase = meta.get("purchase_order") if isinstance(meta.get("purchase_order"), dict) else {}
+    ctx_purchase = context.purchase if context is not None else None
 
     amount = (
         params.get("amount")
@@ -87,6 +93,7 @@ def _resolve_procurement_fields(
         or meta.get("required_amount")
         or meta.get("budget_amount")
         or purchase.get("amount")
+        or (ctx_purchase.amount if ctx_purchase is not None else None)
         or risk_facts.get("purchase_amount")
     )
     vendor = (
@@ -95,42 +102,36 @@ def _resolve_procurement_fields(
         or meta.get("vendor")
         or purchase.get("vendor")
         or purchase.get("vendor_id")
+        or (ctx_purchase.vendor_id if ctx_purchase is not None else None)
         or risk_facts.get("vendor_id")
-        or _vendor_from_name(risk_facts.get("vendor_name"))
     )
     currency = (
         params.get("currency")
         or meta.get("currency")
         or purchase.get("currency")
+        or (ctx_purchase.currency if ctx_purchase is not None else None)
         or risk_facts.get("currency")
-        or _DEFAULT_CURRENCY
     )
     cost_centre = (
         params.get("cost_centre")
         or meta.get("cost_centre")
         or purchase.get("cost_centre")
+        or (ctx_purchase.cost_centre if ctx_purchase is not None else None)
         or risk_facts.get("cost_centre")
-        or _DEFAULT_COST_CENTRE
     )
-
-    if vendor in (None, "") and strict:
-        vendor = _DEFAULT_VENDOR_ID
-    if amount in (None, "") and strict:
-        amount = _DEFAULT_AMOUNT
 
     if strict:
         missing = [
             field
             for field, value in (
-                ("vendor_id", vendor),
-                ("amount", amount),
-                ("currency", currency),
-                ("cost_centre", cost_centre),
+                ("purchase.amount", amount),
+                ("purchase.vendor_id", vendor),
+                ("purchase.currency", currency),
             )
             if value in (None, "")
         ]
         if missing:
-            raise ExecutionEnrichmentError(missing)
+            raise MissingRequiredContextError(missing[0], missing_fields=missing)
 
     return vendor, amount, currency, cost_centre
 
@@ -144,11 +145,13 @@ def enrich_execute_parameters(
     parameters: dict[str, Any] | None,
     strict: bool = False,
 ) -> dict[str, Any]:
-    """Ensure Agent 2 gets actionable tool parameters from discovery metadata."""
+    """Ensure Agent 2 gets tool parameters from ProcessContext / discovery.
+
+    Never fills amount, currency, vendor, or cost centre with invented values.
+    """
     params = dict(parameters or {})
     explicit_tool = (params.get("tool_name") or "").strip().lower()
 
-    # Operator invoked a specific tool manually (Tools page / API) — honour it.
     if explicit_tool and explicit_tool not in _LEGACY_SUITE_ALIASES and explicit_tool != FULL_TASK_SUITE_TOOL:
         if process_id:
             params.setdefault("process_id", process_id)
@@ -157,49 +160,78 @@ def enrich_execute_parameters(
         return params
 
     if not _is_procurement(process_type):
-        params["tool_name"] = _normalize_workflow_tool_name(params.get("tool_name")) or FULL_TASK_SUITE_TOOL
+        tool = _normalize_workflow_tool_name(params.get("tool_name"))
+        if tool:
+            params["tool_name"] = tool
+        else:
+            params.pop("tool_name", None)
         if process_id:
             params.setdefault("process_id", process_id)
         return params
 
     meta = metadata_json or {}
     risk_facts = _extract_risk_facts(meta)
-    vendor, amount, currency, cost_centre = _resolve_procurement_fields(
-        params=params,
-        meta=meta,
-        risk_facts=risk_facts,
-        strict=strict,
-    )
-
-    if amount is None or vendor is None:
+    context = _context_from_meta(meta)
+    try:
+        vendor, amount, currency, cost_centre = _resolve_procurement_fields(
+            params=params,
+            meta=meta,
+            risk_facts=risk_facts,
+            context=context,
+            strict=strict,
+        )
+    except MissingRequiredContextError:
         if strict:
-            raise ExecutionEnrichmentError(list(_REQUIRED_PROCUREMENT_FIELDS))
-        params["tool_name"] = FULL_TASK_SUITE_TOOL
+            raise
         if process_id:
             params.setdefault("process_id", process_id)
+        params.pop("tool_name", None)
+        return params
+
+    if amount is None or vendor is None or currency is None:
+        if strict:
+            missing = [
+                name
+                for name, value in (
+                    ("purchase.amount", amount),
+                    ("purchase.vendor_id", vendor),
+                    ("purchase.currency", currency),
+                )
+                if value in (None, "")
+            ]
+            raise MissingRequiredContextError(missing[0] if missing else "purchase.amount", missing_fields=missing)
+        if process_id:
+            params.setdefault("process_id", process_id)
+        params.pop("tool_name", None)
         return params
 
     try:
         amount_f = float(amount)
     except (TypeError, ValueError) as exc:
         if strict:
-            raise ExecutionEnrichmentError(["amount"]) from exc
-        params["tool_name"] = FULL_TASK_SUITE_TOOL
+            raise MissingRequiredContextError("purchase.amount") from exc
         if process_id:
             params.setdefault("process_id", process_id)
+        params.pop("tool_name", None)
         return params
 
-    params["tool_name"] = FULL_TASK_SUITE_TOOL
+    tool = _normalize_workflow_tool_name(params.get("tool_name"))
+    if tool:
+        params["tool_name"] = tool
+    else:
+        params.pop("tool_name", None)
     params.setdefault("vendor_id", str(vendor))
     params.setdefault("amount", amount_f)
     params.setdefault("currency", str(currency))
-    params.setdefault("cost_centre", str(cost_centre))
+    if cost_centre not in (None, ""):
+        params.setdefault("cost_centre", str(cost_centre))
     params.setdefault(
         "items_summary",
         f"{(process_name or 'Procurement')} line items",
     )
     if process_id:
         params.setdefault("process_id", process_id)
+        params.setdefault("process_context_ref", process_id)
     return params
 
 
@@ -212,14 +244,17 @@ def require_enrich_execute_parameters(
     parameters: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Strict enrichment for workflow autopilot and post-approval Agent 2 dispatch."""
-    return enrich_execute_parameters(
-        process_id=process_id,
-        process_type=process_type,
-        process_name=process_name,
-        metadata_json=metadata_json,
-        parameters=parameters,
-        strict=True,
-    )
+    try:
+        return enrich_execute_parameters(
+            process_id=process_id,
+            process_type=process_type,
+            process_name=process_name,
+            metadata_json=metadata_json,
+            parameters=parameters,
+            strict=True,
+        )
+    except MissingRequiredContextError as exc:
+        raise ExecutionEnrichmentError(list(exc.missing_fields)) from exc
 
 
 def _validate_required(
@@ -230,12 +265,19 @@ def _validate_required(
     if not _is_procurement(process_type):
         return
     risk_facts = _extract_risk_facts(metadata_json)
+    context = _context_from_meta(metadata_json)
+    ctx_purchase = context.purchase if context is not None else None
     checks = {
-        "vendor_id": params.get("vendor_id") or risk_facts.get("vendor_id"),
-        "amount": params.get("amount") or risk_facts.get("purchase_amount"),
-        "currency": params.get("currency") or risk_facts.get("currency") or _DEFAULT_CURRENCY,
-        "cost_centre": params.get("cost_centre") or risk_facts.get("cost_centre") or _DEFAULT_COST_CENTRE,
+        "purchase.vendor_id": params.get("vendor_id")
+        or (ctx_purchase.vendor_id if ctx_purchase else None)
+        or risk_facts.get("vendor_id"),
+        "purchase.amount": params.get("amount")
+        or (ctx_purchase.amount if ctx_purchase else None)
+        or risk_facts.get("purchase_amount"),
+        "purchase.currency": params.get("currency")
+        or (ctx_purchase.currency if ctx_purchase else None)
+        or risk_facts.get("currency"),
     }
     missing = [key for key, value in checks.items() if value in (None, "")]
     if missing:
-        raise ExecutionEnrichmentError(missing)
+        raise MissingRequiredContextError(missing[0], missing_fields=missing)

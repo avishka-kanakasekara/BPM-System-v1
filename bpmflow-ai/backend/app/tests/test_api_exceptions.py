@@ -22,7 +22,7 @@ from app.tests.auth_helpers import override_current_user
 
 @pytest.fixture
 def exception_setup():
-    override_current_user(role="requester")
+    override_current_user(role="approver")
     process_repo = InMemoryProcessRepository()
     exception_repo = InMemoryExceptionRepository()
     orchestrator = OrchestratorService(repository=process_repo)
@@ -242,7 +242,7 @@ async def test_terminal_exception_cannot_be_retried(exception_setup) -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_exception_cannot_be_resolved_again(exception_setup) -> None:
+async def test_terminal_exception_resolve_is_idempotent(exception_setup) -> None:
     setup = exception_setup
     created = await _create_exception(setup)
     first = setup["client"].post(
@@ -256,8 +256,9 @@ async def test_terminal_exception_cannot_be_resolved_again(exception_setup) -> N
         json={"resolution_notes": "Fixed again"},
     )
 
-    assert second.status_code == 409
-    assert second.json()["detail"] == "Invalid exception action"
+    assert second.status_code == 200
+    assert second.json()["exception"]["status"] == ExceptionStatus.RESOLVED.value
+    assert second.json()["exception"]["resolution_notes"] == "Fixed"
 
 
 @pytest.mark.asyncio
@@ -275,3 +276,17 @@ async def test_retry_does_not_bypass_state_machine(exception_setup) -> None:
     stage = await setup["orchestrator"].get_current_stage(created["process"].id)
     assert stage is WorkflowStage.DRAFT
     assert stage is not WorkflowStage.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_requester_cannot_resolve_exception(exception_setup) -> None:
+    setup = exception_setup
+    created = await _create_exception(setup)
+    override_current_user(role="requester")
+    response = setup["client"].post(
+        f"/api/v1/exceptions/{created['exception'].id}/resolve",
+        json={"resolution_notes": "Requester should not resolve this."},
+    )
+    assert response.status_code == 403
+    loaded = await setup["exception_service"].get_exception(created["exception"].id)
+    assert loaded.status is ExceptionStatus.OPEN

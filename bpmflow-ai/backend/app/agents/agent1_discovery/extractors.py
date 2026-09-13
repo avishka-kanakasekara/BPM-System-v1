@@ -93,10 +93,21 @@ _CLASSIFIER_HINTS: list[tuple[DocumentType, tuple[tuple[str, int], ...]]] = [
 ]
 
 _AMOUNT_RE = re.compile(
-    r"(?:amount(?:\s+due)?|total|value)\s*[:\-]?\s*(?:(USD|EUR|GBP|LKR|\$)\s*)?"
+    r"(?:amount(?:\s+due)?|total(?:\s+amount)?|value)\s*[:\-]?\s*(?:(USD|EUR|GBP|LKR|\$)\s*)?"
     r"(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)",
     re.IGNORECASE,
 )
+_BUDGET_RE = re.compile(
+    r"(?:available\s+budget|budget(?:\s+amount)?)\s*[:\-]?\s*(?:(USD|EUR|GBP|LKR|\$)\s*)?"
+    r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_PR_ID_RE = re.compile(r"\b(PR-\d{4}-\d{4,})\b", re.IGNORECASE)
+_QUOTE_COUNT_RE = re.compile(
+    r"(?:number\s+of\s+quotations|quotations?\s+(?:attached|obtained|received|count))\s*[:\-]?\s*(\d+)",
+    re.IGNORECASE,
+)
+_QUANTITY_RE = re.compile(r"(?:quantity|qty)\s*[:\-]?\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 _CURRENCY_SYMBOL_AMOUNT_RE = re.compile(r"\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)")
 _CURRENCY_RE = re.compile(r"\b(USD|EUR|GBP|LKR)\b", re.IGNORECASE)
 _COST_CENTRE_RE = re.compile(
@@ -201,6 +212,10 @@ def _regex_entities(page: PageText) -> Iterable[Entity]:
     collect(_REQUESTER_RE, "requester")
     collect(_SUPPLIER_RE, "supplier")
     collect(_AMOUNT_RE, "amount", group=2)
+    collect(_BUDGET_RE, "budget", group=2)
+    collect(_PR_ID_RE, "purchase_request_id")
+    collect(_QUOTE_COUNT_RE, "quotation_count")
+    collect(_QUANTITY_RE, "quantity")
     for match in _CURRENCY_SYMBOL_AMOUNT_RE.finditer(text):
         _add_entity(
             found,

@@ -56,13 +56,14 @@ from app.agents.agent2_execution.tools.task_tools import create_workflow_task, u
 
 
 def test_registry_contains_all_12_tools():
-    assert len(registry.list_tools()) == 12
+    assert len(registry.list_tools()) == 13
     expected = {
         "create_workflow_task",
         "update_task",
         "send_email",
         "send_reminder",
         "create_po_draft",
+        "match_invoice",
         "request_quotation",
         "update_procurement_record",
         "schedule_escalation",
@@ -133,10 +134,23 @@ async def test_send_reminder_tool():
 
 @pytest.mark.asyncio
 async def test_create_po_draft_tool():
+    from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+    from app.procurement.schemas import CreateVendorInput
+    from app.procurement.service import get_procurement
+
+    get_procurement().create_vendor(
+        CreateVendorInput(
+            tenant_id=BPMFLOW_DEMO_TENANT_ID,
+            vendor_code="vendor-99",
+            legal_name="Vendor 99 Test Fixture",
+        )
+    )
     inp = CreatePODraftInput(
         vendor_id="vendor-99",
         amount=4500.00,
+        currency="LKR",
         process_id=str(uuid.uuid4()),
+        tenant_id=str(BPMFLOW_DEMO_TENANT_ID),
         items_summary="5 Developer Laptops",
     )
     out = await create_po_draft(session=None, input_data=inp)
@@ -154,7 +168,7 @@ async def test_request_quotation_tool():
     )
     out = await request_quotation(session=None, input_data=inp)
     assert isinstance(out, RequestQuotationOutput)
-    assert out.status in {"COMMUNICATION_SENT", "DRY_RUN", "RECORDED", "COMMUNICATION_PENDING"}
+    assert out.status == "VENDOR_COMMUNICATION_NOT_AVAILABLE"
 
 
 @pytest.mark.asyncio

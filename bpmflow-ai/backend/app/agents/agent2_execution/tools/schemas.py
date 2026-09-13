@@ -42,13 +42,16 @@ class UpdateTaskOutput(BaseModel):
 
 # 3. send_email
 class SendEmailInput(BaseModel):
-    recipient: str = Field(..., description="Recipient email address")
+    recipient: str = Field(..., description="Recipient email address resolved from Company Directory")
     subject: str = Field(..., description="Email subject line")
     body: str = Field(..., description="Email text or HTML body")
     process_id: str = Field(..., description="Associated process instance ID")
     task_id: str = Field(..., description="Associated task ID")
     recipient_role: str = Field(default="requester", description="Role of the recipient")
     template_name: str = Field(default="", description="Optional template name")
+    recipients: list[str] = Field(default_factory=list)
+    recipient_employee_ids: list[str] = Field(default_factory=list)
+    tenant_id: str = Field(default="")
 
 
 class SendEmailOutput(BaseModel):
@@ -59,12 +62,15 @@ class SendEmailOutput(BaseModel):
 
 # 4. send_reminder
 class SendReminderInput(BaseModel):
-    recipient: str = Field(..., description="Approver email address")
+    recipient: str = Field(..., description="Approver email address resolved from Company Directory")
     task_id: str = Field(..., description="Delayed task ID")
     elapsed_hours: float = Field(..., ge=0.0, description="Hours elapsed")
     sla_hours: float = Field(..., ge=0.0, description="Target SLA hours")
     message: str = Field(default="", description="Optional custom reminder message")
     process_id: str = Field(default="", description="Associated process instance ID")
+    recipients: list[str] = Field(default_factory=list)
+    recipient_employee_ids: list[str] = Field(default_factory=list)
+    tenant_id: str = Field(default="")
 
 
 class SendReminderOutput(BaseModel):
@@ -84,12 +90,18 @@ class CreatePODraftInput(BaseModel):
     vendor_id: str = Field(..., min_length=1, description="Approved vendor ID")
     process_id: str = Field(..., description="Process instance ID")
     task_id: str = Field(default="", description="Associated task ID")
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency: str = Field(default="", description="ISO currency from ProcessContext; never defaulted")
     items: list[POLineItem] = Field(default_factory=list)
     items_summary: str = Field(default="", description="Summary of requested items")
     amount: float = Field(default=0.0, ge=0.0, description="Legacy total; recalculated server-side")
     tax_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     notes: str = Field(default="")
+    tenant_id: str = Field(default="", description="Authenticated tenant; never taken as vendor authority")
+    workflow_plan_id: str = Field(default="")
+    workflow_step_id: str = Field(default="")
+    budget_available: float | None = Field(default=None)
+    min_quotations: int = Field(default=0, ge=0)
+    quotation_facts: list[dict] = Field(default_factory=list)
 
 
 class CreatePODraftOutput(BaseModel):
@@ -98,16 +110,20 @@ class CreatePODraftOutput(BaseModel):
     amount: float = Field(..., description="Server-calculated total")
     subtotal: float = Field(..., description="Server-calculated subtotal")
     tax: float = Field(..., description="Server-calculated tax")
-    currency: str = Field(default="USD")
+    currency: str = Field(..., min_length=3)
     created_at: str = Field(..., description="ISO creation timestamp")
+    purchase_order_id: str = Field(default="", description="Persistent purchase_orders.id")
 
 
 # 6. request_quotation
 class RequestQuotationInput(BaseModel):
-    vendor_email: str = Field(..., description="Vendor contact email")
+    vendor_email: str = Field(default="", description="Caller-supplied email; ignored unless verified")
     items: str = Field(..., description="Item specifications and quantities")
     required_by: str = Field(default="", description="Required ISO date")
     process_id: str = Field(default="", description="Optional process instance ID for persistence")
+    tenant_id: str = Field(default="")
+    vendor_id: str = Field(default="")
+    currency: str = Field(default="")
 
 
 class RequestQuotationOutput(BaseModel):
@@ -129,6 +145,29 @@ class UpdateProcurementRecordOutput(BaseModel):
     record_id: str = Field(..., description="ERP record ID")
     status: str = Field(..., description="Updated record status")
     updated_at: str = Field(..., description="ISO update timestamp")
+
+
+class MatchInvoiceInput(BaseModel):
+    process_id: str = Field(..., description="Process instance ID")
+    tenant_id: str = Field(default="")
+    invoice_id: str = Field(default="")
+    task_id: str = Field(default="")
+    workflow_plan_id: str = Field(default="")
+    workflow_step_id: str = Field(default="")
+    trace_id: str = Field(default="")
+
+
+class MatchInvoiceOutput(BaseModel):
+    invoice_id: str
+    purchase_order_id: str
+    status: str
+    matched: bool
+    discrepancy_codes: list[str] = Field(default_factory=list)
+    discrepancy_details: list[str] = Field(default_factory=list)
+    invoice_amount: float | None = None
+    po_amount: float | None = None
+    currency: str | None = None
+    trace_id: str | None = None
 
 
 # 8. schedule_escalation

@@ -5,20 +5,21 @@ Enforces Non-Negotiable Rules #1, #2, #4, #6, #7:
 1. Gemini NEVER executes anything directly — all function call proposals go through Tool Guard.
 2. Every tool call passes through Tool Guard (allow-list + RBAC + parameter validation + recipient validation).
 3. Hard-coded permission matrix (authorization.py) is enforced (Rule #4).
-4. Email recipients are allow-listed against seeded org directory by role (Rule #6).
+4. Email recipients must be verified tenant-scoped Company Directory employees (Rule #6).
 5. Every decision (allowed or blocked) gets an audit log entry (Rule #7).
 """
 
-import json
-import os
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.security import audit, authorization
-from app.agents.agent2_execution.tools.metadata import READ_ONLY_TOOLS
+from app.company_directory.communication import resolve_verified_recipient_emails
+from app.company_directory.exceptions import DirectoryError
+from app.company_directory.service import CompanyDirectoryService
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,9 @@ class ExecutionGuardContext:
     process_stage: str = "WORKFLOW_EXECUTION"
     is_retry: bool = False
     process_id: str = ""
+    tenant_id: str = ""
+    workflow_plan_id: str = ""
+    workflow_step_id: str = ""
 
 
 class ToolGuardResult(BaseModel):
@@ -41,52 +45,19 @@ class ToolGuardResult(BaseModel):
     error: str = Field(default="", description="Error details if blocked")
 
 
-# ---------------------------------------------------------------------------
-# Org Directory Email Allow-list Loader (Rule #6)
-# ---------------------------------------------------------------------------
-
-ORG_DIR_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "org_directory.json"
-)
-
-ALLOWED_EMAIL_ROLES: set[str] = {
-    "requester",
-    "assigned_employee",
-    "manager",
-    "finance_officer",
-    "procurement_officer",
-    "escalation_contact",
-}
-
-
-def load_allowed_email_recipients() -> set[str]:
-    """
-    Load allowed recipient email addresses from org_directory.json.
-    Only emails associated with an allowed role are valid recipients.
-    """
-    allowed_emails = set()
-    if os.path.exists(ORG_DIR_PATH):
-        try:
-            with open(ORG_DIR_PATH) as f:
-                data = json.load(f)
-                for user in data.get("users", []):
-                    role = user.get("role", "").strip().lower()
-                    email = user.get("email", "").strip().lower()
-                    if role in ALLOWED_EMAIL_ROLES and email:
-                        allowed_emails.add(email)
-        except Exception:
-            pass
-    return allowed_emails
-
-
 class ToolGuard:
     """
     Central security choke point for tool invocation.
     """
 
-    def __init__(self, session: AsyncSession | None = None):
+    def __init__(
+        self,
+        session: AsyncSession | None = None,
+        *,
+        directory: CompanyDirectoryService | None = None,
+    ):
         self.session = session
-        self.allowed_emails = load_allowed_email_recipients()
+        self.directory = directory
 
     async def check(
         self,
@@ -95,14 +66,6 @@ class ToolGuard:
         actor: str = "agent_2",
         guard_context: ExecutionGuardContext | None = None,
     ) -> ToolGuardResult:
-        """
-        Evaluate a proposed tool call against all security gates in sequence.
-
-        :param tool_name: Target tool identifier
-        :param parameters: Dict of arguments passed to tool
-        :param actor: Identifier of calling actor
-        :return: ToolGuardResult indicating allowed/blocked with detailed reason
-        """
         if not tool_name:
             reason = "Tool name cannot be empty"
             await audit.log_audit_event(self.session, actor, "empty_tool", False, reason, payload=parameters)
@@ -111,7 +74,6 @@ class ToolGuard:
         tool_clean = tool_name.strip().lower()
         ctx = guard_context or ExecutionGuardContext()
 
-        # Gate 0: Inter-agent path requires AUTHORIZED message status
         if ctx.message_status and ctx.message_status != "AUTHORIZED":
             reason = (
                 f"Tool call rejected: message status must be AUTHORIZED "
@@ -126,7 +88,8 @@ class ToolGuard:
                 error="NOT_AUTHORIZED",
             )
 
-        # Gate 0b: Mutating tools require WORKFLOW_EXECUTION stage
+        from app.agents.agent2_execution.tools.metadata import READ_ONLY_TOOLS
+
         if tool_clean not in READ_ONLY_TOOLS:
             stage = (ctx.process_stage or "").upper()
             if stage != "WORKFLOW_EXECUTION":
@@ -143,7 +106,6 @@ class ToolGuard:
                     error="STAGE_NOT_AUTHORIZED",
                 )
 
-        # Gate 0c: Read-only tools require a process_id
         if tool_clean in READ_ONLY_TOOLS:
             process_id = str(parameters.get("process_id") or ctx.process_id or "").strip()
             if not process_id:
@@ -157,7 +119,6 @@ class ToolGuard:
                     error="MISSING_PROCESS_ID",
                 )
 
-        # Gate 1: Authorization Allow-list Check (Rule #4)
         if not authorization.is_permitted(tool_clean):
             reason = f"Action {tool_clean!r} is forbidden by Agent 2 security policy (Rule #4)"
             await audit.log_audit_event(self.session, actor, tool_clean, False, reason, payload=parameters)
@@ -169,7 +130,6 @@ class ToolGuard:
                 error="FORBIDDEN_ACTION",
             )
 
-        # Gate 2: Parameter Structure Validation
         param_error = self._validate_parameters(tool_clean, parameters)
         if param_error:
             reason = f"Parameter validation failed for {tool_clean!r}: {param_error}"
@@ -182,35 +142,19 @@ class ToolGuard:
                 error="INVALID_PARAMETERS",
             )
 
-        # Gate 3: Recipient Allow-list Validation for Email Tools (Rule #6)
         if tool_clean in ["send_email", "send_reminder", "schedule_reminder"]:
-            recipient = parameters.get("recipient") or parameters.get("recipient_email") or ""
-            recipient_clean = recipient.strip().lower()
-
-            if not recipient_clean:
-                reason = f"Email tool {tool_clean!r} requires a recipient address"
+            recipient_error = self._validate_directory_recipients(parameters, ctx)
+            if recipient_error:
+                code, reason = recipient_error
                 await audit.log_audit_event(self.session, actor, tool_clean, False, reason, payload=parameters)
                 return ToolGuardResult(
                     allowed=False,
                     reason=reason,
                     tool_name=tool_clean,
                     parameters=parameters,
-                    error="MISSING_RECIPIENT",
+                    error=code,
                 )
 
-            # Check if recipient is in allowed org directory
-            if self.allowed_emails and recipient_clean not in self.allowed_emails:
-                reason = f"Recipient {recipient!r} is not in the allowed organizational directory by role (Rule #6)"
-                await audit.log_audit_event(self.session, actor, tool_clean, False, reason, payload=parameters)
-                return ToolGuardResult(
-                    allowed=False,
-                    reason=reason,
-                    tool_name=tool_clean,
-                    parameters=parameters,
-                    error="RECIPIENT_NOT_ALLOWED",
-                )
-
-        # All security gates passed -> Allow tool call & write audit log
         reason = f"Tool call {tool_clean!r} authorized by Tool Guard"
         await audit.log_audit_event(self.session, actor, tool_clean, True, reason, payload=parameters)
 
@@ -222,8 +166,81 @@ class ToolGuard:
             error="",
         )
 
+    def _validate_directory_recipients(
+        self,
+        parameters: dict[str, Any],
+        ctx: ExecutionGuardContext,
+    ) -> tuple[str, str] | None:
+        raw_ids = parameters.get("recipient_employee_ids") or []
+        tenant_raw = parameters.get("tenant_id") or ctx.tenant_id
+        if not raw_ids:
+            recipient = str(parameters.get("recipient") or parameters.get("recipient_email") or "").strip()
+            if not recipient:
+                return (
+                    "MISSING_RECIPIENT",
+                    f"Email tool requires a recipient address",
+                )
+            if self.directory is not None:
+                return (
+                    "COMMUNICATION_RECIPIENT_INVALID",
+                    "Email tools require recipient_employee_ids from the WorkflowStep",
+                )
+            return None
+        if not tenant_raw:
+            return (
+                "COMMUNICATION_RECIPIENT_INVALID",
+                "Authenticated tenant is required before email execution",
+            )
+        if self.directory is None:
+            return (
+                "COMPANY_DIRECTORY_UNAVAILABLE",
+                "Company directory is required to validate email recipients",
+            )
+        try:
+            tenant_id = tenant_raw if isinstance(tenant_raw, UUID) else UUID(str(tenant_raw))
+            employee_ids = [
+                item if isinstance(item, UUID) else UUID(str(item)) for item in raw_ids
+            ]
+            verified = resolve_verified_recipient_emails(
+                tenant_id=tenant_id,
+                employee_ids=employee_ids,
+                directory=self.directory,
+                workflow_plan_id=_uuid_or_none(ctx.workflow_plan_id or parameters.get("workflow_plan_id")),
+                workflow_step_id=_uuid_or_none(ctx.workflow_step_id or parameters.get("workflow_step_id")),
+                process_id=_uuid_or_none(parameters.get("process_id") or ctx.process_id),
+            )
+        except DirectoryError as exc:
+            return exc.error_code, str(exc)
+        except (TypeError, ValueError):
+            return (
+                "COMMUNICATION_RECIPIENT_INVALID",
+                "recipient_employee_ids must be valid employee UUIDs",
+            )
+
+        supplied = []
+        if parameters.get("recipients"):
+            supplied = [str(item).strip().lower() for item in parameters.get("recipients") or []]
+        elif parameters.get("recipient") or parameters.get("recipient_email"):
+            supplied = [str(parameters.get("recipient") or parameters.get("recipient_email")).strip().lower()]
+        if not supplied:
+            return (
+                "MISSING_RECIPIENT",
+                "Email tool requires a recipient address resolved from Company Directory",
+            )
+        verified_set = {item.strip().lower() for item in verified}
+        if any(item not in verified_set for item in supplied):
+            return (
+                "RECIPIENT_NOT_ALLOWED",
+                "Recipient is not a verified Company Directory employee email (Rule #6)",
+            )
+        if len(supplied) != len(verified):
+            return (
+                "COMMUNICATION_RECIPIENT_INVALID",
+                "Every recipient_employee_id must be resolved; partial send is not allowed",
+            )
+        return None
+
     def _validate_parameters(self, tool_name: str, params: dict[str, Any]) -> str:
-        """Helper to validate parameters per tool schema."""
         if not isinstance(params, dict):
             return "Parameters must be a dictionary"
 
@@ -242,3 +259,12 @@ class ToolGuard:
                 return "Field 'amount' must be a positive number"
 
         return ""
+
+
+def _uuid_or_none(value: Any) -> UUID | None:
+    if value in (None, ""):
+        return None
+    try:
+        return value if isinstance(value, UUID) else UUID(str(value))
+    except (TypeError, ValueError):
+        return None

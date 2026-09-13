@@ -42,7 +42,7 @@ AUTONOMOUS_GUARDRAILS: dict[str, str] = {
     "REQUEST_DISCOVERY": "Calls Agent 1 read-only; skips if discovery already present.",
     "RESOURCE_PLANNING": "Agent 3 advisory allocation only; no human assigned.",
     "RISK_REVIEW": "Deterministic risk engine; may open human approval gate only.",
-    "EXECUTE_WORKFLOW": "Requires prior human approval; runs full Agent 2 tool suite from discovery.",
+    "EXECUTE_WORKFLOW": "Does not run Agent 2 bulk tools. One WorkflowStep is executed via the step execute API.",
     "INVOICE_MATCHING": "Deterministic three-way match; requires operator invoice input.",
 }
 
@@ -117,6 +117,18 @@ class ProcessAdvancementEngine:
                     last_step=last_step,
                     message="Process paused at human approval gate",
                     waiting_for="human_approval",
+                )
+                return self._result_from_run(run)
+
+            if stage is WorkflowStage.WORKFLOW_EXECUTION:
+                run = await self._finalize_run(
+                    run,
+                    status=AdvancementRunStatus.WAITING_INPUT,
+                    current_stage=stage,
+                    steps=steps,
+                    last_step=last_step,
+                    message="Waiting for one-step WorkflowStep execution",
+                    waiting_for="workflow_step",
                 )
                 return self._result_from_run(run)
 
@@ -291,14 +303,35 @@ class ProcessAdvancementEngine:
             return result, action
 
         if stage is WorkflowStage.DISCOVERING:
-            payload = resource_planning or await self._default_resource_planning(
-                process_id, user_id=user_id
-            )
+            from app.process_context.exceptions import MissingRequiredContextError
+
+            try:
+                payload = resource_planning or await self._default_resource_planning(
+                    process_id, user_id=user_id
+                )
+            except MissingRequiredContextError as exc:
+                result = WorkflowResult(
+                    process_id=process_id,
+                    current_stage=stage,
+                    success=False,
+                    message=str(exc),
+                    error_code=exc.error_code,
+                    error_message=str(exc),
+                )
+                action = self._log_action(
+                    WorkflowStage.DISCOVERING,
+                    "RESOURCE_PLANNING",
+                    False,
+                    str(exc),
+                    correlation_id,
+                )
+                return result, action
             result = await self._workflow.run_resource_planning(
                 process_id,
                 payload={
-                    "human_requirements": payload["human_requirements"],
-                    "budget_requirements": payload["budget_requirements"],
+                    "human_requirements": payload.get("human_requirements"),
+                    "budget_requirements": payload.get("budget_requirements"),
+                    "process_context_ref": payload.get("process_context_ref") or str(process_id),
                 },
                 task_id=task_id,
                 tenant_id=tenant_id,
@@ -314,14 +347,35 @@ class ProcessAdvancementEngine:
             return result, action
 
         if stage is WorkflowStage.RESOURCE_PLANNING:
-            payload = resource_planning or await self._default_resource_planning(
-                process_id, user_id=user_id
-            )
+            from app.process_context.exceptions import MissingRequiredContextError
+
+            try:
+                payload = resource_planning or await self._default_resource_planning(
+                    process_id, user_id=user_id
+                )
+            except MissingRequiredContextError as exc:
+                result = WorkflowResult(
+                    process_id=process_id,
+                    current_stage=stage,
+                    success=False,
+                    message=str(exc),
+                    error_code=exc.error_code,
+                    error_message=str(exc),
+                )
+                action = self._log_action(
+                    WorkflowStage.RESOURCE_PLANNING,
+                    "RESOURCE_PLANNING",
+                    False,
+                    str(exc),
+                    correlation_id,
+                )
+                return result, action
             result = await self._workflow.run_resource_planning(
                 process_id,
                 payload={
-                    "human_requirements": payload["human_requirements"],
-                    "budget_requirements": payload["budget_requirements"],
+                    "human_requirements": payload.get("human_requirements"),
+                    "budget_requirements": payload.get("budget_requirements"),
+                    "process_context_ref": payload.get("process_context_ref") or str(process_id),
                 },
                 task_id=task_id,
                 tenant_id=tenant_id,
@@ -357,30 +411,18 @@ class ProcessAdvancementEngine:
             return result, action
 
         if stage is WorkflowStage.WORKFLOW_EXECUTION:
-            process = await self._process_repository.get_process(process_id)
-            meta = build_process_execution_metadata(process)
-            enriched = require_enrich_execute_parameters(
-                process_id=str(process_id),
-                process_type=process.process_type,
-                process_name=process.name,
-                metadata_json=meta,
-                parameters={},
-            )
-            message_payload = {
-                "task_type": "EXECUTE_TASK",
-                "parameters": enriched,
-                **enriched,
-            }
-            result = await self._workflow.execute_authorized(
-                process_id,
-                payload=message_payload,
-                task_id=task_id,
-                correlation_id=correlation_id,
+            stage_after = await self._orchestrator.get_current_stage(process_id)
+            result = WorkflowResult(
+                process_id=process_id,
+                current_stage=stage_after,
+                success=True,
+                message="Waiting for POST /workflows/{plan_id}/steps/{step_id}/execute",
+                eligible_for_execution=True,
             )
             action = self._log_action(
                 WorkflowStage.WORKFLOW_EXECUTION,
                 "EXECUTE_WORKFLOW",
-                result.success,
+                True,
                 result.message,
                 correlation_id,
             )
@@ -413,72 +455,107 @@ class ProcessAdvancementEngine:
     async def _default_resource_planning(
         self, process_id: UUID, *, user_id: UUID
     ) -> dict[str, Any]:
-        """Build Agent 3 payload from discovery risk_facts on the process."""
-        amount = "5000.00"
-        currency = "USD"
-        cost_centre = "SYN-DEP-FIN"
-        try:
-            process = await self._process_repository.get_process(process_id)
-            meta = dict(process.metadata_json or {})
-            pj = meta.get("process_json")
-            if isinstance(pj, dict):
-                analytics = pj.get("analytics")
-                if isinstance(analytics, dict):
-                    facts = analytics.get("risk_facts")
-                    if isinstance(facts, dict):
-                        if facts.get("purchase_amount"):
-                            amount = str(facts["purchase_amount"])
-                        if facts.get("currency"):
-                            currency = str(facts["currency"])
-                        if facts.get("cost_centre"):
-                            cost_centre = str(facts["cost_centre"])
-        except ProcessNotFoundError:
-            pass
+        """Build Agent 3 payload from canonical ProcessContext. Never invent facts."""
+        from app.process_context.exceptions import MissingRequiredContextError
+        from app.process_context.service import context_from_process_row
+
+        process = await self._process_repository.get_process(process_id)
+        ctx = context_from_process_row(process)
         deadline = (_utc_now() + timedelta(days=7)).isoformat()
-        return {
-            "human_requirements": {
+        from app.company_directory.service import get_company_directory
+        from app.process_context.identity import resolve_employee_id
+
+        directory = get_company_directory()
+        requester_employee_id = resolve_employee_id(user_id=user_id, tenant_id=process.tenant_id)
+        if requester_employee_id is None and getattr(process, "tenant_id", None):
+            mapped = directory.resolve_employee_by_user_id(
+                tenant_id=process.tenant_id, user_id=user_id
+            )
+            if mapped is not None:
+                requester_employee_id = mapped.employee_id
+        roles = [act.actor for act in ctx.discovery.activities if act.actor]
+        # Never invent demo job titles or skill tokens.
+        human_requirements = None
+        if roles:
+            human_requirements = {
                 "resource_type": "HUMAN",
-                "required_roles": ["developer"],
-                "mandatory_skills": ["python"],
-                "preferred_skills": ["fastapi"],
+                "required_roles": list(dict.fromkeys(roles)),
+                "mandatory_skills": [],
+                "preferred_skills": [],
                 "requester_id": str(user_id),
                 "task_deadline": deadline,
-                "estimated_effort_hours": "8.00",
+                "estimated_effort_hours": "0.00",
                 "process_stage": "RESOURCE_PLANNING",
-            },
-            "budget_requirements": {
+                "process_id": str(process_id),
+                "process_context_ref": str(process_id),
+                "task_purpose": ctx.purchase.description or process.name,
+            }
+            if requester_employee_id is not None:
+                human_requirements["requester_employee_id"] = str(requester_employee_id)
+        budget_requirements = None
+        if ctx.purchase.amount is not None and ctx.purchase.currency:
+            budget_requirements = {
                 "resource_type": "BUDGET",
-                "required_amount": amount,
-                "currency": currency,
-                "cost_centre": cost_centre,
+                "required_amount": str(ctx.purchase.amount),
+                "currency": ctx.purchase.currency,
+                "cost_centre": ctx.purchase.cost_centre,
                 "requester_id": str(user_id),
                 "task_deadline": deadline,
                 "process_stage": "RESOURCE_PLANNING",
-            },
+            }
+        if human_requirements is None and budget_requirements is None:
+            raise MissingRequiredContextError(
+                "purchase.amount",
+                missing_fields=["purchase.amount", "purchase.currency"],
+            )
+        return {
+            "human_requirements": human_requirements,
+            "budget_requirements": budget_requirements,
+            "process_context_ref": str(process_id),
         }
 
     async def _build_risk_context(
         self, process_id: UUID, *, user_id: UUID, tenant_id: UUID
     ) -> RiskEvaluationContext:
+        from decimal import Decimal
+
+        from app.process_context.service import context_from_process_row
+
         from .risk_facts import merge_context_with_risk_facts, risk_facts_from_process_payload
 
         context = RiskEvaluationContext(requester_id=user_id)
         try:
             process = await self._process_repository.get_process(process_id)
+            ctx = context_from_process_row(process)
+            updates: dict[str, Any] = {}
+            if ctx.purchase.amount is not None:
+                updates["purchase_amount"] = Decimal(str(ctx.purchase.amount))
+            if ctx.purchase.currency:
+                updates["currency"] = ctx.purchase.currency
+            if ctx.budget.available_amount is not None:
+                updates["available_budget"] = Decimal(str(ctx.budget.available_amount))
+            if ctx.approver.user_id:
+                updates["approver_id"] = ctx.approver.user_id
+            if ctx.quotations:
+                updates["provided_evidence"] = list(
+                    dict.fromkeys([*context.provided_evidence, "quotation"])
+                )
+            if updates:
+                context = context.model_copy(update=updates)
             meta = dict(process.metadata_json or {})
             payload = meta.get("process_json")
             if not isinstance(payload, dict):
                 payload = meta
             facts = risk_facts_from_process_payload(payload if isinstance(payload, dict) else {})
-            updates = merge_context_with_risk_facts(
+            fact_updates = merge_context_with_risk_facts(
                 purchase_amount=context.purchase_amount,
                 currency=context.currency,
                 provided_evidence=context.provided_evidence,
                 confidence=context.confidence,
                 facts=facts,
             )
-            if updates:
-                context = context.model_copy(update=updates)
+            if fact_updates:
+                context = context.model_copy(update=fact_updates)
         except ProcessNotFoundError:
             pass
         return await self._workflow._enrich_risk_context(  # noqa: SLF001

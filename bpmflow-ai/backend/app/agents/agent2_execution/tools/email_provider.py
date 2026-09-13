@@ -206,7 +206,15 @@ def _dispatch_smtp(
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = from_addr or "noreply@bpmflow-ai.com"
+        msg["From"] = from_addr
+        if not from_addr:
+            return EmailDispatchResult(
+                success=False,
+                status="FAILED",
+                message_id="",
+                provider="smtp",
+                error="EMAIL_PROVIDER_NOT_CONFIGURED",
+            )
         msg["To"] = recipient
         reply_to = _reply_to()
         if reply_to:

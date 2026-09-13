@@ -30,7 +30,12 @@ async def send_email(
     """
     Dispatch an outbound email through EmailService.
     """
-    service = EmailService(session=session)
+    recipients = {
+        item.strip().lower()
+        for item in [input_data.recipient, *(input_data.recipients or [])]
+        if item and str(item).strip()
+    }
+    service = EmailService(session=session, allowed_recipients=recipients)
     result = await service.send_email(
         EmailRequest(
             recipient=input_data.recipient,
@@ -57,7 +62,12 @@ async def send_reminder(
     Dispatch an SLA reminder notification through EmailService.
     """
     now = datetime.now(UTC)
-    service = EmailService(session=session)
+    recipients = {
+        item.strip().lower()
+        for item in [input_data.recipient, *(getattr(input_data, "recipients", None) or [])]
+        if item and str(item).strip()
+    }
+    service = EmailService(session=session, allowed_recipients=recipients)
     subject = f"SLA Reminder: Task {input_data.task_id} needs attention"
     body = input_data.message or (
         f"Task {input_data.task_id} has been open for {input_data.elapsed_hours:.1f} hours "

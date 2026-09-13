@@ -62,6 +62,9 @@ class RiskFacts(BaseModel):
     policy_thresholds: list[str] = Field(default_factory=list)
     provided_evidence: list[str] = Field(default_factory=list)
     amount_candidates: list[str] = Field(default_factory=list)
+    budget_amount: str | None = None
+    quotation_count: int | None = None
+    purchase_request_id: str | None = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     degraded: bool = False
     extraction_method: Literal["rules", "llm"] = "rules"

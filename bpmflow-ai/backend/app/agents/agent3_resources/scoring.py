@@ -25,7 +25,9 @@ def calculate_role_match(
     """Return 1.0 when the resource holds any required role, else 0.0."""
     if not requirement.required_roles:
         return Decimal("1.0")
-    if set(resource.roles).intersection(requirement.required_roles):
+    from .directory_bridge import role_tokens
+
+    if role_tokens(resource.roles).intersection(role_tokens(requirement.required_roles)):
         return Decimal("1.0")
     return Decimal("0.0")
 
@@ -166,6 +168,22 @@ def rank_human_candidates(
                 available_from=resource.available_from,
                 available_until=resource.available_until,
                 evidence_refs=resource.evidence_references,
+                employee_id=resource.employee_id,
+                employee_number=resource.employee_number,
+                employee_email=resource.employee_email,
+                role=resource.roles[0] if resource.roles else None,
+                department=resource.department_code,
+                eligibility="ELIGIBLE",
+                matched_skills=sorted(
+                    set(resource.mandatory_skills).intersection(set(requirement.mandatory_skills))
+                ),
+                missing_skills=sorted(
+                    set(requirement.mandatory_skills) - set(resource.mandatory_skills)
+                ),
+                authority_match=breakdown.authority_match == Decimal("1.0"),
+                availability_status="available"
+                if resource.available_from <= requirement.task_deadline
+                else "unavailable",
             )
         )
     return ranked

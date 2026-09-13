@@ -91,6 +91,34 @@ class InvalidRetryError(ValueError):
     """Raised when a retry is not allowed for this exception or process stage."""
 
 
+class CrossTenantExceptionError(PermissionError):
+    """Raised when an exception is accessed from another tenant."""
+
+    error_code = "CROSS_TENANT_DENIED"
+
+    def __init__(self, message: str = "Exception belongs to another tenant") -> None:
+        self.error_code = "CROSS_TENANT_DENIED"
+        super().__init__(message)
+
+
+class UnauthorizedExceptionActionError(PermissionError):
+    """Raised when the caller lacks authority to resolve or recover an exception."""
+
+    error_code = "EXCEPTION_RESOLUTION_FORBIDDEN"
+
+    def __init__(self, message: str = "Not authorized to resolve this exception") -> None:
+        self.error_code = "EXCEPTION_RESOLUTION_FORBIDDEN"
+        super().__init__(message)
+
+
+class CompletionGateError(ValueError):
+    """Raised when a process cannot move to COMPLETED."""
+
+    def __init__(self, error_code: str, message: str) -> None:
+        self.error_code = error_code
+        super().__init__(message)
+
+
 class ExecutionEnrichmentError(ValueError):
     """Raised when post-approval dispatch lacks required discovery metadata."""
 

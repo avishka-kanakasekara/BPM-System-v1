@@ -441,7 +441,7 @@ def test_unauthenticated_resolve_exception_returns_401(api_setup) -> None:
 @pytest.mark.asyncio
 async def test_authenticated_resolve_exception_existing_behavior(api_setup) -> None:
     setup = api_setup
-    override_current_user(role="requester")
+    override_current_user(role="approver")
     created = await _create_open_exception(setup)
     response = setup["client"].post(
         f"/api/v1/exceptions/{created['exception'].id}/resolve",
@@ -463,7 +463,7 @@ def test_unauthenticated_retry_exception_returns_401(api_setup) -> None:
 @pytest.mark.asyncio
 async def test_authenticated_retry_exception_existing_behavior(api_setup) -> None:
     setup = api_setup
-    override_current_user(role="requester")
+    override_current_user(role="approver")
     created = await _create_open_exception(setup)
     response = setup["client"].post(
         f"/api/v1/exceptions/{created['exception'].id}/retry",
@@ -486,7 +486,7 @@ def test_unauthenticated_fail_exception_returns_401(api_setup) -> None:
 @pytest.mark.asyncio
 async def test_authenticated_fail_exception_existing_behavior(api_setup) -> None:
     setup = api_setup
-    override_current_user(role="requester")
+    override_current_user(role="approver")
     created = await _create_open_exception(setup)
     response = setup["client"].post(
         f"/api/v1/exceptions/{created['exception'].id}/fail",

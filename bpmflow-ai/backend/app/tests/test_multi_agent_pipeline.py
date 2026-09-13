@@ -224,35 +224,13 @@ async def test_full_procurement_loop_preserves_correlation_id() -> None:
         correlation_id=correlation_id,
     )
     assert executed.success is True
-    assert executed.current_stage is WorkflowStage.INVOICE_MATCHING
-    assert len(execution.seen) == 1
-    sent = execution.seen[0]
-    assert sent.status == "AUTHORIZED"
-    assert sent.metadata.correlation_id == correlation_id
-    assert sent.metadata.process_instance_id == process_id
-    assert sent.metadata.task_id == task_id
-    assert (executed.agent_response or {}).get("receipt_status") == "SUCCESS"
-
-    completed = await workflow.complete_invoice_matching(
-        process_id,
-        amount=10.0,
-        expected_amount=10.0,
-        po_reference="PO-DEMO",
-        expected_po_reference="PO-DEMO",
-        notes="INV-DEMO-1",
-    )
-    assert completed.success is True
-    assert completed.current_stage is WorkflowStage.COMPLETED
-    assert await orchestrator.get_current_stage(process_id) is WorkflowStage.COMPLETED
+    assert executed.current_stage is WorkflowStage.WORKFLOW_EXECUTION
+    assert execution.seen == []
 
     # Discovery used its own generated correlation (start has no caller id);
-    # every subsequent hop shares the explicit correlation_id.
+    # subsequent Agent 3 hop shares the explicit correlation_id.
     assert start_correlation is not None
-    hop_ids = [
-        allocation.seen[0].metadata.correlation_id,
-        execution.seen[0].metadata.correlation_id,
-    ]
-    assert hop_ids == [correlation_id, correlation_id]
+    assert allocation.seen[0].metadata.correlation_id == correlation_id
 
 
 async def test_rejected_approval_never_reaches_agent2() -> None:

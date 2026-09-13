@@ -33,6 +33,8 @@ from .exceptions import (
     ApprovalNotFoundError,
     BpmExceptionNotFoundError,
     CommunicationFailureError,
+    CompletionGateError,
+    CrossTenantExceptionError,
     DatabasePersistenceError,
     ExecutionEnrichmentError,
     InvalidExceptionStatusError,
@@ -73,6 +75,7 @@ from .state_machine import (
     TransitionSpec,
 )
 from .workflow import Agent4Workflow
+from .workflow_plan import WorkflowPlanService, WorkflowPlanValidator
 
 __all__ = [
     "WorkflowStage",
@@ -136,4 +139,6 @@ __all__ = [
     "SideEffect",
     "InvalidTransitionError",
     "StateMachine",
+    "WorkflowPlanService",
+    "WorkflowPlanValidator",
 ]

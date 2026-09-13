@@ -34,13 +34,19 @@ def is_full_task_suite(tool_name: str | None) -> bool:
     return (tool_name or "").strip().lower() == FULL_TASK_SUITE_TOOL
 
 
+class FullWorkflowForbidden(PlanValidationError):
+    error_code = "FULL_WORKFLOW_EXECUTION_FORBIDDEN"
+
+
 def _infer_tools_from_context(
     context: ProcessContext,
     *,
     tool_override: str | None = None,
 ) -> list[str]:
     if is_full_task_suite(tool_override):
-        return [t for t in FULL_TASK_SUITE_TOOLS if authorization.is_permitted(t)]
+        raise FullWorkflowForbidden(
+            "FULL_WORKFLOW_EXECUTION_FORBIDDEN: Agent 2 executes one WorkflowStep only"
+        )
 
     if tool_override and authorization.is_permitted(tool_override):
         return [tool_override.strip().lower()]

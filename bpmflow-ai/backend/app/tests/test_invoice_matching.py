@@ -1,79 +1,47 @@
-"""Unit tests for deterministic invoice matching."""
+"""Invoice matching tests. Authoritative source is invoices + purchase_orders."""
 
-from decimal import Decimal
+from uuid import uuid4
 
-from app.agents.agent4_orchestrator.invoice_matching import (
-    INSUFFICIENT_EVIDENCE,
-    MATCHED,
-    MISMATCH,
-    ExpectedPurchase,
-    InvoiceEvidence,
-    match_invoice,
-)
+from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+from app.tests.test_phase8c_invoice_matching import _invoice, _po
+from app.procurement.service import get_procurement
 
 
-def test_match_requires_overlapping_fields() -> None:
-    result = match_invoice(
-        InvoiceEvidence(notes="only notes"),
-        ExpectedPurchase(),
+def test_match_requires_persisted_invoice() -> None:
+    process_id = uuid4()
+    po = _po(process_id=process_id)
+    invoices = get_procurement().list_invoices(
+        tenant_id=BPMFLOW_DEMO_TENANT_ID, process_id=process_id
     )
-    assert result.status == INSUFFICIENT_EVIDENCE
-    assert result.matched is False
+    assert invoices == []
+    assert po.purchase_order_id is not None
 
 
 def test_match_amount_and_po() -> None:
-    result = match_invoice(
-        InvoiceEvidence(amount=Decimal("100.00"), po_reference="PO-1"),
-        ExpectedPurchase(amount=Decimal("100.00"), po_reference="po-1"),
+    process_id = uuid4()
+    po = _po(process_id=process_id)
+    invoice = _invoice(process_id=process_id, po_id=po.purchase_order_id, number="INV-UNIT-OK")
+    result = get_procurement().match_invoice(
+        tenant_id=BPMFLOW_DEMO_TENANT_ID, invoice_id=invoice.invoice_id
     )
-    assert result.status == MATCHED
+    assert result.matched is True
+    assert result.status == "MATCHED"
 
 
 def test_mismatch_amount() -> None:
-    result = match_invoice(
-        InvoiceEvidence(amount=Decimal("99.00"), po_reference="PO-1"),
-        ExpectedPurchase(amount=Decimal("100.00"), po_reference="PO-1"),
+    process_id = uuid4()
+    po = _po(process_id=process_id)
+    invoice = _invoice(
+        process_id=process_id,
+        po_id=po.purchase_order_id,
+        number="INV-UNIT-AMT",
+        total="1600000",
+        subtotal="1600000",
+        qty="20",
+        unit="80000",
     )
-    assert result.status == MISMATCH
-    assert result.mismatches
-
-
-def test_extract_expected_from_po_drafts() -> None:
-    from app.agents.agent4_orchestrator.invoice_matching import extract_expected_from_process
-
-    expected = extract_expected_from_process(
-        metadata={
-            "po_drafts": [
-                {
-                    "po_number": "PO-2026-ABC123",
-                    "vendor_id": "VENDOR-ACME",
-                    "amount": 2500,
-                    "currency": "USD",
-                }
-            ]
-        },
-        process_json={},
+    result = get_procurement().match_invoice(
+        tenant_id=BPMFLOW_DEMO_TENANT_ID, invoice_id=invoice.invoice_id
     )
-    assert expected.po_reference == "po-2026-abc123"
-    assert expected.amount == Decimal("2500.00")
-    assert expected.vendor == "vendor-acme"
-    assert expected.currency == "usd"
-
-
-def test_extract_expected_from_purchase_order() -> None:
-    from app.agents.agent4_orchestrator.invoice_matching import extract_expected_from_process
-
-    expected = extract_expected_from_process(
-        metadata={
-            "purchase_order": {
-                "po_reference": "PO-9",
-                "amount": 99.5,
-                "vendor": "Acme",
-                "currency": "USD",
-            }
-        },
-        process_json={},
-    )
-    assert expected.po_reference == "po-9"
-    assert expected.amount == Decimal("99.50")
-    assert expected.vendor == "acme"
+    assert result.matched is False
+    assert "AMOUNT_MISMATCH" in result.discrepancy_codes

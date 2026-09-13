@@ -1,4 +1,4 @@
-"""Full task suite — all 12 Agent 2 tools run on EXECUTE_TASK dispatch."""
+"""Full task suite is forbidden. Agent 2 executes one WorkflowStep only."""
 
 from __future__ import annotations
 
@@ -7,10 +7,7 @@ import uuid
 import pytest
 
 from app.agents.agent2_execution.agent.agent import Agent2
-from app.agents.agent2_execution.agent.planner_fallback import (
-    FULL_TASK_SUITE_TOOL,
-    FULL_TASK_SUITE_TOOLS,
-)
+from app.agents.agent2_execution.agent.planner_fallback import FULL_TASK_SUITE_TOOL
 from app.agents.agent2_execution.database.persistence import (
     clear_memory_process_metadata,
     get_memory_process_metadata,
@@ -30,7 +27,7 @@ def _reset_memory_stores():
 
 
 @pytest.mark.asyncio
-async def test_full_task_suite_runs_all_twelve_tools():
+async def test_full_task_suite_is_forbidden():
     proc_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
 
@@ -47,13 +44,10 @@ async def test_full_task_suite_runs_all_twelve_tools():
             "process_type": "procurement",
             "parameters": {
                 "tool_name": FULL_TASK_SUITE_TOOL,
-                "vendor_id": "VENDOR-ACME",
-                "amount": 4565.0,
-                "currency": "USD",
-                "cost_centre": "IT-OPS",
                 "process_id": proc_id,
                 "task_id": task_id,
             },
+            "tool_name": FULL_TASK_SUITE_TOOL,
         },
         confidence=1.0,
         status="AUTHORIZED",
@@ -62,14 +56,6 @@ async def test_full_task_suite_runs_all_twelve_tools():
     agent = Agent2(gemini_client=GeminiClient(is_offline=True))
     response = await agent.handle(message, session=None)
 
-    assert response.status == "EXECUTION_RESULT"
-    assert response.payload["receipt_status"] == "SUCCESS"
-
-    executed = response.payload.get("tools_executed") or []
-    assert len(executed) == len(FULL_TASK_SUITE_TOOLS)
-    assert executed == list(FULL_TASK_SUITE_TOOLS)
-
-    meta = get_memory_process_metadata(proc_id)
-    purchase_order = meta.get("purchase_order") or {}
-    assert purchase_order.get("status") == "DRAFT"
-    assert purchase_order.get("vendor_id") == "VENDOR-ACME"
+    assert response.payload["receipt_status"] == "BLOCKED"
+    assert (response.payload.get("tools_executed") or []) == []
+    assert get_memory_process_metadata(proc_id).get("purchase_order") in (None, {})

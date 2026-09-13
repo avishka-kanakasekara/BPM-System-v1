@@ -46,6 +46,9 @@ class Process(Base):
     requester_email: Mapped[str | None] = mapped_column(Text, nullable=True)
     execution_status: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JsonDict, nullable=True)
+    tenant_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    process_context: Mapped[dict] = mapped_column(JsonDict, nullable=False, default=dict)
+    designated_approver_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
 

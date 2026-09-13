@@ -215,5 +215,5 @@ def test_advance_low_risk_reaches_invoice_matching(advance_client) -> None:
         )
 
     assert response.status_code == 200
-    assert response.json()["process"]["current_stage"] == WorkflowStage.INVOICE_MATCHING.value
+    assert response.json()["process"]["current_stage"] == WorkflowStage.WORKFLOW_EXECUTION.value
     assert response.json()["advancement"]["status"] == "WAITING_INPUT"

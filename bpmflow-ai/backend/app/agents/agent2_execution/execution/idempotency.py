@@ -39,6 +39,7 @@ SIDE_EFFECT_TOOLS = frozenset(
         "send_reminder",
         "request_quotation",
         "create_po_draft",
+        "match_invoice",
         "update_procurement_record",
         "schedule_escalation",
     }

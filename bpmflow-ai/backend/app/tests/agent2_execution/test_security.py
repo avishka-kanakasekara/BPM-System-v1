@@ -4,7 +4,7 @@ Agent 2 — Security Subsystem Unit & Integration Tests
 Tests all security invariants from CLAUDE.md:
 1. Permitted action passes Tool Guard (Rule #4).
 2. Forbidden actions (approve_payment, approve_purchase) are blocked regardless of who asks (Rule #4).
-3. Email recipients not in org_directory.json are blocked (Rule #6).
+3. Email recipients not in the Company Directory are blocked (Rule #6).
 4. Malformed parameters (wrong type, missing required fields) are blocked.
 5. Every guard check (allowed or blocked) produces an audit_logs entry (Rule #7).
 6. Prompt sanitizer flags and neutralizes prompt-injection attempts.
@@ -18,6 +18,8 @@ from fastapi import HTTPException
 
 from app.agents.agent2_execution.security import auth, authorization, sanitizer
 from app.agents.agent2_execution.security.tool_guard import ToolGuard
+from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID, EMP_FINANCE_MANAGER, seed_bpmflow_demo_company
+from app.company_directory.service import reset_company_directory
 
 # ---------------------------------------------------------------------------
 # 1. Authorization Permission Matrix Tests
@@ -28,6 +30,7 @@ def test_authorization_permitted_actions():
     assert authorization.is_permitted("update_task") is True
     assert authorization.is_permitted("send_email") is True
     assert authorization.is_permitted("create_po_draft") is True
+    assert authorization.is_permitted("match_invoice") is True
     assert authorization.is_permitted("analyze_process") is True
 
 
@@ -134,32 +137,38 @@ async def test_tool_guard_forbidden_action_blocked():
 
 @pytest.mark.asyncio
 async def test_tool_guard_unauthorized_email_recipient_blocked():
-    guard = ToolGuard(session=None)
-    # Email to an external/arbitrary address not in org_directory.json
+    directory = reset_company_directory()
+    seed_bpmflow_demo_company(directory)
+    guard = ToolGuard(session=None, directory=directory)
     result = await guard.check(
         tool_name="send_email",
         parameters={
             "recipient": "attacker@external-domain.com",
             "subject": "Phishing Attempt",
             "body": "Test body",
+            "tenant_id": str(BPMFLOW_DEMO_TENANT_ID),
+            "recipient_employee_ids": [str(EMP_FINANCE_MANAGER)],
         },
         actor="agent_2",
     )
     assert result.allowed is False
-    assert result.error == "RECIPIENT_NOT_ALLOWED"
-    assert "rule #6" in result.reason.lower() or "organizational directory" in result.reason.lower()
+    assert result.error in {"RECIPIENT_NOT_ALLOWED", "COMMUNICATION_RECIPIENT_INVALID"}
 
 
 @pytest.mark.asyncio
 async def test_tool_guard_authorized_email_recipient_passes():
-    guard = ToolGuard(session=None)
-    # Email to seeded manager in org_directory.json
+    directory = reset_company_directory()
+    seed_bpmflow_demo_company(directory)
+    guard = ToolGuard(session=None, directory=directory)
     result = await guard.check(
         tool_name="send_email",
         parameters={
-            "recipient": "frank.miller@acmeglobal.com",
+            "recipient": "finance.manager@bpmflow-demo.example.com",
             "subject": "Approval Request",
             "body": "Please review request #1001",
+            "tenant_id": str(BPMFLOW_DEMO_TENANT_ID),
+            "recipient_employee_ids": [str(EMP_FINANCE_MANAGER)],
+            "recipients": ["finance.manager@bpmflow-demo.example.com"],
         },
         actor="agent_2",
     )
@@ -239,4 +248,4 @@ def test_adversarial_prompt_injection_sanitization():
     srv = EmailService(session=None)
     is_valid, val_reason = srv.validate_recipient("attacker@external-domain.com", "manager")
     assert is_valid is False
-    assert "not in the allowed organizational directory" in val_reason
+    assert "verified Company Directory employee email" in val_reason

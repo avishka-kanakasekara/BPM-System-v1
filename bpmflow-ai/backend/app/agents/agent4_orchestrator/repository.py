@@ -93,6 +93,7 @@ class ProcessRepository(ABC):
         process_type: str,
         description: str | None = None,
         created_by: UUID | None = None,
+        tenant_id: UUID | None = None,
     ) -> ProcessResponse:
         """Insert a public.processes row at status=draft, current_stage=DRAFT."""
         raise NotImplementedError
@@ -176,9 +177,27 @@ class InMemoryProcessRepository(ProcessRepository):
         process_type: str,
         description: str | None = None,
         created_by: UUID | None = None,
+        tenant_id: UUID | None = None,
     ) -> ProcessResponse:
         now = datetime.now(UTC)
         process_id = uuid4()
+        from app.process_context.service import empty_process_context
+
+        ctx = empty_process_context(process_id, tenant_id=tenant_id)
+        if created_by:
+            from app.process_context.identity import resolve_employee_resource_id
+            from app.process_context.schemas import RequesterIdentity
+
+            mapped = resolve_employee_resource_id(user_id=created_by, tenant_id=tenant_id)
+            ctx = ctx.model_copy(
+                update={
+                    "requester": RequesterIdentity(
+                        user_id=created_by,
+                        employee_resource_id=mapped,
+                        identity_mapped=mapped is not None,
+                    )
+                }
+            )
         record = ProcessResponse(
             id=process_id,
             name=name,
@@ -190,6 +209,8 @@ class InMemoryProcessRepository(ProcessRepository):
             created_by=created_by,
             created_at=now,
             updated_at=now,
+            tenant_id=tenant_id,
+            process_context=ctx.model_dump(mode="json"),
         )
         self._records[process_id] = record
         self._stages[process_id] = WorkflowStage.DRAFT
@@ -346,6 +367,7 @@ class SqlAlchemyProcessRepository(ProcessRepository):
         process_type: str,
         description: str | None = None,
         created_by: UUID | None = None,
+        tenant_id: UUID | None = None,
     ) -> ProcessResponse:
         if self._prefer_rest():
             return await asyncio.to_thread(
@@ -354,11 +376,29 @@ class SqlAlchemyProcessRepository(ProcessRepository):
                 process_type,
                 description,
                 created_by,
+                tenant_id,
             )
         try:
             now = datetime.now(UTC)
+            process_id = uuid4()
+            from app.process_context.identity import resolve_employee_resource_id
+            from app.process_context.schemas import RequesterIdentity
+            from app.process_context.service import empty_process_context
+
+            ctx = empty_process_context(process_id, tenant_id=tenant_id)
+            if created_by:
+                mapped = resolve_employee_resource_id(user_id=created_by, tenant_id=tenant_id)
+                ctx = ctx.model_copy(
+                    update={
+                        "requester": RequesterIdentity(
+                            user_id=created_by,
+                            employee_resource_id=mapped,
+                            identity_mapped=mapped is not None,
+                        )
+                    }
+                )
             process = Process(
-                id=uuid4(),
+                id=process_id,
                 name=name,
                 description=description,
                 process_type=process_type,
@@ -369,6 +409,8 @@ class SqlAlchemyProcessRepository(ProcessRepository):
                 updated_at=now,
                 current_stage=WorkflowStage.DRAFT.value,
                 process_json={},
+                tenant_id=tenant_id,
+                process_context=ctx.model_dump(mode="json"),
             )
             self._session.add(process)
             await self._session.commit()
@@ -384,6 +426,7 @@ class SqlAlchemyProcessRepository(ProcessRepository):
                         process_type,
                         description,
                         created_by,
+                        tenant_id,
                     )
                 except Exception:
                     pass
@@ -458,6 +501,9 @@ def process_from_orm(process: Process) -> ProcessResponse:
         created_at=process.created_at,
         updated_at=process.updated_at,
         metadata_json=getattr(process, "metadata_json", None) or None,
+        tenant_id=getattr(process, "tenant_id", None),
+        process_context=getattr(process, "process_context", None) or None,
+        designated_approver_id=getattr(process, "designated_approver_id", None),
     )
 
 
@@ -500,6 +546,9 @@ def process_from_rest(row: dict) -> ProcessResponse:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "metadata_json": _merge_discovery_metadata(row),
+            "tenant_id": row.get("tenant_id"),
+            "process_context": row.get("process_context") or None,
+            "designated_approver_id": row.get("designated_approver_id"),
         }
     )
 
@@ -508,7 +557,7 @@ def _list_processes_rest() -> list[ProcessResponse]:
     rows = rest_select(
         "processes",
         {
-            "select": "id,name,description,process_type,status,version,created_by,created_at,updated_at,current_stage,metadata_json,process_json",
+            "select": "id,name,description,process_type,status,version,created_by,created_at,updated_at,current_stage,metadata_json,process_json,tenant_id,process_context,designated_approver_id",
             "order": "created_at.desc",
         },
     )
@@ -520,7 +569,7 @@ def _get_process_rest(process_id: UUID) -> ProcessResponse:
         "processes",
         {
             "id": f"eq.{process_id}",
-            "select": "id,name,description,process_type,status,version,created_by,created_at,updated_at,current_stage,metadata_json,process_json",
+            "select": "id,name,description,process_type,status,version,created_by,created_at,updated_at,current_stage,metadata_json,process_json,tenant_id,process_context,designated_approver_id",
             "limit": "1",
         },
     )
@@ -534,20 +583,40 @@ def _insert_process_rest(
     process_type: str,
     description: str | None,
     created_by: UUID | None,
+    tenant_id: UUID | None = None,
 ) -> ProcessResponse:
-    row = rest_insert(
-        "processes",
-        {
-            "name": name,
-            "description": description,
-            "process_type": process_type,
-            "status": "draft",
-            "version": 1,
-            "created_by": str(created_by) if created_by else None,
-            "current_stage": WorkflowStage.DRAFT.value,
-            "process_json": {},
-        },
-    )
+    from app.process_context.identity import resolve_employee_resource_id
+    from app.process_context.schemas import RequesterIdentity
+    from app.process_context.service import empty_process_context
+
+    process_id = uuid4()
+    ctx = empty_process_context(process_id, tenant_id=tenant_id)
+    if created_by:
+        mapped = resolve_employee_resource_id(user_id=created_by, tenant_id=tenant_id)
+        ctx = ctx.model_copy(
+            update={
+                "requester": RequesterIdentity(
+                    user_id=created_by,
+                    employee_resource_id=mapped,
+                    identity_mapped=mapped is not None,
+                )
+            }
+        )
+    payload = {
+        "id": str(process_id),
+        "name": name,
+        "description": description,
+        "process_type": process_type,
+        "status": "draft",
+        "version": 1,
+        "created_by": str(created_by) if created_by else None,
+        "current_stage": WorkflowStage.DRAFT.value,
+        "process_json": {},
+        "process_context": ctx.model_dump(mode="json"),
+    }
+    if tenant_id:
+        payload["tenant_id"] = str(tenant_id)
+    row = rest_insert("processes", payload)
     return process_from_rest(row)
 
 

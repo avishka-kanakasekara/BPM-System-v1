@@ -216,6 +216,7 @@ async def get_allocation_service(
         get_shared_openai_client,
     )
     from app.agents.agent3_resources.service import ResourceAllocationService
+    from app.company_directory.service import get_company_directory
     from app.core.config import get_settings
     from app.core.supabase_rest import use_supabase_rest_fallback
 
@@ -259,7 +260,11 @@ async def get_allocation_service(
     else:
         explainer = ResilientFallbackExplainer(enabled=False)
 
-    return ResourceAllocationService(resource_repository, explainer=explainer)
+    return ResourceAllocationService(
+        resource_repository,
+        explainer=explainer,
+        directory=get_company_directory(),
+    )
 
 
 async def get_persistence_service(

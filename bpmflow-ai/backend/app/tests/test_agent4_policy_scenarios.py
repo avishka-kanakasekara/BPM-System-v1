@@ -280,47 +280,49 @@ class TestAgent4PolicyScenarios:
                 process_id, decided.approval
             )
         assert outcome.eligible_for_execution is True
-        # After successful authorized execution, stage advances past WORKFLOW_EXECUTION
-        assert outcome.current_stage in (
-            WorkflowStage.WORKFLOW_EXECUTION,
-            WorkflowStage.INVOICE_MATCHING,
-        )
+        assert outcome.current_stage is WorkflowStage.WORKFLOW_EXECUTION
 
     async def test_scenario_i_invoice_match_completes(self, harness) -> None:
+        from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+        from app.tests.test_phase8c_invoice_matching import _invoice, _po
+
         process_id = uuid4()
         await harness["orchestrator"].create_process(
             process_id, initial_stage=WorkflowStage.INVOICE_MATCHING
         )
+        po = _po(process_id=process_id)
+        _invoice(process_id=process_id, po_id=po.purchase_order_id, number="INV-100")
         result = await harness["workflow"].complete_invoice_matching(
             process_id,
-            amount=1500000.0,
-            expected_amount=1500000.0,
-            currency="LKR",
-            expected_currency="LKR",
-            po_reference="PO-100",
-            expected_po_reference="PO-100",
-            vendor="Acme",
-            expected_vendor="Acme",
-            notes="INV-100",
+            tenant_id=BPMFLOW_DEMO_TENANT_ID,
+            invoice_number="INV-100",
         )
         assert result.success is True
         assert result.current_stage is WorkflowStage.COMPLETED
 
     async def test_scenario_j_invoice_mismatch_exception(self, harness) -> None:
+        from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+        from app.tests.test_phase8c_invoice_matching import _invoice, _po
+
         process_id = uuid4()
         await harness["orchestrator"].create_process(
             process_id, initial_stage=WorkflowStage.INVOICE_MATCHING
         )
+        po = _po(process_id=process_id)
+        _invoice(
+            process_id=process_id,
+            po_id=po.purchase_order_id,
+            number="INV-100-MIS",
+            total="1600000",
+            subtotal="1600000",
+            qty="20",
+            unit="80000",
+        )
         result = await harness["workflow"].complete_invoice_matching(
             process_id,
-            amount=1500000.0,
-            expected_amount=1000000.0,
-            currency="LKR",
-            expected_currency="LKR",
-            po_reference="PO-100",
-            expected_po_reference="PO-100",
-            notes="INV-100",
+            tenant_id=BPMFLOW_DEMO_TENANT_ID,
+            invoice_number="INV-100-MIS",
         )
         assert result.success is False
-        assert result.error_code == "INVOICE_MISMATCH"
+        assert result.error_code == "AMOUNT_MISMATCH"
         assert result.current_stage is WorkflowStage.EXCEPTION

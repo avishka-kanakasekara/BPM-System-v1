@@ -226,13 +226,9 @@ async def test_approve_pending_approval(approval_setup) -> None:
     assert body["approval"]["comments"] == "Approved after review"
     assert body["approval"]["decided_at"] is not None
     assert body["approval"]["approver_id"] is not None
-    # Approval now continues the workflow: Agent 2 is dispatched exactly once
-    # with an AUTHORIZED message.
-    send_mock.assert_awaited_once()
-    sent = send_mock.await_args.args[0]
-    assert sent.status == "AUTHORIZED"
-    assert sent.metadata.receiver == AGENT_2
-    assert body["workflow"]["current_stage"] == WorkflowStage.INVOICE_MATCHING.value
+    # Approval opens WORKFLOW_EXECUTION. Agent 2 is not bulk-dispatched.
+    send_mock.assert_not_called()
+    assert body["workflow"]["current_stage"] == WorkflowStage.WORKFLOW_EXECUTION.value
 
 
 @pytest.mark.asyncio
@@ -326,12 +322,9 @@ async def test_approve_executes_agent_2_and_advances_to_invoice_matching(
         )
 
     assert response.status_code == 200
-    send_mock.assert_awaited_once()
-    sent = send_mock.await_args.args[0]
-    assert sent.metadata.receiver == AGENT_2
-    assert sent.status == "AUTHORIZED"
+    send_mock.assert_not_called()
     stage = await setup["orchestrator"].get_current_stage(process_id)
-    assert stage is WorkflowStage.INVOICE_MATCHING
+    assert stage is WorkflowStage.WORKFLOW_EXECUTION
     assert stage is not WorkflowStage.COMPLETED
 
 

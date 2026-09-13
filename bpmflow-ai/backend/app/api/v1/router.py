@@ -15,9 +15,13 @@ from app.api.v1.routes_agent3 import router as agent3_router
 from app.api.v1.routes_approvals import router as approvals_router
 from app.api.v1.routes_audit import router as audit_router
 from app.api.v1.routes_auth import router as auth_router
+from app.api.v1.routes_company import router as company_router
 from app.api.v1.routes_exceptions import router as exceptions_router
 from app.api.v1.routes_policies import router as policies_router
 from app.api.v1.routes_process import router as process_router
+from app.api.v1.routes_procurement import invoice_router, router as procurement_router
+from app.api.v1.routes_tools import router as tools_router
+from app.api.v1.routes_workflows import router as workflows_router
 from app.core.security import get_current_user
 
 api_router = APIRouter()
@@ -40,11 +44,16 @@ api_router.include_router(
 
 # Agent 4
 api_router.include_router(process_router)
+api_router.include_router(workflows_router)
 api_router.include_router(approvals_router)
 api_router.include_router(exceptions_router)
 api_router.include_router(audit_router)
 api_router.include_router(auth_router)
 api_router.include_router(policies_router)
+api_router.include_router(company_router)
+api_router.include_router(procurement_router)
+api_router.include_router(invoice_router)
+api_router.include_router(tools_router)
 
 # Agent 3 — paths like /api/v1/agent3/allocations
 api_router.include_router(agent3_router)

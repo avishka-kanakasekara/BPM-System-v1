@@ -36,8 +36,10 @@ class EligibilityEvaluator:
         # Collect all applicable exclusion reasons (do not stop after first failure)
         self._check_inactive_resource(resource, exclusion_reasons)
         self._check_required_role(resource, requirement, exclusion_reasons)
+        self._check_department(resource, requirement, exclusion_reasons)
         self._check_mandatory_skills(resource, requirement, exclusion_reasons)
         self._check_required_authority(resource, requirement, exclusion_reasons)
+        self._check_authority_amount(resource, requirement, exclusion_reasons)
         self._check_availability(resource, requirement, exclusion_reasons)
         self._check_projected_workload(resource, requirement, exclusion_reasons)
         self._check_segregation_of_duties(resource, requirement, exclusion_reasons)
@@ -45,6 +47,7 @@ class EligibilityEvaluator:
         self._check_conflict_of_interest(resource, exclusion_reasons)
         self._check_missing_evidence(resource, exclusion_reasons)
         self._check_stale_evidence(resource, exclusion_reasons)
+        self._check_company_email(resource, exclusion_reasons)
 
         is_eligible = len(exclusion_reasons) == 0
         return is_eligible, exclusion_reasons
@@ -56,9 +59,14 @@ class EligibilityEvaluator:
     ) -> None:
         """Check if resource is inactive."""
         if not resource.is_active:
+            reason = (
+                ExclusionReason.INACTIVE_EMPLOYEE
+                if resource.employee_id is not None
+                else ExclusionReason.INACTIVE_RESOURCE
+            )
             exclusion_reasons.append(
                 ExclusionReasonEntry(
-                    reason=ExclusionReason.INACTIVE_RESOURCE,
+                    reason=reason,
                     description=f"Resource {resource.name} is inactive",
                     evidence_reference="is_active flag",
                 )
@@ -72,8 +80,10 @@ class EligibilityEvaluator:
     ) -> None:
         """Check if resource has any of the required roles."""
         if requirement.required_roles:
-            resource_roles = set(resource.roles)
-            required_roles = set(requirement.required_roles)
+            from .directory_bridge import role_tokens
+
+            resource_roles = role_tokens(resource.roles)
+            required_roles = role_tokens(requirement.required_roles)
             if not resource_roles.intersection(required_roles):
                 exclusion_reasons.append(
                     ExclusionReasonEntry(
@@ -127,6 +137,8 @@ class EligibilityEvaluator:
         exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if resource is available before task deadline."""
+        if not requirement.availability_required:
+            return
         if resource.available_from > requirement.task_deadline:
             exclusion_reasons.append(
                 ExclusionReasonEntry(
@@ -189,6 +201,18 @@ class EligibilityEvaluator:
                     evidence_reference="resource_id vs requester_id",
                 )
             )
+        if (
+            requirement.requester_employee_id is not None
+            and resource.employee_id is not None
+            and resource.employee_id == requirement.requester_employee_id
+        ):
+            exclusion_reasons.append(
+                ExclusionReasonEntry(
+                    reason=ExclusionReason.SAME_PERSON,
+                    description="Requester and candidate are the same company employee",
+                    evidence_reference="employee_id vs requester_employee_id",
+                )
+            )
 
     def _check_conflict_of_interest(
         self,
@@ -243,5 +267,92 @@ class EligibilityEvaluator:
                     reason=ExclusionReason.STALE_EVIDENCE,
                     description=f"Evidence is {evidence_age} days old, maximum allowed is {MAX_EVIDENCE_AGE_DAYS} days",
                     evidence_reference="evidence_checked_at",
+                )
+            )
+
+    def _check_department(
+        self,
+        resource: HumanResourceEvidence,
+        requirement: HumanResourceRequirement,
+        exclusion_reasons: list[ExclusionReasonEntry],
+    ) -> None:
+        if requirement.required_department_id is not None:
+            if resource.department_id != requirement.required_department_id:
+                exclusion_reasons.append(
+                    ExclusionReasonEntry(
+                        reason=ExclusionReason.DEPARTMENT_MISMATCH,
+                        description="Candidate department does not match the required department",
+                        evidence_reference="department_id",
+                    )
+                )
+                return
+        if requirement.required_department_code:
+            needed = requirement.required_department_code.strip().upper()
+            actual = (resource.department_code or "").strip().upper()
+            if actual != needed:
+                exclusion_reasons.append(
+                    ExclusionReasonEntry(
+                        reason=ExclusionReason.DEPARTMENT_MISMATCH,
+                        description=f"Candidate department {actual or 'unknown'} does not match {needed}",
+                        evidence_reference="department_code",
+                    )
+                )
+
+    def _check_authority_amount(
+        self,
+        resource: HumanResourceEvidence,
+        requirement: HumanResourceRequirement,
+        exclusion_reasons: list[ExclusionReasonEntry],
+    ) -> None:
+        if requirement.minimum_authority_amount is None:
+            return
+        if resource.authority_max_amount is None or resource.authority_max_amount < requirement.minimum_authority_amount:
+            exclusion_reasons.append(
+                ExclusionReasonEntry(
+                    reason=ExclusionReason.INSUFFICIENT_AUTHORITY,
+                    description=(
+                        f"Authority limit {resource.authority_max_amount} is below "
+                        f"required {requirement.minimum_authority_amount}"
+                    ),
+                    evidence_reference="authority_max_amount",
+                )
+            )
+            return
+        if requirement.authority_currency:
+            have = (resource.authority_currency or "").strip().upper()
+            need = requirement.authority_currency.strip().upper()
+            if have != need:
+                exclusion_reasons.append(
+                    ExclusionReasonEntry(
+                        reason=ExclusionReason.INSUFFICIENT_AUTHORITY,
+                        description=f"Authority currency {have or 'unknown'} does not match {need}",
+                        evidence_reference="authority_currency",
+                    )
+                )
+        if requirement.required_authority_code:
+            have = (resource.authority or "").strip().upper()
+            need = requirement.required_authority_code.strip().upper()
+            if have != need:
+                exclusion_reasons.append(
+                    ExclusionReasonEntry(
+                        reason=ExclusionReason.REQUIRED_AUTHORITY_MISSING,
+                        description=f"Resource lacks required authority code {need}",
+                        evidence_reference="authority",
+                    )
+                )
+
+    def _check_company_email(
+        self,
+        resource: HumanResourceEvidence,
+        exclusion_reasons: list[ExclusionReasonEntry],
+    ) -> None:
+        if resource.employee_id is None:
+            return
+        if not resource.employee_email:
+            exclusion_reasons.append(
+                ExclusionReasonEntry(
+                    reason=ExclusionReason.MISSING_COMPANY_EMAIL,
+                    description="Company directory has no verified email for this employee",
+                    evidence_reference="employee_email",
                 )
             )
