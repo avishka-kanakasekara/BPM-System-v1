@@ -9,7 +9,7 @@ and uses Gemini for ambiguous edge cases.
 """
 
 import asyncio
-from typing import Optional
+
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
 from app.agents.agent2_execution.llm.prompts import SYSTEM_PROMPT_FAILURE_CLASSIFICATION
 from app.agents.agent2_execution.llm.schemas import FailureDiagnosis
@@ -19,8 +19,8 @@ async def analyze_failure(
     error_message: str,
     tool_name: str,
     attempt_number: int = 1,
-    exception_obj: Optional[Exception] = None,
-    gemini_client: Optional[GeminiClient] = None,
+    exception_obj: Exception | None = None,
+    gemini_client: GeminiClient | None = None,
 ) -> FailureDiagnosis:
     """
     Diagnose an execution failure and return a structured FailureDiagnosis object.

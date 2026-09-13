@@ -1,7 +1,7 @@
 """API schemas for audit resources."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -16,9 +16,9 @@ class AuditLogResponse(BaseModel):
     entity_type: str
     entity_id: UUID
     action: str
-    performed_by: Optional[UUID] = None
-    old_values: Optional[dict[str, Any]] = None
-    new_values: Optional[dict[str, Any]] = None
+    performed_by: UUID | None = None
+    old_values: dict[str, Any] | None = None
+    new_values: dict[str, Any] | None = None
     timestamp: datetime
 
 

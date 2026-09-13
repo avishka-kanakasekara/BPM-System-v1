@@ -1,37 +1,37 @@
 """Unit tests for PersistentResourceAllocationService."""
 
 import asyncio
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import uuid4, UUID as UUIDType
+from uuid import uuid4
+
+import pytest
 
 from app.agents.agent3_resources.application_service import (
-    PersistentResourceAllocationService,
     AllocationServiceProtocol,
-    PersistenceProtocol,
     PersistedAllocationResult,
+    PersistenceProtocol,
+    PersistentResourceAllocationService,
 )
-from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AllocationRecommendation,
-    AgentMessageMetadata,
-    RecommendationStatus,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-    RequirementResult,
-    RankedCandidate,
-    ScoreBreakdown,
-    ResourceGap,
-    ResourceAlternative,
+from app.agents.agent3_resources.constants import (
+    GapType,
+    MessageType,
+    ResourceType,
 )
-from app.agents.agent3_resources.constants import MessageType, ResourceType, GapType, GapAlternativeType
 from app.agents.agent3_resources.repositories.persistence_exceptions import (
-    PersistenceValidationError,
     PersistenceConflictError,
     PersistenceTransactionError,
+    PersistenceValidationError,
 )
-
+from app.agents.agent3_resources.schemas import (
+    AgentMessageMetadata,
+    AllocationRecommendation,
+    AllocationRequest,
+    BudgetResourceRequirement,
+    HumanResourceRequirement,
+    RecommendationStatus,
+    ResourceGap,
+)
 
 # ============================================================================
 # Fake Dependencies
@@ -232,7 +232,7 @@ class TestPersistentResourceAllocationService:
     ):
         """Test processing and persistence with custom evaluation timestamp."""
         recommendation_id = uuid4()
-        custom_timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        custom_timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
         fake_allocation = FakeAllocationService(successful_recommendation)
         fake_persistence = FakePersistence(recommendation_id)
 
@@ -241,7 +241,7 @@ class TestPersistentResourceAllocationService:
             persistence=fake_persistence,
         )
 
-        result = asyncio.run(service.process_and_persist(
+        asyncio.run(service.process_and_persist(
             allocation_request,
             evaluation_timestamp=custom_timestamp,
         ))
@@ -473,7 +473,7 @@ class TestPersistedAllocationResult:
     def test_create_with_custom_timestamp(self, tenant_id, correlation_id):
         """Test factory method with custom timestamp."""
         recommendation_id = uuid4()
-        custom_timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        custom_timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC)
         recommendation = AllocationRecommendation(
             metadata=AgentMessageMetadata(
                 tenant_id=tenant_id,
@@ -669,7 +669,7 @@ class TestApplicationServiceCoverage:
         return HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=uuid4(),
-            task_deadline=datetime(2024, 6, 1, tzinfo=timezone.utc),
+            task_deadline=datetime(2024, 6, 1, tzinfo=UTC),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
             required_roles=["developer"],
@@ -682,7 +682,7 @@ class TestApplicationServiceCoverage:
         return BudgetResourceRequirement(
             resource_type=ResourceType.BUDGET,
             requester_id=uuid4(),
-            task_deadline=datetime(2024, 6, 1, tzinfo=timezone.utc),
+            task_deadline=datetime(2024, 6, 1, tzinfo=UTC),
             required_amount=Decimal("5000"),
             currency="USD",
             process_stage="resource_allocation",
@@ -1192,7 +1192,7 @@ class TestApplicationServiceCoverage:
         # Verify no OpenAI import in application_service.py
         import app.agents.agent3_resources.application_service as app_service_module
         source = app_service_module.__file__
-        with open(source, 'r') as f:
+        with open(source) as f:
             content = f.read()
         assert "openai" not in content.lower()
         assert "gpt" not in content.lower()
@@ -1202,7 +1202,7 @@ class TestApplicationServiceCoverage:
         # Verify no SQLAlchemy engine/session creation in application_service.py
         import app.agents.agent3_resources.application_service as app_service_module
         source = app_service_module.__file__
-        with open(source, 'r') as f:
+        with open(source) as f:
             content = f.read()
         assert "create_engine" not in content
         assert "AsyncSession" not in content

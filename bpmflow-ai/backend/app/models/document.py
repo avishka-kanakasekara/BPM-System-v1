@@ -1,6 +1,6 @@
 """Uploaded source documents linked to a discovered process."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Text
@@ -11,7 +11,7 @@ from app.core.database import Base
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class DiscoveredDocument(Base):

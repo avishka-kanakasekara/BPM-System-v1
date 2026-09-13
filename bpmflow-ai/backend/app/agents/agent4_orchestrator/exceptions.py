@@ -89,3 +89,14 @@ class InvalidExceptionStatusError(ValueError):
 
 class InvalidRetryError(ValueError):
     """Raised when a retry is not allowed for this exception or process stage."""
+
+
+class ExecutionEnrichmentError(ValueError):
+    """Raised when post-approval dispatch lacks required discovery metadata."""
+
+    def __init__(self, missing_fields: list[str]) -> None:
+        self.missing_fields = missing_fields
+        super().__init__(
+            "Missing required execution enrichment fields: "
+            + ", ".join(sorted(missing_fields))
+        )

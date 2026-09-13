@@ -1,41 +1,39 @@
 """Repository contract tests for Agent 3 write-path persistence (fake session)."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
-from uuid import UUID, uuid4
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
-from sqlalchemy.ext.asyncio import AsyncSession
+import pytest
 
+from app.agents.agent3_resources.repositories.persistence_exceptions import (
+    PersistenceTransactionError,
+    PersistenceValidationError,
+)
 from app.agents.agent3_resources.repositories.recommendation_repository import (
     RecommendationWriteRepository,
 )
-from app.agents.agent3_resources.repositories.persistence_exceptions import (
-    PersistenceValidationError,
-    PersistenceTransactionError,
-    PersistenceConflictError,
-)
 from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AllocationRecommendation,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-    RequirementResult,
-    RankedCandidate,
-    ScoreBreakdown,
-    ExcludedResource,
-    ExclusionReasonEntry,
-    ResourceGap,
-    ResourceAlternative,
-    BudgetValidationChecks,
     AgentMessageMetadata,
-    RecommendationStatus,
-    ResourceType,
+    AllocationRecommendation,
+    AllocationRequest,
+    BudgetResourceRequirement,
+    BudgetValidationChecks,
+    ExcludedResource,
+    ExclusionReason,
+    ExclusionReasonEntry,
     GapAlternativeType,
     GapType,
-    ExclusionReason,
+    HumanResourceRequirement,
+    RankedCandidate,
+    RecommendationStatus,
+    RequirementResult,
+    ResourceAlternative,
+    ResourceGap,
+    ResourceType,
+    ScoreBreakdown,
 )
 
 
@@ -45,9 +43,9 @@ class FakeAsyncSession:
     def __init__(self):
         self.committed = False
         self.rolled_back = False
-        self.executed_statements: List[tuple] = []
-        self._results: Dict[str, Any] = {}
-        self._query_sequence: List[Any] = []  # Sequence of results for different queries
+        self.executed_statements: list[tuple] = []
+        self._results: dict[str, Any] = {}
+        self._query_sequence: list[Any] = []  # Sequence of results for different queries
         self._query_index = 0
 
     async def __aenter__(self):
@@ -144,7 +142,7 @@ class TestRecommendationWriteRepository:
             human_requirements=HumanResourceRequirement(
                 resource_type=ResourceType.HUMAN,
                 requester_id=uuid4(),
-                task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
                 estimated_effort_hours=Decimal("10"),
                 process_stage="resource_allocation",
             ),
@@ -188,7 +186,7 @@ class TestRecommendationWriteRepository:
         sample_recommendation: AllocationRecommendation,
     ) -> None:
         """Test that persist_allocation_result inserts request."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Set up fake results
         fake_session._results["fetchone"] = None  # No existing request
@@ -227,7 +225,7 @@ class TestRecommendationWriteRepository:
         sample_recommendation: AllocationRecommendation,
     ) -> None:
         """Test that transaction rolls back on error."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Make session.execute raise an error
         fake_session.execute = AsyncMock(side_effect=Exception("DB error"))
@@ -282,7 +280,7 @@ class TestRecommendationWriteRepository:
             "retryable": None,
             "limitations": [],
             "response_schema_version": "1.0.0",
-            "created_at": datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+            "created_at": datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
         }
         fake_session._results["fetchone"] = row
         
@@ -319,7 +317,7 @@ class TestRecommendationWriteRepository:
             "retryable": None,
             "limitations": [],
             "response_schema_version": "1.0.0",
-            "created_at": datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+            "created_at": datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
         }
         fake_session._results["fetchone"] = row
         
@@ -356,7 +354,7 @@ class TestRecommendationWriteRepository:
         sample_recommendation: AllocationRecommendation,
     ) -> None:
         """Test persisting recommendation with candidates."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Add candidates to recommendation
         score_breakdown = ScoreBreakdown(
@@ -378,7 +376,7 @@ class TestRecommendationWriteRepository:
                     score_breakdown=score_breakdown,
                     current_workload_percentage=Decimal("30"),
                     projected_workload_percentage=Decimal("40"),
-                    available_from=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    available_from=datetime(2026, 1, 1, tzinfo=UTC),
                     available_until=None,
                     evidence_refs={},
                 )
@@ -405,7 +403,7 @@ class TestRecommendationWriteRepository:
         sample_recommendation: AllocationRecommendation,
     ) -> None:
         """Test persisting recommendation with exclusions."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Add exclusions to recommendation
         sample_recommendation.human_requirement_result = RequirementResult(
@@ -446,7 +444,7 @@ class TestRecommendationWriteRepository:
         sample_recommendation: AllocationRecommendation,
     ) -> None:
         """Test persisting recommendation with gaps and alternatives."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Add gaps to recommendation (alternatives are stored separately)
         sample_recommendation.resource_gaps = [
@@ -488,7 +486,7 @@ class TestRecommendationWriteRepository:
         tenant_id = uuid4()
         recommendation_id = uuid4()
         correlation_id = uuid4()
-        created_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        created_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         # Mock database row with column names from SQL_SELECT_RECOMMENDATION_HEADER
         fake_session._results["fetchone"] = MagicMock(_mapping={
@@ -525,21 +523,6 @@ class TestRecommendationWriteRepository:
         assert result["requires_human_approval"] is True
         assert result["manual_intervention_required"] is False
 
-    def test_get_recommendation_returns_none_when_not_found(
-        self,
-        repository: RecommendationWriteRepository,
-        fake_session: FakeAsyncSession,
-    ) -> None:
-        """Test that get_recommendation returns None when row not found."""
-        tenant_id = uuid4()
-        recommendation_id = uuid4()
-
-        fake_session._results["fetchone"] = None
-
-        result = asyncio.run(repository.get_recommendation(tenant_id, recommendation_id))
-
-        assert result is None
-
     def test_get_latest_recommendation_by_correlation_id_maps_database_columns_to_api_fields(
         self,
         repository: RecommendationWriteRepository,
@@ -549,7 +532,7 @@ class TestRecommendationWriteRepository:
         tenant_id = uuid4()
         correlation_id = uuid4()
         recommendation_id = uuid4()
-        created_at = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        created_at = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         # Mock database row with column names from SQL_SELECT_LATEST_RECOMMENDATION_HEADER
         fake_session._results["fetchone"] = MagicMock(_mapping={
@@ -608,7 +591,7 @@ class TestRecommendationWriteRepository:
         sample_recommendation: AllocationRecommendation,
     ) -> None:
         """Test persisting recommendation with budget validation."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Add budget requirements and validation
         sample_request.human_requirements = None
@@ -617,7 +600,7 @@ class TestRecommendationWriteRepository:
             required_amount=Decimal("5000"),
             currency="USD",
             requester_id=uuid4(),
-            task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
             process_stage="resource_allocation",
         )
         

@@ -9,15 +9,21 @@ execute_with_recovery(process_id, task_id, tool_name, parameters, session) -> Ex
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.database.models import ExecutionReceipt
-from app.agents.agent2_execution.execution import failure_analyzer, idempotency, receipt_manager, retry_manager
+from app.agents.agent2_execution.execution import (
+    failure_analyzer,
+    idempotency,
+    receipt_manager,
+    retry_manager,
+)
 from app.agents.agent2_execution.execution.executor import execute_tool
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
-from app.agents.agent2_execution.security.tool_guard import ToolGuard
+from app.agents.agent2_execution.security.tool_guard import ExecutionGuardContext, ToolGuard
 
 logger = logging.getLogger("agent_2.execution.execution_engine")
 
@@ -26,11 +32,13 @@ async def execute_with_recovery(
     process_id: str,
     task_id: str,
     tool_name: str,
-    parameters: Dict[str, Any],
-    session: Optional[AsyncSession] = None,
+    parameters: dict[str, Any],
+    session: AsyncSession | None = None,
     actor: str = "agent_2",
-    is_idempotent: Optional[bool] = None,
-    gemini_client: Optional[GeminiClient] = None,
+    is_idempotent: bool | None = None,
+    idempotency_key: str | None = None,
+    gemini_client: GeminiClient | None = None,
+    guard_context: ExecutionGuardContext | None = None,
 ) -> ExecutionReceipt:
     """
     Main entry point for tool execution with security gating, idempotency checking,
@@ -46,7 +54,9 @@ async def execute_with_recovery(
     :param gemini_client: Optional GeminiClient instance
     :return: Persisted ExecutionReceipt ORM record
     """
-    idempotency_key = idempotency.generate_idempotency_key(process_id, task_id, tool_name)
+    idempotency_key = idempotency_key or idempotency.generate_idempotency_key(
+        process_id, task_id, tool_name
+    )
 
     # Step 1: Idempotency Check (Rule #3)
     existing_receipt = await idempotency.check_existing_receipt(session, idempotency_key)
@@ -56,11 +66,24 @@ async def execute_with_recovery(
 
     # Step 2: Tool Guard Security Check (Rules #1, #2, #4, #6, #7)
     guard = ToolGuard(session=session)
-    guard_result = await guard.check(tool_name, parameters, actor=actor)
+    ctx = guard_context or ExecutionGuardContext(process_id=process_id)
+    if not ctx.process_id:
+        ctx = ExecutionGuardContext(
+            message_status=ctx.message_status,
+            process_stage=ctx.process_stage,
+            is_retry=ctx.is_retry,
+            process_id=process_id,
+        )
+    guard_result = await guard.check(
+        tool_name,
+        parameters,
+        actor=actor,
+        guard_context=ctx,
+    )
 
     if not guard_result.allowed:
         logger.warning(f"TOOL GUARD BLOCKED tool call {tool_name!r}: {guard_result.reason}")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return await receipt_manager.create_receipt(
             session=session,
             process_id=process_id,
@@ -84,13 +107,13 @@ async def execute_with_recovery(
     last_diagnosis = None
 
     for attempt_number in range(1, max_attempts + 1):
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
         # ACT: Invoke tool via executor
         success, result_data, latency_ms, error_msg = await execute_tool(
             session, tool_name, parameters
         )
-        completed_at = datetime.now(timezone.utc)
+        completed_at = datetime.now(UTC)
 
         if success:
             logger.info(f"Tool {tool_name!r} executed successfully on attempt {attempt_number}")
@@ -159,7 +182,7 @@ async def execute_with_recovery(
             )
 
     # Fallback default receipt
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return await receipt_manager.create_receipt(
         session=session,
         process_id=process_id,

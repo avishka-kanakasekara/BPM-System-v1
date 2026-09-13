@@ -11,9 +11,9 @@ These tests verify that:
 """
 
 import os
+
 import pytest
-from fastapi import FastAPI
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 # Set minimal environment variables for config
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
@@ -22,8 +22,6 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
 from app.main import app
-from app.api.v1.router import api_router
-
 
 # ============================================================================
 # Router Registration Tests
@@ -94,9 +92,24 @@ class TestRouterRegistration:
             # Health endpoint should still work without a live pooler call.
             from unittest.mock import patch
 
-            with patch("app.core.supabase_rest.ping_rest", return_value=True), patch(
-                "app.core.supabase_rest.supabase_rest_configured", return_value=True
-            ):
+            from app.core.health import ProbeResult
+
+            async def _rest_up():
+                return ProbeResult(name="supabase_rest", status="ok", latency_ms=1.0)
+
+            async def _pg_down():
+                return ProbeResult(name="postgres", status="error", latency_ms=1.0)
+
+            async def _skip(name: str):
+                return ProbeResult(name=name, status="skipped", latency_ms=0.0)
+
+            with patch("app.core.persistence.repository._postgres_reachable", return_value=False), patch(
+                "app.core.persistence.repository._rest_reachable", return_value=True
+            ), patch("app.core.health.probe_postgres", _pg_down), patch(
+                "app.core.health.probe_supabase_rest", _rest_up
+            ), patch("app.core.health.probe_jwks", lambda: _skip("jwks")), patch(
+                "app.core.health.probe_gemini", lambda: _skip("gemini")
+            ), patch("app.core.health.probe_redis", lambda: _skip("redis")):
                 response = await client.get("/health")
             assert response.status_code == 200
             assert response.json()["status"] == "healthy"
@@ -157,11 +170,13 @@ class TestImports:
         
         # Dispose any existing engine
         import asyncio
+
         from app.core.database import dispose_engine
         asyncio.run(dispose_engine())
         
         # Re-import the app (should not fail)
         import importlib
+
         import app.main
         importlib.reload(app.main)
         
@@ -176,6 +191,7 @@ class TestImports:
         
         # Re-import the app (should not fail without network)
         import importlib
+
         import app.main
         importlib.reload(app.main)
         

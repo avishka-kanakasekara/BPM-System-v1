@@ -116,9 +116,30 @@ export default function ApprovalDetailPage() {
       )
       setLastDecision(res)
       if (decision === 'approve') {
-        setNotice(
-          'Human decision recorded. Execution may now continue according to the BPMFlow workflow.',
-        )
+        const stage =
+          res.workflow && typeof res.workflow.current_stage === 'string'
+            ? res.workflow.current_stage
+            : null
+        const wfMsg =
+          res.workflow && typeof res.workflow.message === 'string' ? res.workflow.message : ''
+        if (stage === 'EXCEPTION') {
+          setNotice(
+            'Approval was recorded, but execution stopped. Open the process for details or retry after fixing the failure.',
+          )
+        } else if (stage === 'WORKFLOW_EXECUTION') {
+          setNotice(
+            wfMsg ||
+              'Approved. Agent 2 execution did not finish — open the process and click Continue autopilot to retry the full tool suite.',
+          )
+        } else if (stage === 'INVOICE_MATCHING' || stage === 'COMPLETED') {
+          setNotice(
+            'Approved. Agent 2 completed the full execution suite automatically. Continue on the process page to submit invoice evidence.',
+          )
+        } else {
+          setNotice(
+            'Human decision recorded. Execution may now continue according to the BPMFlow workflow.',
+          )
+        }
       } else {
         const stage =
           res.workflow && typeof res.workflow.current_stage === 'string'
@@ -360,9 +381,12 @@ export default function ApprovalDetailPage() {
           {approval.status === 'REJECTED' &&
           (process?.current_stage === 'EXCEPTION' || resultingStage === 'EXCEPTION') ? (
             <div className="mt-4">
-              <p className="text-sm font-medium text-slate-800">Process requires attention.</p>
-              <Link to="/exceptions" className="btn btn-ghost btn-sm mt-2">
-                View Exceptions
+              <p className="text-sm font-medium text-slate-800">Process stopped after this decision.</p>
+              <Link
+                to={process?.id ? `/processes/${process.id}` : '/processes'}
+                className="btn btn-ghost btn-sm mt-2"
+              >
+                Open Process
               </Link>
             </div>
           ) : null}

@@ -9,9 +9,9 @@ Non-Negotiable Rule #2: Every proposed call must be validated through Tool Guard
 Non-Negotiable Rule #4: Only actions in the ALLOWED matrix are present here.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
-ALL_TOOL_DECLARATIONS: List[Dict[str, Any]] = [
+ALL_TOOL_DECLARATIONS: list[dict[str, Any]] = [
     {
         "name": "create_workflow_task",
         "description": "Create a new sub-task within a process instance.",
@@ -177,7 +177,7 @@ ALL_TOOL_DECLARATIONS: List[Dict[str, Any]] = [
 ]
 
 
-def get_tool_declaration_by_name(name: str) -> Dict[str, Any]:
+def get_tool_declaration_by_name(name: str) -> dict[str, Any]:
     """Retrieve a specific tool declaration dictionary by tool name."""
     name_clean = name.strip().lower()
     for tool in ALL_TOOL_DECLARATIONS:

@@ -5,31 +5,90 @@ Exposes query endpoints for execution receipts, computed process KPIs,
 optimization recommendations, and audit log entries for dashboard UI & live Swagger UI inspection.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.analytics import kpi_engine
 from app.agents.agent2_execution.database.ids import parse_uuid
-from app.agents.agent2_execution.database.models import AuditLog, ExecutionReceipt, OptimizationRecommendation
+from app.agents.agent2_execution.database.models import (
+    AuditLog,
+    ExecutionReceipt,
+    OptimizationRecommendation,
+)
 from app.agents.agent2_execution.database.session import get_db_session
 from app.agents.agent2_execution.optimization import recommendation_engine
 
 router = APIRouter(prefix="/agent2", tags=["Agent 2 — Dashboard & Read APIs"])
 
+_RECEIPT_SELECT_DETAIL = (
+    "id,process_id,task_id,tool_name,action,attempt_number,idempotency_key,status,"
+    "latency_ms,error_type,error_message,created_at,started_at,completed_at,result"
+)
+
+
+def receipt_detail_from_rest_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Map a Supabase REST execution_receipts row to execute-router detail shape."""
+    created = row.get("created_at") or ""
+    started = row.get("started_at") or ""
+    completed = row.get("completed_at") or ""
+    return {
+        "execution_id": str(row.get("id") or ""),
+        "id": str(row.get("id") or ""),
+        "process_id": str(row.get("process_id") or ""),
+        "task_id": str(row.get("task_id") or ""),
+        "status": row.get("status") or "",
+        "receipt_status": row.get("status") or "",
+        "tool_name": row.get("tool_name") or "",
+        "action": row.get("action") or "",
+        "attempt": row.get("attempt_number") or 1,
+        "attempt_number": row.get("attempt_number") or 1,
+        "idempotency_key": row.get("idempotency_key") or "",
+        "started_at": started if isinstance(started, str) else str(started),
+        "completed_at": completed if isinstance(completed, str) else str(completed),
+        "latency_ms": row.get("latency_ms") or 0,
+        "result": row.get("result") or {},
+        "error_type": row.get("error_type"),
+        "error_message": row.get("error_message"),
+        "created_at": created if isinstance(created, str) else str(created),
+    }
+
+
+def load_receipt_detail_rest(receipt_id: str) -> dict[str, Any] | None:
+    """Load one execution receipt via Supabase REST when Postgres pooler is unavailable."""
+    try:
+        from app.core.supabase_rest import rest_select, supabase_rest_configured
+
+        if not supabase_rest_configured() or not receipt_id.strip():
+            return None
+        rows = rest_select(
+            "execution_receipts",
+            {
+                "select": _RECEIPT_SELECT_DETAIL,
+                "id": f"eq.{receipt_id.strip()}",
+                "limit": "1",
+            },
+        )
+        if not rows:
+            return None
+        return receipt_detail_from_rest_row(rows[0])
+    except Exception:
+        return None
+
 
 def _list_receipts_rest(
-    process_id: Optional[str],
-    status: Optional[str],
+    process_id: str | None,
+    status: str | None,
     limit: int,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     try:
         from app.core.supabase_rest import rest_select, supabase_rest_configured
 
         if not supabase_rest_configured():
             return []
-        params: Dict[str, str] = {
+        params: dict[str, str] = {
             "select": (
                 "id,process_id,task_id,tool_name,action,attempt_number,"
                 "idempotency_key,status,latency_ms,error_type,error_message,created_at"
@@ -42,7 +101,7 @@ def _list_receipts_rest(
         if status:
             params["status"] = f"eq.{status}"
         rows = rest_select("execution_receipts", params)
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for r in rows:
             created = r.get("created_at") or ""
             out.append(
@@ -72,11 +131,11 @@ def _list_receipts_rest(
     description="Retrieve historical tool execution receipts and attempt statuses.",
 )
 async def get_execution_receipts(
-    process_id: Optional[str] = Query(None, description="Optional process instance ID filter"),
-    status: Optional[str] = Query(None, description="Optional status filter (e.g. SUCCESS, FAILED, BLOCKED)"),
+    process_id: str | None = Query(None, description="Optional process instance ID filter"),
+    status: str | None = Query(None, description="Optional status filter (e.g. SUCCESS, FAILED, BLOCKED)"),
     limit: int = Query(20, ge=1, le=100, description="Max records to return"),
-    session: Optional[AsyncSession] = Depends(get_db_session),
-) -> List[Dict[str, Any]]:
+    session: AsyncSession | None = Depends(get_db_session),
+) -> list[dict[str, Any]]:
     if session is None:
         return _list_receipts_rest(process_id, status, limit)
 
@@ -118,9 +177,9 @@ async def get_execution_receipts(
     description="Retrieve all 9 calculated business process metrics and activity waiting time breakdown.",
 )
 async def get_process_kpis(
-    process_id: Optional[str] = Query(None, description="Optional process filter"),
-    session: Optional[AsyncSession] = Depends(get_db_session),
-) -> Dict[str, Any]:
+    process_id: str | None = Query(None, description="Optional process filter"),
+    session: AsyncSession | None = Depends(get_db_session),
+) -> dict[str, Any]:
     return await kpi_engine.get_kpis(session=session, process_id=process_id)
 
 
@@ -130,9 +189,9 @@ async def get_process_kpis(
     description="Retrieve generated process optimization proposals and their human approval states.",
 )
 async def get_optimization_recommendations(
-    process_id: Optional[str] = Query(None, description="Optional process filter"),
-    session: Optional[AsyncSession] = Depends(get_db_session),
-) -> List[Dict[str, Any]]:
+    process_id: str | None = Query(None, description="Optional process filter"),
+    session: AsyncSession | None = Depends(get_db_session),
+) -> list[dict[str, Any]]:
     if session is None:
         rec = await recommendation_engine.generate_optimization_proposal(
             session=None,
@@ -182,8 +241,8 @@ async def get_optimization_recommendations(
 )
 async def get_audit_logs(
     limit: int = Query(20, ge=1, le=100, description="Max log records to return"),
-    session: Optional[AsyncSession] = Depends(get_db_session),
-) -> List[Dict[str, Any]]:
+    session: AsyncSession | None = Depends(get_db_session),
+) -> list[dict[str, Any]]:
     if session is None:
         return []
 

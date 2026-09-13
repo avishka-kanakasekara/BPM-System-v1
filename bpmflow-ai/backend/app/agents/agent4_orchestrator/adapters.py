@@ -15,7 +15,7 @@ Every adapter raises AgentUnavailableError when its downstream dependency is
 genuinely unreachable. None of them fabricate success responses.
 """
 
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -234,10 +234,14 @@ async def _default_agent3_handler(message: AgentMessage) -> AgentMessage:
     )
     from app.agents.agent3_resources.constants import (
         AGENT_4_RECEIVER,
+    )
+    from app.agents.agent3_resources.constants import (
         MessageType as Agent3MessageType,
     )
     from app.agents.agent3_resources.schemas import (
         AgentMessageMetadata as Agent3Metadata,
+    )
+    from app.agents.agent3_resources.schemas import (
         AllocationRequest,
     )
 
@@ -302,7 +306,7 @@ class Agent3Adapter(AgentAdapter):
     A custom handler can still be injected for tests.
     """
 
-    def __init__(self, handler: Optional[Agent3Handler] = None) -> None:
+    def __init__(self, handler: Agent3Handler | None = None) -> None:
         self._handler = handler or _default_agent3_handler
         self.last_message: AgentMessage | None = None
 

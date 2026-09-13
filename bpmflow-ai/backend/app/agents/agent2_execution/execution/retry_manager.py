@@ -10,7 +10,8 @@ Applies HARD DETERMINISTIC OVERRIDES that Gemini CANNOT override:
 3. More than 3 attempts (attempt_number >= 3) → Always STOP (no retry).
 """
 
-from typing import Optional
+import random
+
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
 from app.agents.agent2_execution.llm.prompts import SYSTEM_PROMPT_RECOVERY
 from app.agents.agent2_execution.llm.schemas import FailureDiagnosis, RecoveryDecision
@@ -42,8 +43,8 @@ async def evaluate_retry(
     action: str,
     attempt_number: int,
     diagnosis: FailureDiagnosis,
-    is_idempotent: Optional[bool] = None,
-    gemini_client: Optional[GeminiClient] = None,
+    is_idempotent: bool | None = None,
+    gemini_client: GeminiClient | None = None,
 ) -> RecoveryDecision:
     """
     Evaluate whether to retry a failed tool action, apply backoff delay, or escalate.
@@ -97,7 +98,9 @@ async def evaluate_retry(
     # Deterministic Rules for Standard Retryable Failures
     # ---------------------------------------------------------------------------
     if ftype in ["TEMPORARY", "TIMEOUT", "RATE_LIMIT"]:
-        backoff_delay = 2 ** attempt_number  # 2s, 4s, 8s exponential backoff
+        base_delay = 2 ** attempt_number  # 2s, 4s, 8s exponential backoff
+        jitter = random.uniform(0, min(1.0, base_delay * 0.25))
+        backoff_delay = int(round(base_delay + jitter))
         return RecoveryDecision(
             retry=True,
             delay_seconds=backoff_delay,

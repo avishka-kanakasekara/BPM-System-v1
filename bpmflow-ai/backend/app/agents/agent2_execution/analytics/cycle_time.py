@@ -5,11 +5,11 @@ Computes per-case and average cycle times (total elapsed time from process creat
 using PM4Py process analytics and Pandas log aggregations.
 """
 
-from typing import Dict
+
 import pandas as pd
 
 
-def calculate_case_cycle_times(df: pd.DataFrame) -> Dict[str, float]:
+def calculate_case_cycle_times(df: pd.DataFrame) -> dict[str, float]:
     """
     Compute total cycle time in hours for each process instance (case_id).
 

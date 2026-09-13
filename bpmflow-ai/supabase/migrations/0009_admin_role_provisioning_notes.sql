@@ -1,0 +1,28 @@
+-- Manual / trusted admin role provisioning for local development.
+--
+-- Authoritative BPM role source: public.users.role
+-- Allowed values: requester | approver | admin
+--
+-- Local UI (ENV=development):
+--   Sign in / Sign up can select Requester, Approver, or Admin.
+--   POST /api/v1/auth/register applies that role to public.users.
+--
+-- Production:
+--   The register helper is disabled. Profiles provision as requester.
+--   Promote roles with trusted SQL only:
+--
+--   UPDATE public.users
+--   SET role = 'admin'
+--   WHERE email = 'your-admin@example.com';
+--
+--   UPDATE public.users
+--   SET role = 'approver'
+--   WHERE email = 'your-approver@example.com';
+--
+-- Tenant isolation uses JWT app_metadata.tenant_id (not this table).
+-- Ensure the Auth user has app_metadata.tenant_id set by an admin or by the
+-- development DEMO_TENANT_ID provisioning path.
+--
+-- This migration is intentionally a no-op DDL change so it is safe to apply.
+
+SELECT 1;

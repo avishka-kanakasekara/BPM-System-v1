@@ -11,10 +11,8 @@ Tests hard deterministic overrides and intelligent retry logic:
 import pytest
 
 from app.agents.agent2_execution.execution import failure_analyzer, retry_manager
-from app.agents.agent2_execution.execution.execution_engine import execute_with_recovery
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
-from app.agents.agent2_execution.llm.schemas import FailureDiagnosis, RecoveryDecision
-
+from app.agents.agent2_execution.llm.schemas import FailureDiagnosis
 
 # ---------------------------------------------------------------------------
 # 1. Hard Deterministic Overrides Tests

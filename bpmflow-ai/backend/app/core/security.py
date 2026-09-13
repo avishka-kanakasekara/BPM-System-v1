@@ -24,9 +24,8 @@ Security rules:
 from __future__ import annotations
 
 import asyncio
-import time
-from datetime import datetime, timezone
-from typing import Callable, Dict, Optional, Set, Tuple
+from collections.abc import Callable
+from datetime import UTC, datetime
 from uuid import UUID
 
 import httpx
@@ -53,10 +52,8 @@ NOT_AUTHENTICATED_DETAIL = "Not authenticated"
 PROFILE_NOT_FOUND_DETAIL = "User profile not found"
 FORBIDDEN_DETAIL = "Insufficient permissions"
 
-# Agent 4 JWKS cache: (fetched_at_epoch, jwks_payload)
-# Named separately from Agent 3's JWKSCache instance (_jwks_cache).
-_profile_jwks_cache: tuple[float, dict] | None = None
-_PROFILE_JWKS_CACHE_TTL_SECONDS = 300
+# Shared JWKS cache (tests may patch this module attribute).
+_jwks_cache: JWKSCache | None = None
 
 
 class AuthenticationError(Exception):
@@ -90,37 +87,28 @@ def expected_issuer() -> str | None:
     return f"{base}/auth/v1"
 
 
+def _shared_jwks_cache() -> JWKSCache:
+    global _jwks_cache
+    if _jwks_cache is None:
+        _jwks_cache = JWKSCache(ttl_seconds=settings.JWKS_CACHE_TTL_SECONDS)
+    return _jwks_cache
+
+
 async def fetch_jwks(*, force_refresh: bool = False) -> dict:
-    """Fetch and cache Supabase JWKS public keys (Agent 4 profile auth)."""
-    global _profile_jwks_cache
-    now = time.time()
-    if (
-        not force_refresh
-        and _profile_jwks_cache is not None
-        and (now - _profile_jwks_cache[0]) < _PROFILE_JWKS_CACHE_TTL_SECONDS
-    ):
-        return _profile_jwks_cache[1]
-
+    """Fetch and cache Supabase JWKS public keys."""
     url = supabase_jwks_url()
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            payload = response.json()
-    except Exception as exc:
-        raise AuthenticationError("Unable to fetch signing keys") from exc
-
-    if not isinstance(payload, dict) or "keys" not in payload:
-        raise AuthenticationError("Invalid signing key response")
-
-    _profile_jwks_cache = (now, payload)
-    return payload
+    cache = _shared_jwks_cache()
+    if force_refresh:
+        cache._cache.pop(url, None)
+    return await cache.get_jwks(url)
 
 
 def clear_jwks_cache() -> None:
-    """Test helper to reset Agent 4 profile JWKS cache."""
-    global _profile_jwks_cache
-    _profile_jwks_cache = None
+    """Test helper to reset JWKS cache."""
+    global _jwks_cache
+    if _jwks_cache is not None and hasattr(_jwks_cache, "_cache"):
+        _jwks_cache._cache.clear()
+    _jwks_cache = None
 
 
 def _rsa_or_ec_key_from_jwk(jwk_data: dict) -> dict:
@@ -240,8 +228,8 @@ async def load_user_profile(
     db: AsyncSession,
     user_id: UUID,
     *,
-    tenant_id: Optional[UUID] = None,
-    claims: Optional[dict] = None,
+    tenant_id: UUID | None = None,
+    claims: dict | None = None,
 ) -> CurrentUser:
     """Load public.users by id. Does not create profiles via ORM.
 
@@ -303,7 +291,7 @@ async def load_user_profile(
 def _current_user_from_rest_row(
     row: dict,
     *,
-    tenant_id: Optional[UUID],
+    tenant_id: UUID | None,
 ) -> CurrentUser:
     role = str(row.get("role") or "")
     if role not in ALLOWED_USER_ROLES:
@@ -320,8 +308,8 @@ def _current_user_from_rest_row(
 
 def _load_or_provision_user_rest(
     user_id: UUID,
-    tenant_id: Optional[UUID],
-    claims: Optional[dict],
+    tenant_id: UUID | None,
+    claims: dict | None,
 ) -> CurrentUser:
     """Sync PostgREST load/create for public.users (service role)."""
     rows = rest_select(
@@ -360,7 +348,7 @@ def _load_or_provision_user_rest(
     return _current_user_from_rest_row(inserted, tenant_id=tenant_id)
 
 
-def tenant_id_from_app_metadata(claims: dict) -> Optional[UUID]:
+def tenant_id_from_app_metadata(claims: dict) -> UUID | None:
     """Extract tenant_id from verified JWT app_metadata only.
 
     Never reads user_metadata or the request body. Returns None when the
@@ -379,7 +367,7 @@ def tenant_id_from_app_metadata(claims: dict) -> Optional[UUID]:
         return None
 
 
-def _demo_tenant_id() -> Optional[UUID]:
+def _demo_tenant_id() -> UUID | None:
     raw = (settings.DEMO_TENANT_ID or "").strip()
     if not raw:
         return None
@@ -389,7 +377,7 @@ def _demo_tenant_id() -> Optional[UUID]:
         return None
 
 
-def ensure_dev_tenant_app_metadata(user_id: UUID) -> Optional[UUID]:
+def ensure_dev_tenant_app_metadata(user_id: UUID) -> UUID | None:
     """Assign DEMO_TENANT_ID to app_metadata when missing (development only).
 
     Uses the Supabase Admin API with the service-role key. Returns the
@@ -496,6 +484,30 @@ def require_roles(*roles: str) -> Callable:
     return _dependency
 
 
+def require_tenant(*, allow_dev_default: bool = True) -> Callable:
+    """Authorization dependency: JWT must carry app_metadata.tenant_id.
+
+    In development, ``ensure_dev_tenant_app_metadata`` may have assigned
+    ``DEMO_TENANT_ID`` during ``get_current_user`` — that value is trusted
+    because it is written via the Admin API, not the client.
+    """
+    async def _dependency(
+        current_user: CurrentUser = Depends(get_current_user),
+    ) -> CurrentUser:
+        if current_user.tenant_id is not None:
+            return current_user
+        if allow_dev_default and settings.is_development:
+            demo = _demo_tenant_id()
+            if demo is not None:
+                return current_user.model_copy(update={"tenant_id": demo})
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant claim required",
+        )
+
+    return _dependency
+
+
 # ============================================================================
 # Agent 3 — VerifiedPrincipal / tenant-scoped auth
 # ============================================================================
@@ -524,7 +536,7 @@ class VerifiedPrincipal(BaseModel):
     tenant_id: UUID = Field(..., description="Tenant ID from verified app_metadata.tenant_id")
     roles: frozenset[str] = Field(default_factory=frozenset, description="User roles from verified claims")
     token_role: str = Field(default="authenticated", description="Token role from 'role' claim")
-    session_id: Optional[UUID] = Field(None, description="Session ID from claims")
+    session_id: UUID | None = Field(None, description="Session ID from claims")
     expires_at: datetime = Field(..., description="Token expiration datetime")
 
     @field_validator("expires_at", mode="after")
@@ -532,7 +544,7 @@ class VerifiedPrincipal(BaseModel):
     def validate_expiration(cls, value: datetime) -> datetime:
         """Ensure expiration is timezone-aware."""
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
+            return value.replace(tzinfo=UTC)
         return value
 
 
@@ -549,7 +561,7 @@ class JWKSCache:
         Args:
             ttl_seconds: Time-to-live for cached JWKS in seconds (default: 5 minutes)
         """
-        self._cache: Dict[str, Tuple[dict, datetime]] = {}
+        self._cache: dict[str, tuple[dict, datetime]] = {}
         self._ttl = ttl_seconds
         self._lock = asyncio.Lock()
 
@@ -568,7 +580,7 @@ class JWKSCache:
         async with self._lock:
             if jwks_url in self._cache:
                 jwks_data, cached_at = self._cache[jwks_url]
-                age = (datetime.now(timezone.utc) - cached_at).total_seconds()
+                age = (datetime.now(UTC) - cached_at).total_seconds()
                 if age < self._ttl:
                     return jwks_data
 
@@ -578,7 +590,7 @@ class JWKSCache:
                     response.raise_for_status()
                     jwks_data = response.json()
 
-                self._cache[jwks_url] = (jwks_data, datetime.now(timezone.utc))
+                self._cache[jwks_url] = (jwks_data, datetime.now(UTC))
                 return jwks_data
 
             except httpx.HTTPError as exc:
@@ -590,10 +602,6 @@ class JWKSCache:
                         "retryable": True,
                     },
                 ) from exc
-
-
-# Global Agent 3 JWKS cache instance (tests patch this name)
-_jwks_cache = JWKSCache()
 
 
 def _get_jwks_url(supabase_url: str) -> str:
@@ -638,7 +646,7 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
     expected_issuer = _get_expected_issuer(settings.SUPABASE_URL)
 
     try:
-        jwks_data = await _jwks_cache.get_jwks(jwks_url)
+        jwks_data = await _shared_jwks_cache().get_jwks(jwks_url)
 
         jwks_keys = jwks_data.get("keys", [])
         if not jwks_keys:
@@ -760,7 +768,7 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
         role_claims = claims.get("role", "authenticated")
         user_role = str(role_claims)
 
-        roles_set: Set[str] = {user_role}
+        roles_set: set[str] = {user_role}
         if "user_roles" in claims:
             if isinstance(claims["user_roles"], list):
                 roles_set.update(claims["user_roles"])
@@ -776,9 +784,9 @@ async def verify_supabase_token(token: str) -> VerifiedPrincipal:
 
         exp = claims.get("exp")
         if exp:
-            expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+            expires_at = datetime.fromtimestamp(exp, tz=UTC)
         else:
-            expires_at = datetime.now(timezone.utc).replace(microsecond=0)
+            expires_at = datetime.now(UTC).replace(microsecond=0)
 
         return VerifiedPrincipal(
             user_id=user_id,

@@ -16,20 +16,27 @@ Persists snapshots to process_kpis table and exposes get_kpis() retrieval functi
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.analytics import cycle_time, event_analyzer, waiting_time
-from app.agents.agent2_execution.database.models import EmailEvent, ExecutionReceipt, ProcessKPI, Task, WorkflowEvent
+from app.agents.agent2_execution.database.models import (
+    EmailEvent,
+    ExecutionReceipt,
+    ProcessKPI,
+    Task,
+    WorkflowEvent,
+)
 
 
 async def calculate_all_kpis(
-    session: Optional[AsyncSession],
-    process_id: Optional[str] = None,
-    since: Optional[datetime] = None,
-) -> Dict[str, Any]:
+    session: AsyncSession | None,
+    process_id: str | None = None,
+    since: datetime | None = None,
+) -> dict[str, Any]:
     """
     Compute all 9 business process KPIs from database records.
 
@@ -77,9 +84,9 @@ async def calculate_all_kpis(
     res_tasks = await session.execute(stmt_tasks)
     tasks_list = res_tasks.scalars().all()
 
-    activity_durations: Dict[str, float] = {}
+    activity_durations: dict[str, float] = {}
     if tasks_list:
-        dur_by_act: Dict[str, List[float]] = {}
+        dur_by_act: dict[str, list[float]] = {}
         for t in tasks_list:
             if t.title and t.started_at and t.completed_at:
                 dur = (t.completed_at - t.started_at).total_seconds() / 3600.0
@@ -105,7 +112,7 @@ async def calculate_all_kpis(
     if total_receipts > 0:
         success_receipts = sum(1 for r in receipts if r.status == "SUCCESS")
         failed_receipts = sum(1 for r in receipts if r.status == "FAILED")
-        blocked_receipts = sum(1 for r in receipts if r.status == "BLOCKED")
+        sum(1 for r in receipts if r.status == "BLOCKED")
 
         task_success_rate = round(success_receipts / float(total_receipts), 4)
         failure_rate = round(failed_receipts / float(total_receipts), 4)
@@ -120,7 +127,7 @@ async def calculate_all_kpis(
         )
 
         # Duplicate action rate: duplicate receipts for same idempotency key
-        key_counts: Dict[str, int] = {}
+        key_counts: dict[str, int] = {}
         for r in receipts:
             k_key = r.idempotency_key
             key_counts[k_key] = key_counts.get(k_key, 0) + 1
@@ -209,7 +216,7 @@ async def compute_and_save_kpis(
     :return: Created ProcessKPI ORM instance
     """
     metrics = await calculate_all_kpis(session)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     kpi_row = ProcessKPI(
         id=uuid.uuid4(),
@@ -233,9 +240,9 @@ async def compute_and_save_kpis(
 
 
 async def get_kpis(
-    session: Optional[AsyncSession],
-    process_id: Optional[str] = None,
-    since: Optional[datetime] = None,
-) -> Dict[str, Any]:
+    session: AsyncSession | None,
+    process_id: str | None = None,
+    since: datetime | None = None,
+) -> dict[str, Any]:
     """Exposed getter function for retrieving current computed KPI metrics."""
     return await calculate_all_kpis(session, process_id=process_id, since=since)

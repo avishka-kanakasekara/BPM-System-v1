@@ -9,6 +9,7 @@ Tests Agent2.handle() end-to-end in Gemini offline mode:
 """
 
 import uuid
+
 import pytest
 
 from app.agents.agent2_execution.agent.agent import Agent2

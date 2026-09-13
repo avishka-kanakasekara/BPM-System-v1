@@ -93,6 +93,23 @@ def _flagged_exceptions(dataframe: pd.DataFrame) -> list[FlaggedException]:
     return flagged
 
 
+def _activity_frequency(dataframe: pd.DataFrame) -> tuple[dict[str, int], dict[str, int], int, int]:
+    """Return event counts, case counts, total cases, and total events per activity."""
+    case_col = "case:concept:name"
+    activity_col = "concept:name"
+    event_counts = {
+        str(activity): int(count)
+        for activity, count in dataframe[activity_col].value_counts().items()
+    }
+    case_counts: dict[str, int] = defaultdict(int)
+    for _, group in dataframe.groupby(case_col, sort=False):
+        for activity in set(group[activity_col].astype(str).tolist()):
+            case_counts[activity] += 1
+    total_cases = int(dataframe[case_col].nunique())
+    total_events = int(len(dataframe))
+    return dict(event_counts), dict(case_counts), total_cases, total_events
+
+
 def analyze_event_log(csv_path: str | Path) -> ProcessMiningResult:
     """Discover variants, waiting times, rework, and outliers from a CSV event log."""
     path = Path(csv_path)
@@ -109,12 +126,19 @@ def analyze_event_log(csv_path: str | Path) -> ProcessMiningResult:
         timestamp_key="timestamp",
     )
     event_log = pm4py.convert_to_event_log(dataframe)
+    waiting = _avg_waiting_times(dataframe)
+    event_counts, case_counts, total_cases, total_events = _activity_frequency(dataframe)
 
     result = ProcessMiningResult(
         most_frequent_variant=_most_frequent_variant(event_log),
-        avg_waiting_time_per_activity=_avg_waiting_times(dataframe),
+        avg_waiting_time_per_activity=waiting,
         rework_activities=_rework_activities(dataframe),
         flagged_exceptions=_flagged_exceptions(dataframe),
+        activity_event_counts=event_counts,
+        activity_case_counts=case_counts,
+        total_cases=total_cases,
+        total_events=total_events,
+        timing_available=bool(waiting),
     )
     logger.info(
         "process_mining_complete",
@@ -122,6 +146,8 @@ def analyze_event_log(csv_path: str | Path) -> ProcessMiningResult:
             "variant_length": len(result.most_frequent_variant),
             "rework_count": len(result.rework_activities),
             "exception_count": len(result.flagged_exceptions),
+            "timing_available": result.timing_available,
+            "total_cases": result.total_cases,
         },
     )
     return result

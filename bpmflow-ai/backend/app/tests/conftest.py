@@ -1,26 +1,23 @@
 """Shared test fixtures for Agent 3 tests."""
 
-import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+
+import pytest
 
 from app.agents.agent3_resources import (
     InMemoryResourceRepository,
-    create_human_evidence,
     create_budget_evidence,
-    create_human_requirement,
-    create_budget_requirement,
-    get_tenant_a_id,
-    get_tenant_b_id,
+    create_human_evidence,
     get_requester_id,
     get_resource_id_1,
     get_resource_id_2,
-    get_resource_id_3,
+    get_tenant_a_id,
+    get_tenant_b_id,
 )
 from app.agents.agent3_resources.fixtures import FIXTURE_REFERENCE_TIMESTAMP
 
-UTC = timezone.utc
+UTC = UTC
 
 
 def utc_datetime(*args, **kwargs) -> datetime:

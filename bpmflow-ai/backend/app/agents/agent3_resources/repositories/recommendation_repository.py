@@ -2,75 +2,62 @@
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
-from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..schemas import (
-    AllocationRequest,
     AllocationRecommendation,
-    HumanResourceRequirement,
+    AllocationRequest,
     BudgetResourceRequirement,
-    RequirementResult,
-    RankedCandidate,
-    ExcludedResource,
-    ResourceGap,
-    ResourceAlternative,
     BudgetValidationChecks,
-    RecommendationStatus,
+    ExcludedResource,
+    HumanResourceRequirement,
+    RankedCandidate,
+    ResourceAlternative,
+    ResourceGap,
 )
 from .persistence_exceptions import (
-    PersistenceError,
-    PersistenceValidationError,
     PersistenceConflictError,
     PersistenceLookupError,
     PersistenceTransactionError,
+    PersistenceValidationError,
 )
 from .write_mappers import (
-    map_request_to_allocation_request,
-    map_requirement_to_allocation_requirement,
-    map_recommendation_to_allocation_recommendation,
-    map_candidate_to_allocation_candidate,
-    map_exclusion_to_allocation_exclusion,
-    map_exclusion_reason_to_allocation_exclusion_reason,
-    map_gap_to_resource_gap,
     map_alternative_to_resource_alternative,
     map_budget_validation_to_budget_validation_result,
+    map_candidate_to_allocation_candidate,
     map_evidence_link_to_recommendation_evidence_link,
+    map_exclusion_reason_to_allocation_exclusion_reason,
+    map_exclusion_to_allocation_exclusion,
+    map_gap_to_resource_gap,
+    map_recommendation_to_allocation_recommendation,
+    map_request_to_allocation_request,
+    map_requirement_to_allocation_requirement,
     validate_timezone_aware,
 )
 from .write_table_mapping import (
-    SQL_SELECT_REQUEST_BY_IDEMPOTENCY,
-    SQL_SELECT_RECOMMENDATION_ID_BY_REQUEST,
-    SQL_SELECT_REQUIREMENTS,
-    SQL_SELECT_NEXT_RECOMMENDATION_VERSION,
-    SQL_INSERT_ALLOCATION_REQUEST,
-    SQL_INSERT_ALLOCATION_REQUIREMENT,
-    SQL_INSERT_ALLOCATION_RECOMMENDATION,
     SQL_INSERT_ALLOCATION_CANDIDATE,
     SQL_INSERT_ALLOCATION_EXCLUSION,
     SQL_INSERT_ALLOCATION_EXCLUSION_REASON,
-    SQL_INSERT_RESOURCE_GAP,
-    SQL_INSERT_RESOURCE_ALTERNATIVE,
+    SQL_INSERT_ALLOCATION_RECOMMENDATION,
+    SQL_INSERT_ALLOCATION_REQUEST,
+    SQL_INSERT_ALLOCATION_REQUIREMENT,
     SQL_INSERT_BUDGET_VALIDATION,
     SQL_INSERT_EVIDENCE_LINK,
+    SQL_INSERT_RESOURCE_ALTERNATIVE,
+    SQL_INSERT_RESOURCE_GAP,
     SQL_MARK_SUPERSEDED,
-    SQL_SELECT_RECOMMENDATION_HEADER,
     SQL_SELECT_LATEST_RECOMMENDATION_HEADER,
-    SQL_SELECT_REQUEST_METADATA,
+    SQL_SELECT_NEXT_RECOMMENDATION_VERSION,
+    SQL_SELECT_RECOMMENDATION_HEADER,
+    SQL_SELECT_RECOMMENDATION_ID_BY_REQUEST,
+    SQL_SELECT_REQUEST_BY_IDEMPOTENCY,
     SQL_SELECT_REQUIREMENTS,
-    SQL_SELECT_CANDIDATES,
-    SQL_SELECT_EXCLUSIONS,
-    SQL_SELECT_GAPS,
-    SQL_SELECT_ALTERNATIVES,
-    SQL_SELECT_BUDGET_VALIDATIONS,
-    SQL_SELECT_EVIDENCE_LINKS,
 )
 
 
@@ -296,7 +283,7 @@ class RecommendationWriteRepository:
         self,
         tenant_id: UUID,
         recommendation_id: UUID,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get a recommendation by ID.
 
         Args:
@@ -339,7 +326,7 @@ class RecommendationWriteRepository:
         self,
         tenant_id: UUID,
         correlation_id: UUID,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Get the latest recommendation by correlation ID.
 
         Args:
@@ -408,7 +395,7 @@ class RecommendationWriteRepository:
         session: AsyncSession,
         tenant_id: UUID,
         correlation_id: UUID,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Check if request already exists by idempotency key."""
         idempotency_key = f"{correlation_id}_{tenant_id}"
         result = await session.execute(
@@ -426,7 +413,7 @@ class RecommendationWriteRepository:
         session: AsyncSession,
         tenant_id: UUID,
         request_id: UUID,
-    ) -> Optional[UUID]:
+    ) -> UUID | None:
         """Get existing recommendation ID for a request."""
         result = await session.execute(
             text(SQL_SELECT_RECOMMENDATION_ID_BY_REQUEST),
@@ -443,7 +430,7 @@ class RecommendationWriteRepository:
         session: AsyncSession,
         tenant_id: UUID,
         request_id: UUID,
-    ) -> Dict[str, UUID]:
+    ) -> dict[str, UUID]:
         """Load existing requirement IDs for a request, mapped by resource_type.
 
         Args:
@@ -586,10 +573,10 @@ class RecommendationWriteRepository:
     async def _insert_candidates(
         self,
         session: AsyncSession,
-        candidates: List[RankedCandidate],
+        candidates: list[RankedCandidate],
         recommendation_id: UUID,
         request_id: UUID,
-        requirement_id: Optional[UUID],
+        requirement_id: UUID | None,
         tenant_id: UUID,
     ) -> None:
         """Insert allocation candidates."""
@@ -610,10 +597,10 @@ class RecommendationWriteRepository:
     async def _insert_exclusions(
         self,
         session: AsyncSession,
-        exclusions: List[ExcludedResource],
+        exclusions: list[ExcludedResource],
         recommendation_id: UUID,
         request_id: UUID,
-        requirement_id: Optional[UUID],
+        requirement_id: UUID | None,
         tenant_id: UUID,
     ) -> None:
         """Insert allocation exclusions and reasons."""
@@ -653,7 +640,7 @@ class RecommendationWriteRepository:
         recommendation_id: UUID,
         request_id: UUID,
         tenant_id: UUID,
-        requirement_id: Optional[UUID],
+        requirement_id: UUID | None,
     ) -> UUID:
         """Insert resource gap."""
         gap_data = map_gap_to_resource_gap(
@@ -697,7 +684,7 @@ class RecommendationWriteRepository:
         validation: BudgetValidationChecks,
         recommendation_id: UUID,
         request_id: UUID,
-        requirement_id: Optional[UUID],
+        requirement_id: UUID | None,
         tenant_id: UUID,
     ) -> None:
         """Insert budget validation result."""

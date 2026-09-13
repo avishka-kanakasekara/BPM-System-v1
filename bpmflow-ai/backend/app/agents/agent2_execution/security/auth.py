@@ -12,8 +12,8 @@ this secret. Do not introduce new HTTP dependencies on
 ``get_current_agent_caller``.
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -36,7 +36,7 @@ def get_jwt_secret() -> str:
 
 
 def create_access_token(
-    data: Dict[str, Any], expires_delta: Optional[timedelta] = None
+    data: dict[str, Any], expires_delta: timedelta | None = None
 ) -> str:
     """
     Issue a signed JWT access token for inter-agent API calls.
@@ -46,7 +46,7 @@ def create_access_token(
     :return: Encoded JWT token string
     """
     to_encode = data.copy()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if expires_delta:
         expire = now + expires_delta
@@ -58,7 +58,7 @@ def create_access_token(
     return jwt.encode(to_encode, secret, algorithm=ALGORITHM)
 
 
-def verify_access_token(token: str) -> Dict[str, Any]:
+def verify_access_token(token: str) -> dict[str, Any]:
     """
     Verify and decode a JWT token string.
 
@@ -82,8 +82,8 @@ security_bearer = HTTPBearer(auto_error=False)
 
 
 def get_current_agent_caller(
-    credentials: Optional[HTTPAuthorizationCredentials] = Security(security_bearer),
-) -> Dict[str, Any]:
+    credentials: HTTPAuthorizationCredentials | None = Security(security_bearer),
+) -> dict[str, Any]:
     """
     FastAPI dependency to enforce Bearer JWT authentication on endpoints.
     """

@@ -1,13 +1,14 @@
 """Map normalized read-path rows into Agent 3 budget evidence models."""
 
-from datetime import datetime, timezone
+from collections.abc import Mapping
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 from uuid import UUID
 
 from ...constants import ResourceType
 from ...schemas import BudgetResourceEvidence, validate_timezone_aware
-from ..exceptions import CrossTenantGraphError, MissingEvidenceError, MappingError
+from ..exceptions import CrossTenantGraphError, MappingError, MissingEvidenceError
 
 
 def _require_uuid(value: Any, field_name: str) -> UUID:
@@ -34,7 +35,7 @@ def _require_decimal(value: Any, field_name: str) -> Decimal:
 def map_budget_resource_evidence(
     resource_row: Mapping[str, Any],
     profile_row: Mapping[str, Any],
-    evidence_rows: List[Mapping[str, Any]],
+    evidence_rows: list[Mapping[str, Any]],
     expected_tenant_id: UUID,
 ) -> BudgetResourceEvidence:
     """Map joined rows into BudgetResourceEvidence."""
@@ -58,9 +59,9 @@ def map_budget_resource_evidence(
     if not profile_row:
         raise MissingEvidenceError("BUDGET resource missing budget_resource_profiles row")
 
-    evidence_references: Dict[str, Any] = {}
-    evidence_checked_at: Optional[datetime] = None
-    evidence_valid_until: Optional[datetime] = None
+    evidence_references: dict[str, Any] = {}
+    evidence_checked_at: datetime | None = None
+    evidence_valid_until: datetime | None = None
 
     for row in evidence_rows:
         key = row.get("evidence_key")

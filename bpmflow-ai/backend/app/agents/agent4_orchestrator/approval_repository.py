@@ -4,10 +4,9 @@ In-memory for unit tests; SQLAlchemy async for PostgreSQL.
 When the Postgres pooler is unreachable, list/get fall back to Supabase REST.
 """
 
-from abc import ABC, abstractmethod
 import asyncio
-from datetime import datetime, timezone
-from typing import Dict, List
+from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -29,7 +28,7 @@ from .exceptions import (
     ApprovalNotFoundError,
     DatabasePersistenceError,
 )
-from .repository import AUDIT_ACTION_UPDATED, AUDIT_ENTITY_PROCESS
+from .repository import AUDIT_ENTITY_PROCESS
 from .schemas import ApprovalRequestRecord
 
 AUDIT_ACTION_CREATED = "created"
@@ -37,7 +36,7 @@ AUDIT_ACTION_COMPLETED = "completed"
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def approval_from_orm(row: ApprovalRequest) -> ApprovalRequestRecord:
@@ -79,7 +78,7 @@ def approval_from_rest(row: dict) -> ApprovalRequestRecord:
     )
 
 
-def _list_approvals_rest(status: ApprovalStatus | None) -> List[ApprovalRequestRecord]:
+def _list_approvals_rest(status: ApprovalStatus | None) -> list[ApprovalRequestRecord]:
     params: dict[str, str] = {
         "select": "id,process_id,task_id,requested_by,approver_id,status,risk_level,reason,decision,comments,created_at,decided_at",
         "order": "created_at.desc",
@@ -131,19 +130,18 @@ def _create_approval_rest(
             "reason": reason,
         },
     )
-    rest_insert(
-        "audit_logs",
-        {
-            "entity_type": AUDIT_ENTITY_PROCESS,
-            "entity_id": str(process_id),
-            "action": AUDIT_ACTION_CREATED,
-            "performed_by": str(requested_by) if requested_by else None,
-            "new_values": {
-                "approval_request_id": row.get("id"),
-                "status": ApprovalStatus.PENDING.value,
-                "risk_level": risk_level.value,
-                "reason": reason,
-            },
+    from app.core.audit_writer import write_bpm_audit_rest
+
+    write_bpm_audit_rest(
+        entity_type=AUDIT_ENTITY_PROCESS,
+        entity_id=process_id,
+        action=AUDIT_ACTION_CREATED,
+        performed_by=requested_by,
+        new_values={
+            "approval_request_id": row.get("id"),
+            "status": ApprovalStatus.PENDING.value,
+            "risk_level": risk_level.value,
+            "reason": reason,
         },
     )
     return approval_from_rest(row)
@@ -170,20 +168,19 @@ def _decide_approval_rest(
             "decided_at": decided_at,
         },
     )
-    rest_insert(
-        "audit_logs",
-        {
-            "entity_type": AUDIT_ENTITY_PROCESS,
-            "entity_id": str(current.process_id),
-            "action": AUDIT_ACTION_COMPLETED,
-            "performed_by": str(approver_id),
-            "old_values": {"status": ApprovalStatus.PENDING.value, "decision": None},
-            "new_values": {
-                "approval_request_id": str(approval_id),
-                "status": decision.value,
-                "decision": decision.value,
-                "comments": comments,
-            },
+    from app.core.audit_writer import write_bpm_audit_rest
+
+    write_bpm_audit_rest(
+        entity_type=AUDIT_ENTITY_PROCESS,
+        entity_id=current.process_id,
+        action=AUDIT_ACTION_COMPLETED,
+        performed_by=approver_id,
+        old_values={"status": ApprovalStatus.PENDING.value, "decision": None},
+        new_values={
+            "approval_request_id": str(approval_id),
+            "status": decision.value,
+            "decision": decision.value,
+            "comments": comments,
         },
     )
     if isinstance(row, dict) and row.get("id"):
@@ -221,7 +218,7 @@ class ApprovalRepository(ABC):
     async def list_approval_requests(
         self,
         status: ApprovalStatus | None = None,
-    ) -> List[ApprovalRequestRecord]:
+    ) -> list[ApprovalRequestRecord]:
         """Return approval requests, optionally filtered by status."""
 
     @abstractmethod
@@ -253,8 +250,8 @@ class InMemoryApprovalRepository(ApprovalRepository):
     """In-memory stand-in used by unit tests."""
 
     def __init__(self) -> None:
-        self._records: Dict[UUID, ApprovalRequestRecord] = {}
-        self.audit_events: List[dict] = []
+        self._records: dict[UUID, ApprovalRequestRecord] = {}
+        self.audit_events: list[dict] = []
 
     async def create_approval_request(
         self,
@@ -316,7 +313,7 @@ class InMemoryApprovalRepository(ApprovalRepository):
     async def list_approval_requests(
         self,
         status: ApprovalStatus | None = None,
-    ) -> List[ApprovalRequestRecord]:
+    ) -> list[ApprovalRequestRecord]:
         records = list(self._records.values())
         if status is not None:
             records = [record for record in records if record.status is status]
@@ -522,7 +519,7 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
     async def list_approval_requests(
         self,
         status: ApprovalStatus | None = None,
-    ) -> List[ApprovalRequestRecord]:
+    ) -> list[ApprovalRequestRecord]:
         if self._prefer_rest():
             return await asyncio.to_thread(_list_approvals_rest, status)
         try:

@@ -5,7 +5,6 @@ Computes per-task waiting time (task start timestamp − previous task completio
 and average task stage duration (task completion timestamp − task start timestamp) per activity.
 """
 
-from typing import Dict, List
 import pandas as pd
 
 
@@ -31,7 +30,7 @@ def calculate_per_event_waiting_times(df: pd.DataFrame) -> pd.DataFrame:
     return df_sorted
 
 
-def calculate_activity_waiting_times(df: pd.DataFrame) -> Dict[str, float]:
+def calculate_activity_waiting_times(df: pd.DataFrame) -> dict[str, float]:
     """
     Compute average waiting time in hours grouped by activity/task name.
 
@@ -51,7 +50,7 @@ def calculate_activity_waiting_times(df: pd.DataFrame) -> Dict[str, float]:
     return {str(act): round(float(val), 4) for act, val in avg_by_activity.items()}
 
 
-def calculate_activity_stage_durations(df: pd.DataFrame) -> Dict[str, float]:
+def calculate_activity_stage_durations(df: pd.DataFrame) -> dict[str, float]:
     """
     Compute average task stage duration in hours (TASK_COMPLETED timestamp - TASK_STARTED timestamp)
     grouped by activity/stage name.

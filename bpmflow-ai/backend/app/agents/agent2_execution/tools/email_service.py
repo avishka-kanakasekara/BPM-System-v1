@@ -7,23 +7,19 @@ SMTP dispatch / dry-run logging, audit logging, and intelligent Gemini content d
 
 import logging
 import os
-import smtplib
 import uuid
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.communication.schemas import EmailRequest, EmailResult
-from app.agents.agent2_execution.config import settings
-from app.agents.agent2_execution.database.models import EmailEvent
 from app.agents.agent2_execution.llm import prompts
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
 from app.agents.agent2_execution.security import audit
 from app.agents.agent2_execution.security.tool_guard import load_allowed_email_recipients
+from app.agents.agent2_execution.tools.email_provider import dispatch_email
 
 logger = logging.getLogger("agent_2.tools.email_service")
 
@@ -48,11 +44,11 @@ class EmailService:
     SMTP dispatch / dry-run logging, and database tracking.
     """
 
-    def __init__(self, session: Optional[AsyncSession] = None):
+    def __init__(self, session: AsyncSession | None = None):
         self.session = session
         self.allowed_recipients = load_allowed_email_recipients()
 
-    def validate_recipient(self, email: str, recipient_role: str = "") -> Tuple[bool, str]:
+    def validate_recipient(self, email: str, recipient_role: str = "") -> tuple[bool, str]:
         """
         Enforce Rule #6 recipient allow-list validation.
         
@@ -74,7 +70,7 @@ class EmailService:
 
         return True, "Recipient authorized"
 
-    def render_template(self, template_name: str, context: Dict[str, Any]) -> str:
+    def render_template(self, template_name: str, context: dict[str, Any]) -> str:
         """
         Render a branded Jinja2 HTML email template.
 
@@ -127,38 +123,17 @@ class EmailService:
         }
         html_body = self.render_template(template_name, context)
 
-        message_id = f"msg-{uuid.uuid4().hex[:12]}"
-        status_result = "DRY_RUN" if settings.EMAIL_DRY_RUN else "SENT"
-        error_msg = ""
-
-        # Step 3: SMTP Dispatch or Dry-Run Logging
-        if settings.EMAIL_DRY_RUN:
-            logger.info(
-                f"[EMAIL DRY RUN] To: {request.recipient} | Subject: {request.subject!r} | Template: {template_name}"
-            )
-        else:
-            try:
-                msg = MIMEMultipart("alternative")
-                msg["Subject"] = request.subject
-                msg["From"] = settings.SMTP_FROM_EMAIL or "noreply@bpmflow-ai.com"
-                msg["To"] = request.recipient
-                msg.attach(MIMEText(request.body, "plain"))
-                msg.attach(MIMEText(html_body, "html"))
-
-                smtp_host = settings.SMTP_HOST or "localhost"
-                smtp_port = settings.SMTP_PORT or 587
-
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
-                    if settings.SMTP_USERNAME and settings.SMTP_PASSWORD:
-                        server.starttls()
-                        server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-                    server.send_message(msg)
-
-                status_result = "SENT"
-            except Exception as e:
-                logger.error(f"SMTP dispatch failed: {e}")
-                status_result = "FAILED"
-                error_msg = str(e)
+        idempotency_key = f"{request.process_id}-{request.task_id}-send_email"
+        dispatch = await dispatch_email(
+            recipient=request.recipient,
+            subject=request.subject,
+            body_plain=request.body,
+            body_html=html_body,
+            idempotency_key=idempotency_key,
+        )
+        message_id = dispatch.message_id or f"msg-{uuid.uuid4().hex[:12]}"
+        status_result = dispatch.status
+        error_msg = dispatch.error
 
         # Step 4: Audit Log
         # NOTE: EmailEvent requires a valid execution_receipt_id foreign key. Tool handlers
@@ -175,10 +150,12 @@ class EmailService:
             payload={"recipient": request.recipient, "message_id": message_id},
         )
 
+        if status_result == "SENT":
+            status_result = "ACCEPTED_BY_PROVIDER"
         return EmailResult(status=status_result, message_id=message_id, error=error_msg)
 
     async def draft_intelligent_email(
-        self, context: Dict[str, Any], gemini_client: Optional[GeminiClient] = None
+        self, context: dict[str, Any], gemini_client: GeminiClient | None = None
     ) -> IntelligentEmailDraft:
         """
         Use Gemini to draft intelligent email subject, body, and priority based on process context.
@@ -209,8 +186,3 @@ class EmailService:
         )
         return draft
 
-    def retry(self, request: EmailRequest):
-        """
-        # TODO: Reference Prompt 8 Retry Manager — retry logic managed centrally in execution engine.
-        """
-        pass

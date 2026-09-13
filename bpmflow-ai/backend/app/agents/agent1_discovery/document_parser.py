@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
@@ -29,6 +29,8 @@ REASON_MISSING_FILENAME = "MISSING_FILENAME"
 REASON_PATH_TRAVERSAL = "PATH_TRAVERSAL"
 REASON_DISALLOWED_EXTENSION = "DISALLOWED_EXTENSION"
 REASON_FILE_TOO_LARGE = "FILE_TOO_LARGE"
+REASON_MIME_MISMATCH = "MIME_MISMATCH"
+REASON_MAGIC_BYTE_MISMATCH = "MAGIC_BYTE_MISMATCH"
 
 EXTRACTION_EMPTY_FILE = "EMPTY_FILE"
 EXTRACTION_FILE_NOT_FOUND = "FILE_NOT_FOUND"
@@ -43,12 +45,41 @@ _MIME_BY_EXTENSION = {
     "csv": "text/csv",
 }
 
+_MAGIC_PREFIXES: dict[str, tuple[bytes, ...]] = {
+    "pdf": (b"%PDF-",),
+    "docx": (b"PK\x03\x04",),
+}
+
+
+def _mime_matches_extension(mime_type: str | None, extension: str) -> bool:
+    expected = _MIME_BY_EXTENSION.get(extension)
+    if not mime_type or not expected:
+        return True
+    declared = mime_type.split(";", 1)[0].strip().lower()
+    return declared == expected.lower()
+
+
+def _verify_magic_bytes(extension: str, content: bytes) -> bool:
+    if extension == "csv":
+        sample = content[:8192]
+        if b"\x00" in sample:
+            return False
+        try:
+            sample.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+        return True
+    prefixes = _MAGIC_PREFIXES.get(extension, ())
+    if not prefixes:
+        return True
+    return any(content.startswith(prefix) for prefix in prefixes)
+
 
 def _original_filename(file: Any) -> str:
     return getattr(file, "filename", None) or ""
 
 
-def _declared_mime(file: Any) -> Optional[str]:
+def _declared_mime(file: Any) -> str | None:
     return getattr(file, "content_type", None)
 
 
@@ -100,11 +131,11 @@ def _persist_and_log(
     file_id,
     actor: str,
     original_filename: str,
-    sanitized_name: Optional[str],
-    mime_type: Optional[str],
+    sanitized_name: str | None,
+    mime_type: str | None,
     size_bytes: int,
     status: str,
-    reason: Optional[str],
+    reason: str | None,
 ) -> None:
     accepted = status == "accepted"
     logger.info(
@@ -165,7 +196,7 @@ def validate_and_ingest(file: Any, db: Session | None, *, actor: str = DEFAULT_A
     original_name = _original_filename(file)
     mime_type = _declared_mime(file)
     size_bytes = 0
-    sanitized_name: Optional[str] = None
+    sanitized_name: str | None = None
 
     def reject(reason: str, size: int = 0) -> UploadResult:
         _persist_and_log(
@@ -202,6 +233,12 @@ def validate_and_ingest(file: Any, db: Session | None, *, actor: str = DEFAULT_A
     content = _read_bytes(file)
     size_bytes = len(content)
     mime_type = mime_type or _MIME_BY_EXTENSION.get(extension)
+
+    if not _mime_matches_extension(mime_type, extension):
+        return reject(REASON_MIME_MISMATCH, size=size_bytes)
+
+    if not _verify_magic_bytes(extension, content):
+        return reject(REASON_MAGIC_BYTE_MISMATCH, size=size_bytes)
 
     if size_bytes > settings.max_upload_bytes:
         return reject(REASON_FILE_TOO_LARGE, size=size_bytes)

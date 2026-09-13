@@ -14,11 +14,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ConfigDict, field_serializer
-
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 # ============================================================================
 # Error Response Schema
@@ -39,7 +38,7 @@ class Agent3APIError(BaseModel):
 
     error_code: str
     message: str
-    correlation_id: Optional[UUID] = None
+    correlation_id: UUID | None = None
     retryable: bool = False
 
 
@@ -81,15 +80,15 @@ class RecommendationSummary(BaseModel):
     status: str
     persisted_at: datetime
     explanation: str = ""
-    confidence: Optional[Decimal] = None
+    confidence: Decimal | None = None
     requires_human_approval: bool = True
     manual_intervention_required: bool = False
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    retryable: Optional[bool] = None
+    error_code: str | None = None
+    error_message: str | None = None
+    retryable: bool | None = None
 
     @field_serializer('confidence')
-    def serialize_confidence(self, value: Optional[Decimal]) -> Optional[str]:
+    def serialize_confidence(self, value: Decimal | None) -> str | None:
         """Serialize Decimal to string for decimal-safe JSON representation."""
         return str(value) if value is not None else None
 
@@ -133,7 +132,7 @@ class PersistedAllocationResponse(BaseModel):
     recommendation_status: str
     persisted: bool = True
     persisted_at: datetime
-    recommendation: Dict[str, Any]  # Complete recommendation as dict
+    recommendation: dict[str, Any]  # Complete recommendation as dict
 
     @field_serializer('persisted_at')
     def serialize_persisted_at(self, value: datetime) -> str:

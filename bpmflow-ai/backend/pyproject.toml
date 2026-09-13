@@ -1,0 +1,45 @@
+[project]
+name = "bpmflow-ai-backend"
+version = "0.1.0"
+description = "BPMFlow AI monolith backend"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["app"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008", "B904", "B905", "UP042", "E402", "B017", "B011", "B007"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/tests/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.11"
+files = [
+    "app/core/audit_writer.py",
+    "app/core/redaction.py",
+    "app/core/rate_limit.py",
+    "app/core/shutdown.py",
+    "app/core/circuit_breaker.py",
+    "app/core/http_client.py",
+    "app/core/middleware.py",
+    "app/core/logging.py",
+    "app/schemas/errors.py",
+    "app/messaging/envelope.py",
+    "app/services/email.py",
+    "app/llm/retry.py",
+]
+follow_imports = "skip"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+strict_optional = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["app/tests"]

@@ -11,12 +11,12 @@ Async path (Agent 3, Agent 4, security deps — developer-branch names):
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.ext.asyncio import (
@@ -33,12 +33,26 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+def probe_postgres_sync(*, timeout_seconds: float = 3.0) -> bool:
+    """Lightweight Postgres liveness probe (does not mutate schema)."""
+    url = settings.DATABASE_URL
+    if not url or url.startswith("sqlite"):
+        return False
+    try:
+        engine = _create_sync_engine(url, connect_timeout=int(max(1, timeout_seconds)))
+        _ping(engine)
+        engine.dispose()
+        return True
+    except Exception:
+        return False
+
 _MIGRATION_FILE = (
     Path(__file__).resolve().parents[3] / "supabase" / "migrations" / "0002_agent1_discovery.sql"
 )
 # Global engine and session factory (initialized lazily)
-_engine: Optional[AsyncEngine] = None
-_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 class Base(DeclarativeBase):
@@ -231,12 +245,23 @@ def get_engine() -> AsyncEngine:
                     if not part.lower().startswith("sslmode=")
                 ]
                 database_url = base if not kept else f"{base}?{'&'.join(kept)}"
-            _engine = create_async_engine(
-                database_url,
-                echo=False,
-                poolclass=NullPool,
-                connect_args=connect_args,
-            )
+            use_pooler = ":6543" in database_url or "pooler" in database_url
+            if use_pooler:
+                _engine = create_async_engine(
+                    database_url,
+                    echo=False,
+                    poolclass=NullPool,
+                    connect_args=connect_args,
+                )
+            else:
+                _engine = create_async_engine(
+                    database_url,
+                    echo=False,
+                    pool_size=settings.DB_POOL_SIZE,
+                    max_overflow=settings.DB_MAX_OVERFLOW,
+                    pool_timeout=settings.DB_POOL_TIMEOUT_SECONDS,
+                    connect_args=connect_args,
+                )
         _session_factory = async_sessionmaker(
             _engine,
             class_=AsyncSession,
@@ -308,10 +333,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
+    from app.core.persistence import probe_and_update_status
+
     try:
         get_engine()
     except ValueError:
-        return
+        pass
+    await asyncio.to_thread(probe_and_update_status)
 
 
 async def close_db() -> None:

@@ -31,6 +31,7 @@ from .exceptions import (
     ProcessNotFoundError,
     UnsupportedAgentError,
 )
+from .message_repository import AgentMessageRepository
 from .risk_rules import RiskAnalysisEngine
 from .schemas import (
     ApprovalRequestRecord,
@@ -39,7 +40,7 @@ from .schemas import (
     WorkflowResult,
 )
 from .service import OrchestratorService
-from .state_machine import InvalidTransitionError
+from .state_machine import InvalidTransitionError, TransitionContext
 
 
 def _load_invoice_match_context(process_id: UUID) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -77,14 +78,20 @@ class Agent4Workflow:
         approval_service: ApprovalService | None = None,
         communication: AgentCommunicationService | None = None,
         exception_service: ExceptionService | None = None,
+        policy_retrieval: Any | None = None,
+        message_repository: AgentMessageRepository | None = None,
     ) -> None:
         if approval_service is None:
             raise ValueError("ApprovalService is required for Agent4Workflow")
         self._orchestrator = orchestrator
         self._risk_engine = risk_engine or RiskAnalysisEngine()
         self._approvals = approval_service
-        self._communication = communication or AgentCommunicationService()
+        self._message_repository = message_repository
+        self._communication = communication or AgentCommunicationService(
+            message_repository=message_repository
+        )
         self._exceptions = exception_service
+        self._policy_retrieval = policy_retrieval
 
     async def capture_failure(
         self,
@@ -214,6 +221,23 @@ class Agent4Workflow:
         if not result.success:
             return result
 
+        # Persist the full Agent 3 allocation snapshot on the process so the
+        # frontend can render ranked candidates / budget / gaps after refresh.
+        if result.agent_response:
+            try:
+                from app.agents.agent2_execution.database.persistence import (
+                    merge_process_metadata,
+                )
+
+                await merge_process_metadata(
+                    None,
+                    str(process_id),
+                    {"agent3_allocation": result.agent_response},
+                )
+            except Exception:
+                # Planning succeeded; metadata write must not block the stage move.
+                pass
+
         await self._orchestrator.move_process(
             process_id,
             WorkflowStage.RISK_REVIEW,
@@ -228,9 +252,66 @@ class Agent4Workflow:
         context: RiskEvaluationContext,
         task_id: UUID | None = None,
         requested_by: UUID | None = None,
+        tenant_id: UUID | None = None,
     ) -> WorkflowResult:
-        """Run the risk engine at RISK_REVIEW and open an approval gate if needed."""
-        assessment = self._risk_engine.evaluate(context)
+        """Run risk review at RISK_REVIEW with optional company-policy enrichment."""
+        enriched = await self._enrich_risk_context(
+            process_id, context, tenant_id=tenant_id
+        )
+        self._record_policy_audit(
+            process_id,
+            "RISK_ANALYSIS_STARTED",
+            {
+                "tenant_id": str(tenant_id) if tenant_id else None,
+                "has_policy_snapshot": enriched.policy_snapshot is not None,
+            },
+        )
+        if enriched.policy_snapshot is not None:
+            self._record_policy_audit(
+                process_id,
+                "POLICY_RETRIEVED",
+                {
+                    "status": enriched.policy_snapshot.status.value,
+                    "policy_versions": enriched.policy_snapshot.policy_versions,
+                    "confidence": (
+                        str(enriched.policy_snapshot.confidence)
+                        if enriched.policy_snapshot.confidence is not None
+                        else None
+                    ),
+                    "message": enriched.policy_snapshot.message,
+                },
+            )
+            if enriched.policy_snapshot.status.value == "CONFLICT":
+                self._record_policy_audit(
+                    process_id,
+                    "POLICY_CONFLICT",
+                    {"message": enriched.policy_snapshot.message},
+                )
+            if enriched.policy_snapshot.status.value in (
+                "NOT_FOUND",
+                "INSUFFICIENT_EVIDENCE",
+            ):
+                self._record_policy_audit(
+                    process_id,
+                    "POLICY_UNCERTAINTY",
+                    {"message": enriched.policy_snapshot.message},
+                )
+
+        assessment = self._risk_engine.evaluate(enriched)
+        decision = self._build_policy_decision(process_id, assessment)
+        if assessment.findings:
+            self._record_policy_audit(
+                process_id,
+                "RISK_IDENTIFIED",
+                {
+                    "overall_risk_level": (
+                        assessment.overall_risk_level.value
+                        if assessment.overall_risk_level
+                        else None
+                    ),
+                    "findings": [f.risk_type.value for f in assessment.findings],
+                },
+            )
         try:
             if self._approvals.requires_human_approval(assessment):
                 gate = await self._approvals.apply_risk_assessment(
@@ -238,6 +319,18 @@ class Agent4Workflow:
                     assessment,
                     task_id=task_id,
                     requested_by=requested_by,
+                )
+                self._record_policy_audit(
+                    process_id,
+                    "APPROVAL_REQUIRED",
+                    {
+                        "approval_id": str(gate.approval.id) if gate.approval else None,
+                        "risk_level": (
+                            assessment.overall_risk_level.value
+                            if assessment.overall_risk_level
+                            else None
+                        ),
+                    },
                 )
                 stage = await self._orchestrator.get_current_stage(process_id)
                 return WorkflowResult(
@@ -248,6 +341,46 @@ class Agent4Workflow:
                     human_approval_required=True,
                     approval=gate.approval,
                     risk_assessment=assessment,
+                    policy_decision=decision,
+                    eligible_for_execution=False,
+                )
+
+            if any(f.recommendation.value == "BLOCK_ACTION" for f in assessment.findings):
+                self._record_policy_audit(
+                    process_id,
+                    "EXECUTION_BLOCKED",
+                    {"findings": [f.risk_type.value for f in assessment.findings]},
+                )
+                if self._exceptions is not None:
+                    record = await self._exceptions.create_exception(
+                        process_id=process_id,
+                        description="Risk analysis blocked unauthorized action",
+                        severity=ExceptionSeverity.CRITICAL,
+                        exception_type=ExceptionType.SYSTEM_ERROR,
+                        task_id=task_id,
+                        halt_process=True,
+                    )
+                    stage = await self._orchestrator.get_current_stage(process_id)
+                    return WorkflowResult(
+                        process_id=process_id,
+                        current_stage=stage,
+                        success=False,
+                        message="Execution blocked by risk controls",
+                        error_code="EXECUTION_BLOCKED",
+                        risk_assessment=assessment,
+                        policy_decision=decision,
+                        bpm_exception=record,
+                        eligible_for_execution=False,
+                    )
+                stage = await self._orchestrator.get_current_stage(process_id)
+                return WorkflowResult(
+                    process_id=process_id,
+                    current_stage=stage,
+                    success=False,
+                    message="Execution blocked by risk controls",
+                    error_code="EXECUTION_BLOCKED",
+                    risk_assessment=assessment,
+                    policy_decision=decision,
                     eligible_for_execution=False,
                 )
 
@@ -255,6 +388,12 @@ class Agent4Workflow:
                 process_id,
                 WorkflowStage.WORKFLOW_EXECUTION,
                 reason="No human-approval risk findings",
+                transition_context=TransitionContext(human_approval_required=False),
+            )
+            self._record_policy_audit(
+                process_id,
+                "EXECUTION_AUTHORIZED",
+                {"reason": "No human-approval risk findings"},
             )
             stage = await self._orchestrator.get_current_stage(process_id)
             return WorkflowResult(
@@ -264,12 +403,186 @@ class Agent4Workflow:
                 message="No human approval required; process is eligible for execution",
                 human_approval_required=False,
                 risk_assessment=assessment,
+                policy_decision=decision,
                 eligible_for_execution=True,
             )
         except InvalidTransitionError:
             raise
         except (DatabasePersistenceError, ProcessNotFoundError):
             raise
+
+    def _record_policy_audit(
+        self, process_id: UUID, action: str, metadata: dict[str, Any]
+    ) -> None:
+        """Best-effort audit write for policy/risk events (never raises)."""
+        try:
+            from uuid import uuid4 as _uuid4
+
+            from app.core.supabase_rest import rest_insert, supabase_rest_configured
+
+            if not supabase_rest_configured():
+                return
+            rest_insert(
+                "audit_logs",
+                {
+                    "id": str(_uuid4()),
+                    "entity_type": "process",
+                    "entity_id": str(process_id),
+                    "action": action,
+                    "performed_by": None,
+                    "old_values": None,
+                    "new_values": metadata,
+                },
+            )
+        except Exception:
+            return
+
+    async def _enrich_risk_context(
+        self,
+        process_id: UUID,
+        context: RiskEvaluationContext,
+        *,
+        tenant_id: UUID | None,
+    ) -> RiskEvaluationContext:
+        from decimal import Decimal
+
+        from .risk_facts import merge_context_with_risk_facts, risk_facts_from_process_payload
+
+        meta, process_json = await asyncio.to_thread(_load_invoice_match_context, process_id)
+        facts = risk_facts_from_process_payload(process_json)
+        if not facts and isinstance(meta, dict):
+            nested = meta.get("process_json")
+            facts = risk_facts_from_process_payload(nested if isinstance(nested, dict) else {})
+
+        discovery_confidence = None
+        if isinstance(process_json, dict):
+            conf = process_json.get("confidence")
+            if isinstance(conf, dict):
+                values = [Decimal(str(v)) for v in conf.values() if v is not None]
+                if values:
+                    discovery_confidence = sum(values) / Decimal(len(values))
+
+        # Agent 3 budget request amount can stand in when discovery has no amount.
+        if facts.get("purchase_amount") is None and isinstance(meta, dict):
+            allocation = meta.get("agent3_allocation")
+            if isinstance(allocation, dict):
+                req = allocation.get("request") or allocation.get("budget_requirements")
+                if isinstance(req, dict) and req.get("required_amount") is not None:
+                    facts = {
+                        **facts,
+                        "purchase_amount": str(req["required_amount"]),
+                        "currency": facts.get("currency") or req.get("currency"),
+                    }
+
+        updates = merge_context_with_risk_facts(
+            purchase_amount=context.purchase_amount,
+            currency=context.currency,
+            provided_evidence=context.provided_evidence,
+            confidence=context.confidence,
+            facts=facts,
+            discovery_confidence=discovery_confidence,
+        )
+        enriched = context.model_copy(update=updates) if updates else context
+
+        if enriched.policy_snapshot is not None:
+            return enriched
+        if tenant_id is None or self._policy_retrieval is None:
+            return enriched
+
+        available_budget = enriched.available_budget
+        if available_budget is None:
+            available_budget = self._load_available_budget(process_id)
+
+        snapshot = await self._policy_retrieval.build_risk_snapshot(
+            tenant_id=tenant_id,
+            purchase_amount=enriched.purchase_amount,
+            available_budget=available_budget,
+        )
+        policy_updates: dict[str, Any] = {"policy_snapshot": snapshot}
+        if available_budget is not None and enriched.available_budget is None:
+            policy_updates["available_budget"] = available_budget
+        if snapshot.currency and not enriched.currency:
+            policy_updates["currency"] = snapshot.currency
+        return enriched.model_copy(update=policy_updates)
+
+    def _load_available_budget(self, process_id: UUID):
+        try:
+            from decimal import Decimal
+
+            from app.core.supabase_rest import rest_select, supabase_rest_configured
+
+            if not supabase_rest_configured():
+                return None
+            rows = rest_select(
+                "processes",
+                {"id": f"eq.{process_id}", "select": "metadata_json", "limit": "1"},
+            )
+            if not rows:
+                return None
+            meta = rows[0].get("metadata_json") if isinstance(rows[0], dict) else None
+            if not isinstance(meta, dict):
+                return None
+            allocation = meta.get("agent3_allocation")
+            if not isinstance(allocation, dict):
+                return None
+            recommendation = allocation.get("recommendation")
+            if not isinstance(recommendation, dict):
+                return None
+            budget_result = recommendation.get("budget_requirement_result")
+            if not isinstance(budget_result, dict):
+                return None
+            validation = budget_result.get("budget_validation")
+            if not isinstance(validation, dict):
+                return None
+            raw = validation.get("available_balance")
+            if raw is None:
+                return None
+            return Decimal(str(raw))
+        except Exception:
+            return None
+
+    def _build_policy_decision(self, process_id: UUID, assessment: RiskAssessment):
+        from app.policy_knowledge.schemas import PolicyDecisionPackage
+
+        snapshot = assessment.policy_snapshot
+        findings = [
+            {
+                "category": f.risk_type.value,
+                "reason": f.description,
+                "amount": str(f.amount) if f.amount is not None else None,
+                "threshold": str(f.threshold) if f.threshold is not None else None,
+                "currency": f.currency,
+                "evidence_refs": f.evidence_refs,
+                "policy_version": f.policy_version,
+                "recommendation": f.recommendation.value,
+            }
+            for f in assessment.findings
+        ]
+        approval_required = self._approvals.requires_human_approval(assessment)
+        blocking = approval_required or any(
+            f.recommendation.value == "BLOCK_ACTION" for f in assessment.findings
+        )
+        return PolicyDecisionPackage(
+            process_id=process_id,
+            risk_level=(
+                assessment.overall_risk_level.value
+                if assessment.overall_risk_level
+                else None
+            ),
+            risk_findings=findings,
+            policy_evidence=list(snapshot.evidence) if snapshot else [],
+            evidence_refs=[ref for f in assessment.findings for ref in f.evidence_refs],
+            controls_required=sorted({f.recommendation.value for f in assessment.findings}),
+            approval_required=approval_required,
+            blocking=blocking,
+            confidence=snapshot.confidence if snapshot else None,
+            policy_version=(
+                snapshot.policy_versions[0]
+                if snapshot and snapshot.policy_versions
+                else None
+            ),
+            policy_retrieval_status=snapshot.status if snapshot else None,
+        )
 
     async def request_human_approval(
         self,
@@ -326,6 +639,9 @@ class Agent4Workflow:
                 process_id,
                 WorkflowStage.WORKFLOW_EXECUTION,
                 reason="Human approval granted",
+                transition_context=TransitionContext(
+                    approval_status=ApprovalStatus.APPROVED
+                ),
             )
             result = await self.execute_authorized(
                 process_id,
@@ -341,6 +657,9 @@ class Agent4Workflow:
                 process_id,
                 WorkflowStage.EXCEPTION,
                 reason="Human approval rejected",
+                transition_context=TransitionContext(
+                    approval_status=ApprovalStatus.REJECTED
+                ),
             )
             stage = await self._orchestrator.get_current_stage(process_id)
             return WorkflowResult(
@@ -395,9 +714,9 @@ class Agent4Workflow:
         """Run Agent 2 at WORKFLOW_EXECUTION and advance or record an exception.
 
         On a successful execution receipt the process moves
-        WORKFLOW_EXECUTION → INVOICE_MATCHING. On a failed/blocked receipt or
-        unreachable Agent 2, a BPM exception is recorded (which halts the
-        process via the StateMachine when allowed).
+        WORKFLOW_EXECUTION → INVOICE_MATCHING. On a blocked/policy failure a BPM
+        exception is recorded. Transient Agent 2 / LLM outages leave the process
+        at WORKFLOW_EXECUTION so human approval is not discarded — callers can retry.
         """
         stage = await self._orchestrator.get_current_stage(process_id)
         if stage is not WorkflowStage.WORKFLOW_EXECUTION:
@@ -426,6 +745,9 @@ class Agent4Workflow:
                 process_id,
                 WorkflowStage.INVOICE_MATCHING,
                 reason="Agent 2 execution succeeded",
+                transition_context=TransitionContext(
+                    execution_receipt_status="SUCCESS"
+                ),
             )
             stage = await self._orchestrator.get_current_stage(process_id)
             return result.model_copy(update={"current_stage": stage})
@@ -433,8 +755,40 @@ class Agent4Workflow:
         failure_detail = (
             result.error_message
             or (result.agent_response or {}).get("error_message")
+            or (result.agent_response or {}).get("detail")
             or f"Agent 2 execution did not succeed (receipt_status={receipt_status or 'UNKNOWN'})"
         )
+
+        # Policy / authorization blocks still halt.
+        if receipt_status == "BLOCKED":
+            if self._exceptions is not None:
+                return await self.capture_failure(
+                    process_id,
+                    description=str(failure_detail),
+                    severity=ExceptionSeverity.HIGH,
+                    exception_type=ExceptionType.SYSTEM_ERROR,
+                    task_id=task_id,
+                )
+            return result.model_copy(update={"success": False})
+
+        # Transient LLM/infra failures must not undo human approval.
+        if self._is_retryable_agent2_failure(result, failure_detail=str(failure_detail)):
+            stage = await self._orchestrator.get_current_stage(process_id)
+            return result.model_copy(
+                update={
+                    "success": False,
+                    "current_stage": stage,
+                    "message": (
+                        "Human authorization remains valid, but Agent 2 execution "
+                        "could not complete (temporary LLM/service issue). "
+                        "Retry Execute from the process page."
+                    ),
+                    "error_code": "AGENT2_RETRYABLE_FAILURE",
+                    "error_message": str(failure_detail),
+                    "eligible_for_execution": True,
+                }
+            )
+
         if self._exceptions is not None:
             return await self.capture_failure(
                 process_id,
@@ -444,6 +798,44 @@ class Agent4Workflow:
                 task_id=task_id,
             )
         return result.model_copy(update={"success": False})
+
+    @staticmethod
+    def _is_retryable_agent2_failure(
+        result: WorkflowResult,
+        *,
+        failure_detail: str,
+    ) -> bool:
+        """True for transient LLM/quota/network failures that should not halt the process."""
+        if result.error_code in {"AGENT_UNAVAILABLE", "COMMUNICATION_FAILURE"}:
+            return True
+        payload = result.agent_response or {}
+        if payload.get("error") in {"AGENT2_EXECUTION_FAILED"}:
+            return True
+        blob = " ".join(
+            str(part)
+            for part in (
+                failure_detail,
+                result.error_message,
+                result.message,
+                payload.get("detail"),
+                payload.get("error_message"),
+                payload.get("error"),
+            )
+            if part
+        ).lower()
+        markers = (
+            "resource_exhausted",
+            "429",
+            "quota",
+            "unavailable",
+            "real llm execution is required",
+            "gemini",
+            "timeout",
+            "connection",
+            "ssl",
+            "certificate",
+        )
+        return any(marker in blob for marker in markers)
 
     async def complete_invoice_matching(
         self,
@@ -461,6 +853,7 @@ class Agent4Workflow:
         expected_invoice_number: str | None = None,
         notes: str = "",
         reference: str = "",
+        tenant_id: UUID | None = None,
     ) -> WorkflowResult:
         """Match invoice evidence, then COMPLETED or EXCEPTION.
 
@@ -473,8 +866,10 @@ class Agent4Workflow:
             MISMATCH,
             InvoiceEvidence,
             extract_expected_from_process,
-            match_invoice,
+            extract_receipt_from_process,
             merge_expected,
+            three_way_match,
+            tolerance_from_policy_rules,
         )
 
         stage = await self._orchestrator.get_current_stage(process_id)
@@ -511,12 +906,46 @@ class Agent4Workflow:
             expected_vendor=expected_vendor,
             expected_invoice_number=expected_invoice_number,
         )
-        result = match_invoice(invoice, expected)
+        receipt = extract_receipt_from_process(
+            metadata=metadata,
+            process_json=process_json,
+        )
+        if receipt.amount is None and expected.amount is not None:
+            receipt.amount = expected.amount
+        if receipt.po_reference is None:
+            receipt.po_reference = expected.po_reference
+        if receipt.vendor is None:
+            receipt.vendor = expected.vendor
+        if receipt.currency is None:
+            receipt.currency = expected.currency
+        if receipt.receipt_status is None:
+            receipt.receipt_status = "SUCCESS"
+
+        policy_rules = None
+        if self._policy_retrieval is not None and tenant_id is not None:
+            try:
+                snapshot = await self._policy_retrieval.build_risk_snapshot(
+                    tenant_id=tenant_id,
+                    purchase_amount=expected.amount,
+                )
+                policy_rules = snapshot.rules
+            except Exception:
+                policy_rules = None
+
+        amount_tolerance = tolerance_from_policy_rules(policy_rules)
+        result = three_way_match(
+            po=expected,
+            receipt=receipt,
+            invoice=invoice,
+            amount_tolerance=amount_tolerance,
+        )
         match_payload = {
             "invoice_match_status": result.status,
             "message": result.message,
             "compared_fields": result.compared_fields,
             "mismatches": result.mismatches,
+            "three_way": result.three_way,
+            "amount_tolerance": str(amount_tolerance),
             "notes": invoice.notes or None,
         }
 
@@ -568,6 +997,7 @@ class Agent4Workflow:
             process_id,
             WorkflowStage.COMPLETED,
             reason=reason,
+            transition_context=TransitionContext(invoice_match_status="MATCHED"),
         )
         stage = await self._orchestrator.get_current_stage(process_id)
         return WorkflowResult(

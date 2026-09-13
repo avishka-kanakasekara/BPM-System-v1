@@ -11,7 +11,7 @@ reported but do not fail the check when REST works (many networks block
 from __future__ import annotations
 
 import sys
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote
 
 
 def main() -> int:
@@ -49,9 +49,39 @@ def main() -> int:
         else:
             print(
                 "Migration 0005 columns: MISSING — apply "
-                "supabase/migrations/0005_agent2_execution.sql in the "
+                "supabase/migrations/0007_agent2_execution.sql in the "
                 "Supabase SQL Editor"
             )
+
+        sched = client.get(
+            "/rest/v1/scheduled_jobs",
+            params={"select": "id", "limit": "1"},
+        )
+        if sched.status_code == 200:
+            print("Migration 0010 scheduled_jobs: present")
+        else:
+            print(
+                "Migration 0010 scheduled_jobs: MISSING — run "
+                "python -m app.scripts.apply_pending_migrations "
+                "or paste 0010 + 0011 SQL in the Supabase SQL Editor"
+            )
+
+        for table, label in (
+            ("company_policies", "Migration 0008 company_policies"),
+            ("process_advancement_runs", "Migration 0014 process_advancement_runs"),
+        ):
+            probe = client.get(
+                f"/rest/v1/{table}",
+                params={"select": "id", "limit": "1"},
+            )
+            if probe.status_code == 200:
+                print(f"{label}: present")
+            else:
+                print(
+                    f"{label}: MISSING — apply "
+                    f"supabase/migrations/{'0008_company_policy_knowledge.sql' if 'company' in table else '0014_process_advancement.sql'} "
+                    "in the Supabase SQL Editor"
+                )
 
     # Optional Postgres pooler probe (non-fatal)
     url = settings.DATABASE_URL or ""

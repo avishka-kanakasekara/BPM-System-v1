@@ -1,21 +1,19 @@
 """HUMAN resource allocation strategy."""
 
 from datetime import datetime
-from typing import List
 from uuid import UUID
 
+from ..constants import ResourceType
+from ..eligibility import EligibilityEvaluator
 from ..interfaces import ResourceRepository
+from ..ranking import HumanResourceRanker
+from ..retrieval import CandidateRetriever
 from ..schemas import (
-    RequirementResult,
     ExcludedResource,
     HumanResourceEvidence,
     HumanResourceRequirement,
-    ExclusionReasonEntry,
+    RequirementResult,
 )
-from ..constants import ResourceType
-from ..retrieval import CandidateRetriever
-from ..eligibility import EligibilityEvaluator
-from ..ranking import HumanResourceRanker
 from .base import ResourceStrategy
 
 
@@ -49,8 +47,8 @@ class HumanResourceStrategy(ResourceStrategy):
         
         # Step 2: Evaluate eligibility
         evaluator = EligibilityEvaluator(evaluation_timestamp)
-        eligible_resources: List[HumanResourceEvidence] = []
-        excluded_resources: List[ExcludedResource] = []
+        eligible_resources: list[HumanResourceEvidence] = []
+        excluded_resources: list[ExcludedResource] = []
         
         for candidate in candidates:
             is_eligible, exclusion_reasons = evaluator.evaluate_eligibility(

@@ -8,16 +8,17 @@ Requirements:
 
 import os
 from decimal import Decimal
+
 import pytest
 
 from app.agents.agent3_resources import (
     ExplanationContext,
-    RequirementResult,
-    RankedHumanCandidate,
-    ScoreBreakdown,
-    ResourceType,
     OpenAIExplanationGenerator,
+    RankedHumanCandidate,
+    RequirementResult,
     ResilientFallbackExplainer,
+    ResourceType,
+    ScoreBreakdown,
     utc_now,
 )
 from app.tests.conftest import utc_datetime

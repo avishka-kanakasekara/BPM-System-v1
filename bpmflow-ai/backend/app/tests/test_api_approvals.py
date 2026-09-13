@@ -24,6 +24,7 @@ from app.api.v1.deps import (
     get_agent4_workflow,
     get_approval_repository,
     get_approval_service,
+    get_process_repository,
 )
 from app.main import app
 from app.schemas.agent_message import (
@@ -91,9 +92,13 @@ def approval_setup():
     async def override_workflow() -> Agent4Workflow:
         return workflow
 
+    async def override_process_repository() -> InMemoryProcessRepository:
+        return process_repo
+
     app.dependency_overrides[get_approval_repository] = override_approval_repository
     app.dependency_overrides[get_approval_service] = override_approval_service
     app.dependency_overrides[get_agent4_workflow] = override_workflow
+    app.dependency_overrides[get_process_repository] = override_process_repository
 
     yield {
         "client": TestClient(app),
@@ -107,11 +112,28 @@ def approval_setup():
     app.dependency_overrides.clear()
 
 
+DISCOVERY_ENRICHMENT = {
+    "process_json": {
+        "analytics": {
+            "risk_facts": {
+                "purchase_amount": "2500",
+                "vendor_id": "VENDOR-ACME",
+                "currency": "USD",
+                "cost_centre": "IT-OPS",
+            }
+        }
+    }
+}
+
+
 async def _create_pending_approval(setup, *, reason: str = "Human approval required") -> dict:
     process = await setup["process_repo"].insert_process(
         name="Approval process",
         process_type="procurement",
     )
+    setup["process_repo"]._records[process.id] = (
+        await setup["process_repo"].get_process(process.id)
+    ).model_copy(update={"metadata_json": DISCOVERY_ENRICHMENT})
     await setup["process_repo"].update_process_stage(
         process.id,
         WorkflowStage.AWAITING_HUMAN_APPROVAL,

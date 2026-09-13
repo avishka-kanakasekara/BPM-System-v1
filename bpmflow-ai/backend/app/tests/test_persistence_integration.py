@@ -1,49 +1,45 @@
 """Real Postgres integration tests for Agent 3 write-path persistence (skippable)."""
 
 import os
-import pytest
-import pytest_asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Dict, Any, Optional
+from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
+import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError, DBAPIError
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.agents.agent3_resources.repositories.persistence_exceptions import (
+    PersistenceConflictError,
+    PersistenceTransactionError,
+)
 from app.agents.agent3_resources.repositories.recommendation_repository import (
     RecommendationWriteRepository,
 )
 from app.agents.agent3_resources.repositories.session_factory import normalize_async_database_url
-from app.agents.agent3_resources.repositories.persistence_exceptions import (
-    PersistenceTransactionError,
-    PersistenceConflictError,
-)
 from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AllocationRecommendation,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-    RequirementResult,
-    RankedCandidate,
-    ScoreBreakdown,
-    ExcludedResource,
-    ExclusionReasonEntry,
-    ResourceGap,
-    ResourceAlternative,
-    BudgetValidationChecks,
     AgentMessageMetadata,
-    RecommendationStatus,
-    ResourceType,
-    GapAlternativeType,
-    GapType,
+    AllocationRecommendation,
+    AllocationRequest,
+    BudgetResourceRequirement,
+    BudgetValidationChecks,
+    ExcludedResource,
     ExclusionReason,
+    ExclusionReasonEntry,
+    HumanResourceRequirement,
+    RankedCandidate,
+    RecommendationStatus,
+    RequirementResult,
+    ResourceType,
+    ScoreBreakdown,
 )
 
 
-def _extract_safe_error(error: PersistenceTransactionError) -> Dict[str, Any]:
+def _extract_safe_error(error: PersistenceTransactionError) -> dict[str, Any]:
     """Extract safe diagnostic information from PersistenceTransactionError.
 
     This function safely inspects the chained cause of PersistenceTransactionError
@@ -68,7 +64,7 @@ def _extract_safe_error(error: PersistenceTransactionError) -> Dict[str, Any]:
     Returns:
         A dictionary with safe diagnostic information
     """
-    safe_info: Dict[str, Any] = {
+    safe_info: dict[str, Any] = {
         "exception_class": error.__class__.__name__,
         "sqlstate": None,
         "constraint_name": None,
@@ -120,7 +116,7 @@ def database_url_obj():
     if not url_str:
         pytest.skip("Integration tests skipped - AGENT3_TEST_DATABASE_URL not set")
     # Parse with SQLAlchemy to get URL object with password masking
-    url_obj = make_url(normalize_async_database_url(url_str))
+    make_url(normalize_async_database_url(url_str))
     # Return None instead of URL object to prevent credential exposure
     # Use only for fixture ordering, never for logging or output
     return None
@@ -347,7 +343,7 @@ def sample_request(tenant_id: UUID, correlation_id: UUID) -> AllocationRequest:
         human_requirements=HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=uuid4(),
-            task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         ),
@@ -397,7 +393,7 @@ def sample_recommendation(tenant_id: UUID, correlation_id: UUID) -> AllocationRe
                     score_breakdown=score_breakdown,
                     current_workload_percentage=Decimal("30"),
                     projected_workload_percentage=Decimal("40"),
-                    available_from=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    available_from=datetime(2026, 1, 1, tzinfo=UTC),
                     available_until=None,
                     evidence_refs={},
                 )
@@ -437,7 +433,7 @@ class TestPersistenceIntegration:
         cleanup_test_records,
     ) -> None:
         """Test persisting and retrieving a recommendation."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Persist
         try:
@@ -476,7 +472,7 @@ class TestPersistenceIntegration:
         cleanup_test_records,
     ) -> None:
         """Test retrieving latest recommendation by correlation ID."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Persist
         await repository.persist_allocation_result(
@@ -506,7 +502,7 @@ class TestPersistenceIntegration:
         cleanup_test_records,
     ) -> None:
         """Test marking previous recommendations as superseded."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         # Persist first recommendation
         first_id = await repository.persist_allocation_result(
@@ -560,7 +556,7 @@ class TestPersistenceIntegration:
         """Test that cross-tenant reads return nothing."""
         other_tenant_id = UUID("00000000-0000-0000-0000-000000000099")
         
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Persist for tenant_id
         recommendation_id = await repository.persist_allocation_result(
@@ -584,7 +580,7 @@ class TestPersistenceIntegration:
         cleanup_test_records,
     ) -> None:
         """Test that idempotent retry creates no duplicates."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # First persist
         first_id = await repository.persist_allocation_result(
@@ -635,7 +631,7 @@ class TestPersistenceIntegration:
             limitations=[],
         )
         
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         recommendation_id = await repository.persist_allocation_result(
             sample_request,
@@ -672,7 +668,7 @@ class TestPersistenceIntegration:
         assert row[1] == tenant_id
         assert row[2] == "BUDGET"
 
-        metadata = AgentMessageMetadata(
+        AgentMessageMetadata(
             correlation_id=correlation_id,
             process_instance_id=uuid4(),
             task_id=uuid4(),
@@ -694,7 +690,7 @@ class TestPersistenceIntegration:
                 required_amount=Decimal("5000"),
                 currency="USD",
                 requester_id=uuid4(),
-                task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
                 process_stage="resource_allocation",
             ),
         )
@@ -735,7 +731,7 @@ class TestPersistenceIntegration:
             limitations=[],
         )
         
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         try:
             recommendation_id = await repository.persist_allocation_result(
@@ -768,7 +764,7 @@ class TestPersistenceIntegration:
         cleanup_test_records,
     ) -> None:
         """Test that legitimate next recommendation version is allowed with explicit signal."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         # Persist first recommendation (version 1)
         first_id = await repository.persist_allocation_result(
@@ -819,10 +815,10 @@ class TestPersistenceIntegration:
         cleanup_test_records,
     ) -> None:
         """Test that duplicate retry without allow_versioning raises conflict."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         # Persist first recommendation
-        first_id = await repository.persist_allocation_result(
+        await repository.persist_allocation_result(
             sample_request,
             sample_recommendation,
             evaluation_timestamp,
@@ -851,7 +847,7 @@ class TestPersistenceIntegration:
         """Test that versioning is tenant-scoped."""
         other_tenant_id = UUID("00000000-0000-0000-0000-000000000002")
         other_tenant_human_id = UUID("00000000-0000-0000-0000-000000000030")  # Tenant B seeded resource
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         # Pre-test cleanup: Remove stale records for both tenants with this correlation_id
         # This ensures the test is rerunnable against the same development database
@@ -1057,7 +1053,7 @@ class TestPersistenceIntegration:
                         score_breakdown=score_breakdown,
                         current_workload_percentage=Decimal("30"),
                         projected_workload_percentage=Decimal("40"),
-                        available_from=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                        available_from=datetime(2026, 1, 1, tzinfo=UTC),
                         available_until=None,
                         evidence_refs={},
                     )
@@ -1113,7 +1109,7 @@ class TestPersistenceIntegration:
                 currency="USD",
                 cost_centre="CC-001",
                 requester_id=uuid4(),
-                task_deadline=datetime(2026, 12, 31, tzinfo=timezone.utc),
+                task_deadline=datetime(2026, 12, 31, tzinfo=UTC),
                 process_stage="approval",
             ),
         )
@@ -1150,7 +1146,7 @@ class TestPersistenceIntegration:
             limitations=[],
         )
 
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         with pytest.raises(PersistenceTransactionError):
             await repository.persist_allocation_result(
@@ -1173,7 +1169,7 @@ class TestPersistenceIntegration:
         cleanup_test_records,
     ) -> None:
         """Test that failed version creation does not supersede previous recommendation."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         # Persist first recommendation
         first_id = await repository.persist_allocation_result(
@@ -1208,7 +1204,7 @@ class TestPersistenceIntegration:
                         ),
                         current_workload_percentage=Decimal("30"),
                         projected_workload_percentage=Decimal("40"),
-                        available_from=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                        available_from=datetime(2026, 1, 1, tzinfo=UTC),
                         available_until=None,
                         evidence_refs={},
                     )

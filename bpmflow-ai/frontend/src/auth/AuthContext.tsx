@@ -9,7 +9,15 @@ import {
 } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '../services/supabaseClient'
-import { apiErrorMessage, getCurrentUser, type CurrentUser } from '../services/apiClient'
+import {
+  apiErrorMessage,
+  confirmAccountEmail,
+  getCurrentUser,
+  registerAccount,
+  registerUnauthorizedHandler,
+  type CurrentUser,
+} from '../services/apiClient'
+import type { AppRole } from '../types/api'
 
 type SignUpResult = {
   needsEmailConfirmation: boolean
@@ -20,13 +28,24 @@ type AuthState = {
   user: CurrentUser | null
   loading: boolean
   error: string | null
-  signIn: (email: string, password: string) => Promise<void>
-  signUp: (email: string, password: string, fullName?: string) => Promise<SignUpResult>
+  signIn: (email: string, password: string, role?: AppRole) => Promise<void>
+  signUp: (
+    email: string,
+    password: string,
+    fullName?: string,
+    role?: AppRole,
+  ) => Promise<SignUpResult>
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthState | null>(null)
+
+async function signInWithPasswordOrThrow(email: string, password: string) {
+  if (!supabase) throw new Error('Supabase is not configured')
+  const { error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) throw error
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
@@ -98,21 +117,100 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshProfile])
 
-  const signIn = useCallback(async (email: string, password: string) => {
+  useEffect(() => {
+    registerUnauthorizedHandler(() => {
+      void (async () => {
+        if (supabase) await supabase.auth.signOut()
+        setUser(null)
+        setSession(null)
+        const next = encodeURIComponent(window.location.pathname + window.location.search)
+        window.location.href = `/sign-in?reason=session_expired&next=${next}`
+      })()
+    })
+  }, [])
+
+  const signIn = useCallback(async (email: string, password: string, role?: AppRole) => {
     if (!supabase) throw new Error('Supabase is not configured')
     setError(null)
-    const { error: signError } = await supabase.auth.signInWithPassword({ email, password })
-    if (signError) {
-      setError(signError.message)
-      throw signError
+
+    // Local/dev: sync the selected role onto public.users before password sign-in.
+    if (import.meta.env.DEV && role) {
+      try {
+        await registerAccount({ email, password, role })
+      } catch (err) {
+        const detail = apiErrorMessage(err)
+        // If the helper is unavailable, continue with normal sign-in.
+        if (!/only available in development|not configured|Network Error/i.test(detail)) {
+          // Account may already exist with a different password failure later — keep going.
+        }
+      }
+    }
+
+    try {
+      await signInWithPasswordOrThrow(email, password)
+    } catch (err) {
+      const msg = (err as Error).message || ''
+      // Local/dev: auto-confirm then retry when Supabase blocks unconfirmed emails.
+      if (import.meta.env.DEV && /email not confirmed/i.test(msg)) {
+        try {
+          await confirmAccountEmail(email)
+          if (role) {
+            try {
+              await registerAccount({ email, password, role })
+            } catch {
+              // Role sync is best-effort after confirmation.
+            }
+          }
+          await signInWithPasswordOrThrow(email, password)
+        } catch (retryErr) {
+          setError(apiErrorMessage(retryErr) || msg)
+          throw retryErr
+        }
+      } else {
+        setError(msg)
+        throw err
+      }
     }
     await refreshProfile()
   }, [refreshProfile])
 
   const signUp = useCallback(
-    async (email: string, password: string, fullName?: string): Promise<SignUpResult> => {
+    async (
+      email: string,
+      password: string,
+      fullName?: string,
+      role: AppRole = 'requester',
+    ): Promise<SignUpResult> => {
       if (!supabase) throw new Error('Supabase is not configured')
       setError(null)
+
+      // Prefer backend register in development so email confirmation is not required.
+      if (import.meta.env.DEV) {
+        try {
+          await registerAccount({
+            email,
+            password,
+            full_name: fullName?.trim() || undefined,
+            role,
+          })
+          await signInWithPasswordOrThrow(email, password)
+          await refreshProfile()
+          return { needsEmailConfirmation: false }
+        } catch (err) {
+          const detail = apiErrorMessage(err)
+          if (!/only available in development|not configured|Network Error/i.test(detail)) {
+            try {
+              await signInWithPasswordOrThrow(email, password)
+              await refreshProfile()
+              return { needsEmailConfirmation: false }
+            } catch {
+              setError(detail)
+              throw err
+            }
+          }
+        }
+      }
+
       const { data, error: signError } = await supabase.auth.signUp({
         email,
         password,

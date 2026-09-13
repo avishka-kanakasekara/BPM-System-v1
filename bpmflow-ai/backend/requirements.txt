@@ -29,12 +29,11 @@ aiohttp
 
 # LLM clients
 # Agent 1: Anthropic (+ MOCK_LLM fixtures)
-# Agent 2: google-genai (Gemini); google-generativeai kept for legacy imports
+# Agent 2: google-genai (Gemini)
 # Agent 3: OpenAI optional explanations only
 anthropic
 openai
 google-genai
-google-generativeai
 
 # Caching / Agent 2 scheduler (optional at runtime)
 redis

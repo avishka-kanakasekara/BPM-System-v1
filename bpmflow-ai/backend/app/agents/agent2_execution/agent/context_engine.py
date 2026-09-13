@@ -7,8 +7,9 @@ from the database into a structured ProcessContext object.
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,11 +34,11 @@ class ProcessContext:
     status: str
     department: str
     requester_email: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 async def perceive_context(
-    session: Optional[AsyncSession], message: AgentMessage
+    session: AsyncSession | None, message: AgentMessage
 ) -> ProcessContext:
     """
     PERCEIVE & UNDERSTAND: Load process/task context from database given an AgentMessage.
@@ -108,7 +109,7 @@ async def perceive_context(
                     ctx.sla_hours = task_row.sla_hours or ctx.sla_hours or 24.0
 
                     if task_row.started_at:
-                        now = datetime.now(timezone.utc)
+                        now = datetime.now(UTC)
                         ctx.elapsed_hours = round(
                             (now - task_row.started_at).total_seconds() / 3600.0, 2
                         )

@@ -1,21 +1,22 @@
 """Tenant isolation tests for Agent 3 write-path persistence."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID, uuid4
 from unittest.mock import MagicMock
+from uuid import UUID, uuid4
+
+import pytest
 
 from app.agents.agent3_resources.repositories.recommendation_repository import (
     RecommendationWriteRepository,
 )
 from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AllocationRecommendation,
-    HumanResourceRequirement,
-    RequirementResult,
     AgentMessageMetadata,
+    AllocationRecommendation,
+    AllocationRequest,
+    HumanResourceRequirement,
     RecommendationStatus,
+    RequirementResult,
     ResourceType,
 )
 
@@ -87,7 +88,7 @@ class TestTenantIsolation:
             human_requirements=HumanResourceRequirement(
                 resource_type=ResourceType.HUMAN,
                 requester_id=uuid4(),
-                task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
                 estimated_effort_hours=Decimal("10"),
                 process_stage="resource_allocation",
             ),
@@ -138,7 +139,7 @@ class TestTenantIsolation:
         tenant_a_id: UUID,
     ) -> None:
         """Test that persist includes tenant_id in request insert."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         asyncio.run(repository.persist_allocation_result(
             sample_request_tenant_a,
@@ -161,7 +162,7 @@ class TestTenantIsolation:
         tenant_a_id: UUID,
     ) -> None:
         """Test that persist includes tenant_id in recommendation insert."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         asyncio.run(repository.persist_allocation_result(
             sample_request_tenant_a,
@@ -258,7 +259,7 @@ class TestTenantIsolation:
         tenant_a_id: UUID,
     ) -> None:
         """Test that requester_id is not used as tenant_id filter."""
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Set a different requester_id than tenant_id
         different_requester_id = uuid4()
@@ -314,7 +315,7 @@ class TestTenantIsolation:
             human_requirements=HumanResourceRequirement(
                 resource_type=ResourceType.HUMAN,
                 requester_id=uuid4(),
-                task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
                 estimated_effort_hours=Decimal("10"),
                 process_stage="resource_allocation",
             ),
@@ -326,7 +327,7 @@ class TestTenantIsolation:
             human_requirements=HumanResourceRequirement(
                 resource_type=ResourceType.HUMAN,
                 requester_id=uuid4(),
-                task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
                 estimated_effort_hours=Decimal("10"),
                 process_stage="resource_allocation",
             ),
@@ -369,7 +370,7 @@ class TestTenantIsolation:
             limitations=[],
         )
         
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         # Persist both
         asyncio.run(repository.persist_allocation_result(

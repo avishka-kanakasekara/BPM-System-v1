@@ -1,7 +1,7 @@
 """API tests for PROCESS endpoints. No live Supabase database is required."""
 
-from unittest.mock import AsyncMock, patch
 import asyncio
+from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -68,16 +68,35 @@ def test_health_still_works() -> None:
     When Supabase REST is configured, /health prefers HTTPS and must not hang
     on a blocked pooler port. This test stubs REST as reachable.
     """
+    from app.core.health import ProbeResult
+
     client, _ = _client()
-    with patch("app.core.supabase_rest.ping_rest", return_value=True), patch(
-        "app.core.supabase_rest.supabase_rest_configured", return_value=True
-    ):
+
+    async def _rest_up():
+        return ProbeResult(name="supabase_rest", status="ok", latency_ms=1.0)
+
+    async def _pg_down():
+        return ProbeResult(name="postgres", status="error", latency_ms=1.0)
+
+    async def _jwks_skip():
+        return ProbeResult(name="jwks", status="skipped", latency_ms=0.0)
+
+    async def _skip(name: str):
+        return ProbeResult(name=name, status="skipped", latency_ms=0.0)
+
+    with patch("app.core.persistence.repository._postgres_reachable", return_value=False), patch(
+        "app.core.persistence.repository._rest_reachable", return_value=True
+    ), patch("app.core.health.probe_postgres", _pg_down), patch(
+        "app.core.health.probe_supabase_rest", _rest_up
+    ), patch("app.core.health.probe_jwks", _jwks_skip), patch(
+        "app.core.health.probe_gemini", lambda: _skip("gemini")
+    ), patch("app.core.health.probe_redis", lambda: _skip("redis")):
         response = client.get("/health")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "healthy"
-    assert body["database"] == "supabase_rest"
-    assert "supabase" in body
+    assert body["persistence_mode"] == "rest"
+    assert body["persistence"]["degraded"] is True
 
 
 def test_create_process() -> None:
@@ -270,7 +289,6 @@ def test_risk_review_without_findings_reaches_workflow_execution() -> None:
         json={"name": "Risk me", "process_type": "procurement"},
     ).json()
     # Drive the in-memory row to RISK_REVIEW the same way the orchestrator would.
-    import asyncio
 
     process_id = created["id"]
     _set_stage(repository, process_id, WorkflowStage.RISK_REVIEW)

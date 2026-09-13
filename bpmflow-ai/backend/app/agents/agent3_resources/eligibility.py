@@ -2,16 +2,14 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Set
-from uuid import UUID
 
+from .constants import MAX_EVIDENCE_AGE_DAYS, ExclusionReason
 from .schemas import (
+    ExclusionReasonEntry,
     HumanResourceEvidence,
     HumanResourceRequirement,
-    ExcludedResource,
-    ExclusionReasonEntry,
 )
-from .constants import ExclusionReason, MAX_EVIDENCE_AGE_DAYS
+from .sod_checks import build_sod_exclusion
 
 
 class EligibilityEvaluator:
@@ -25,7 +23,7 @@ class EligibilityEvaluator:
         self,
         resource: HumanResourceEvidence,
         requirement: HumanResourceRequirement,
-    ) -> tuple[bool, List[ExclusionReasonEntry]]:
+    ) -> tuple[bool, list[ExclusionReasonEntry]]:
         """Evaluate a resource against requirements.
         
         Returns:
@@ -33,7 +31,7 @@ class EligibilityEvaluator:
             - is_eligible: True if no hard rules are violated
             - exclusion_reasons: List of all applicable exclusion reasons
         """
-        exclusion_reasons: List[ExclusionReasonEntry] = []
+        exclusion_reasons: list[ExclusionReasonEntry] = []
 
         # Collect all applicable exclusion reasons (do not stop after first failure)
         self._check_inactive_resource(resource, exclusion_reasons)
@@ -54,7 +52,7 @@ class EligibilityEvaluator:
     def _check_inactive_resource(
         self,
         resource: HumanResourceEvidence,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if resource is inactive."""
         if not resource.is_active:
@@ -70,7 +68,7 @@ class EligibilityEvaluator:
         self,
         resource: HumanResourceEvidence,
         requirement: HumanResourceRequirement,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if resource has any of the required roles."""
         if requirement.required_roles:
@@ -89,7 +87,7 @@ class EligibilityEvaluator:
         self,
         resource: HumanResourceEvidence,
         requirement: HumanResourceRequirement,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if resource has all mandatory skills."""
         if requirement.mandatory_skills:
@@ -109,7 +107,7 @@ class EligibilityEvaluator:
         self,
         resource: HumanResourceEvidence,
         requirement: HumanResourceRequirement,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if resource has required authority."""
         if requirement.required_authority:
@@ -126,7 +124,7 @@ class EligibilityEvaluator:
         self,
         resource: HumanResourceEvidence,
         requirement: HumanResourceRequirement,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if resource is available before task deadline."""
         if resource.available_from > requirement.task_deadline:
@@ -142,7 +140,7 @@ class EligibilityEvaluator:
         self,
         resource: HumanResourceEvidence,
         requirement: HumanResourceRequirement,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if projected workload exceeds maximum.
         
@@ -166,23 +164,21 @@ class EligibilityEvaluator:
         self,
         resource: HumanResourceEvidence,
         requirement: HumanResourceRequirement,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check for segregation of duties violations."""
-        if resource.segregation_of_duties_conflicts:
-            exclusion_reasons.append(
-                ExclusionReasonEntry(
-                    reason=ExclusionReason.SEGREGATION_OF_DUTIES_VIOLATION,
-                    description=f"Resource has {len(resource.segregation_of_duties_conflicts)} segregation of duties conflicts",
-                    evidence_reference="segregation_of_duties_conflicts",
-                )
-            )
+        sod_exclusion = build_sod_exclusion(
+            resource.segregation_of_duties_conflicts,
+            resource_name=resource.name,
+        )
+        if sod_exclusion is not None:
+            exclusion_reasons.append(sod_exclusion)
 
     def _check_requester_self_approval(
         self,
         resource: HumanResourceEvidence,
         requirement: HumanResourceRequirement,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if requester is trying to approve themselves."""
         if resource.resource_id == requirement.requester_id:
@@ -197,7 +193,7 @@ class EligibilityEvaluator:
     def _check_conflict_of_interest(
         self,
         resource: HumanResourceEvidence,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check for conflict of interest flags."""
         if resource.conflict_of_interest_flags:
@@ -212,7 +208,7 @@ class EligibilityEvaluator:
     def _check_missing_evidence(
         self,
         resource: HumanResourceEvidence,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if required availability and workload evidence is missing."""
         missing_fields = []
@@ -236,7 +232,7 @@ class EligibilityEvaluator:
     def _check_stale_evidence(
         self,
         resource: HumanResourceEvidence,
-        exclusion_reasons: List[ExclusionReasonEntry],
+        exclusion_reasons: list[ExclusionReasonEntry],
     ) -> None:
         """Check if evidence is stale (older than MAX_EVIDENCE_AGE_DAYS)."""
         evidence_age = (self.evaluation_timestamp - resource.evidence_checked_at).days

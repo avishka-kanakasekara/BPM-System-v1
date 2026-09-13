@@ -9,9 +9,9 @@ This is not the database agent_messages transport row.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -43,7 +43,7 @@ class AgentMessageType(str, Enum):
 
 def utc_now() -> datetime:
     """Return the current UTC time as a timezone-aware datetime."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _require_timezone_aware(value: datetime, field_name: str) -> datetime:
@@ -59,8 +59,8 @@ class AgentMessageMetadata(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION, min_length=1)
     correlation_id: UUID
     process_instance_id: UUID
-    task_id: Optional[UUID] = None
-    tenant_id: Optional[UUID] = None
+    task_id: UUID | None = None
+    tenant_id: UUID | None = None
     sender: str = Field(min_length=1)
     receiver: str = Field(min_length=1)
     message_type: AgentMessageType
@@ -84,10 +84,10 @@ class AgentMessage(BaseModel):
     """
 
     metadata: AgentMessageMetadata
-    payload: Dict[str, Any] = Field(default_factory=dict)
-    status: Optional[str] = None
-    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    evidence_refs: List[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    status: str | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    evidence_refs: list[str] = Field(default_factory=list)
 
 
 AgentMessageStatus = Literal["COMPLETE", "PARTIAL", "NEEDS_CLARIFICATION"]
@@ -100,9 +100,9 @@ class EvidenceReference(BaseModel):
 
     field: str
     file_id: UUID
-    page: Optional[int] = None
-    span_start: Optional[int] = None
-    span_end: Optional[int] = None
+    page: int | None = None
+    span_start: int | None = None
+    span_end: int | None = None
 
 
 class DiscoveryAgentMessage(BaseModel):

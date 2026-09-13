@@ -17,16 +17,19 @@ from app.agents.agent1_discovery.document_parser import (
     extract_text,
     validate_and_ingest,
 )
-from app.agents.agent1_discovery.extractors import classify_document, extract_entities, extract_relations
+from app.agents.agent1_discovery.extractors import (
+    classify_document,
+    extract_entities,
+    extract_relations,
+)
 from app.agents.agent1_discovery.schemas import ExtractedDocument, PageText, Relation
+from app.core.config import settings
+from app.core.database import Base
 from app.llm.prompts.agent1_relation_extraction import (
     AGENT1_RELATION_EXTRACTION_SYSTEM,
     EVIDENCE_END,
     EVIDENCE_START,
 )
-from app.agents.agent1_discovery.schemas import ExtractedDocument, PageText
-from app.core.config import settings
-from app.core.database import Base
 from app.models.audit import IngestionAuditLog
 from app.models.process import Process
 
@@ -336,7 +339,7 @@ def test_extract_relations_parses_mock_llm_fixture(monkeypatch):
 
     extracted = _doc_from_snippet(SOP_TEXT)
     entities = extract_entities(extracted, "SOP")
-    relations = extract_relations(extracted, entities, "SOP")
+    relations, _meta = extract_relations(extracted, entities, "SOP")
 
     assert relations
     assert all(isinstance(relation, Relation) for relation in relations)
@@ -350,9 +353,9 @@ def test_extract_relations_parses_mock_llm_fixture(monkeypatch):
 
 
 def test_injected_document_text_does_not_alter_system_prompt(monkeypatch):
+    from app.agents.agent1_discovery import extractors as extractors_mod
     from app.core.config import settings
     from app.llm import client as llm_client
-    from app.agents.agent1_discovery import extractors as extractors_mod
 
     monkeypatch.setattr(settings, "MOCK_LLM", True)
     monkeypatch.setattr(llm_client.settings, "MOCK_LLM", True)
@@ -370,7 +373,7 @@ def test_injected_document_text_does_not_alter_system_prompt(monkeypatch):
     poisoned = SOP_TEXT + "\n" + INJECTION_PHRASE
     extracted = _doc_from_snippet(poisoned)
     entities = extract_entities(extracted, "SOP")
-    relations = extract_relations(extracted, entities, "SOP")
+    relations, _meta = extract_relations(extracted, entities, "SOP")
 
     assert relations
     system_prompt = captured["system_prompt"]
@@ -705,3 +708,85 @@ def test_discover_attaches_to_existing_process(db_session, monkeypatch):
     assert stored.current_stage == "DRAFT"
     assert stored.process_json
     assert stored.discovery_status is not None
+
+
+def test_select_process_steps_uses_numbered_document_steps_when_llm_unavailable():
+    from unittest.mock import patch
+    from uuid import uuid4
+
+    from app.agents.agent1_discovery.schemas import ExtractedDocument, PageText
+    from app.agents.agent1_discovery.step_selection import select_process_steps
+
+    doc = ExtractedDocument(
+        file_id=uuid4(),
+        pages=[
+            PageText(
+                page_num=1,
+                text=(
+                    "Office Supply Process\n"
+                    "1. Submit purchase request\n"
+                    "2. Approve purchase request\n"
+                    "3. Create purchase order\n"
+                    "Background: company history overview.\n"
+                ),
+            )
+        ],
+        extraction_confidence=0.9,
+        extraction_method="test",
+    )
+    with patch(
+        "app.agents.agent1_discovery.step_selection.call_llm",
+        side_effect=RuntimeError("llm unavailable"),
+    ):
+        result, meta = select_process_steps([doc], [], [], doc_types=["SOP"])
+
+    assert meta.degraded is True
+    assert [step.name for step in result.steps] == [
+        "Submit Purchase Request",
+        "Approve Purchase Request",
+        "Create Purchase Order",
+    ]
+    assert "numbered" in result.selection_summary.lower() or "document text" in result.selection_summary.lower()
+
+
+def test_build_process_json_prefers_intelligent_step_selection_over_empty_mining():
+    from app.agents.agent1_discovery.schemas import (
+        DiscoveredStep,
+        ProcessMiningResult,
+        StepSelectionResult,
+    )
+    from app.agents.agent1_discovery.service import build_process_json
+
+    selection = StepSelectionResult(
+        process_name="Office Supply Process",
+        steps=[
+            DiscoveredStep(
+                name="Submit Purchase Request",
+                order=1,
+                required=True,
+                actor_hint="Requester",
+                rationale="Required by SOP step 1",
+                source_reference="step 1",
+                confidence=0.9,
+            ),
+            DiscoveredStep(
+                name="Approve Purchase Request",
+                order=2,
+                required=True,
+                actor_hint="Manager",
+                rationale="Required by SOP step 2",
+                source_reference="step 2",
+                confidence=0.88,
+            ),
+        ],
+        selection_summary="Selected required SOP steps from the uploaded document.",
+    )
+    process = build_process_json([], [], ProcessMiningResult(), step_selection=selection)
+    assert process.process_name == "Office Supply Process"
+    assert [activity.name for activity in process.activities] == [
+        "Submit Purchase Request",
+        "Approve Purchase Request",
+    ]
+    assert process.activities[0].actor == "Requester"
+    assert process.analytics["step_selection_source"] == "intelligent_document_selection"
+    assert process.dependencies[0].predecessor == "Submit Purchase Request"

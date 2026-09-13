@@ -5,11 +5,16 @@ Provides get_process_history and get_task_history querying Agent 2's own DB tabl
 """
 
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.agent2_execution.database.models import ExecutionAttempt, ExecutionReceipt, Task, ToolCall, WorkflowEvent
+from app.agents.agent2_execution.database.models import (
+    ExecutionAttempt,
+    ExecutionReceipt,
+    WorkflowEvent,
+)
 from app.agents.agent2_execution.tools.schemas import (
     GetProcessHistoryInput,
     GetProcessHistoryOutput,
@@ -19,13 +24,13 @@ from app.agents.agent2_execution.tools.schemas import (
 
 
 async def get_process_history(
-    session: Optional[AsyncSession], input_data: GetProcessHistoryInput
+    session: AsyncSession | None, input_data: GetProcessHistoryInput
 ) -> GetProcessHistoryOutput:
     """
     Retrieve workflow event history for a process instance from the database.
     """
     process_id_str = input_data.process_id
-    events_out: List[Dict[str, Any]] = []
+    events_out: list[dict[str, Any]] = []
 
     if session is not None:
         try:
@@ -61,14 +66,14 @@ async def get_process_history(
 
 
 async def get_task_history(
-    session: Optional[AsyncSession], input_data: GetTaskHistoryInput
+    session: AsyncSession | None, input_data: GetTaskHistoryInput
 ) -> GetTaskHistoryOutput:
     """
     Retrieve execution attempts, tool calls, and receipts for a task from the database.
     """
     task_id_str = input_data.task_id
-    attempts_out: List[Dict[str, Any]] = []
-    receipts_out: List[Dict[str, Any]] = []
+    attempts_out: list[dict[str, Any]] = []
+    receipts_out: list[dict[str, Any]] = []
 
     if session is not None:
         try:

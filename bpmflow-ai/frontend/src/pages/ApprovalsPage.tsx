@@ -77,19 +77,37 @@ export default function ApprovalsPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [secondaryError, setSecondaryError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
+    setSecondaryError(null)
     try {
-      const [approvals, procs] = await Promise.all([
-        listApprovals(),
-        listProcesses().catch(() => [] as ProcessRecord[]),
+      const [approvalResult, processResult] = await Promise.all([
+        listApprovals()
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
+        listProcesses()
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
       ])
-      setRows(approvals)
-      setProcesses(procs)
-    } catch (err) {
-      setError(approvalsErrorMessage(err))
+
+      if (approvalResult.ok) {
+        setRows(approvalResult.rows)
+      } else {
+        setRows([])
+        setError(approvalsErrorMessage(approvalResult.err))
+      }
+
+      if (processResult.ok) {
+        setProcesses(processResult.rows)
+      } else {
+        setProcesses([])
+        if (approvalResult.ok) {
+          setSecondaryError(`Process names unavailable: ${approvalsErrorMessage(processResult.err)}`)
+        }
+      }
     } finally {
       setLoading(false)
     }
@@ -151,6 +169,16 @@ export default function ApprovalsPage() {
         <Alert tone="error">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span>{error}</span>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => void refresh()}>
+              Retry
+            </button>
+          </div>
+        </Alert>
+      ) : null}
+      {secondaryError ? (
+        <Alert tone="warning">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>{secondaryError}</span>
             <button type="button" className="btn btn-ghost btn-xs" onClick={() => void refresh()}>
               Retry
             </button>

@@ -4,11 +4,9 @@ import {
   apiErrorMessage,
   listApprovals,
   listAuditLogs,
-  listExceptions,
   listProcesses,
   type ApprovalRecord,
   type AuditLogRecord,
-  type ExceptionRecord,
   type ProcessRecord,
 } from '../services/apiClient'
 import { useAuth } from '../auth/AuthContext'
@@ -39,7 +37,7 @@ const PIPELINE_STAGES: Array<{ key: string; label: string }> = [
   { key: 'WORKFLOW_EXECUTION', label: 'Workflow Execution' },
   { key: 'INVOICE_MATCHING', label: 'Invoice Matching' },
   { key: 'COMPLETED', label: 'Completed' },
-  { key: 'EXCEPTION', label: 'Exceptions' },
+  { key: 'EXCEPTION', label: 'Stopped' },
 ]
 
 function greetingForNow(): string {
@@ -89,7 +87,7 @@ function formatProcessStatus(status: string | null | undefined): string {
   if (key === 'ACTIVE' || key === 'IN_PROGRESS' || key === 'RUNNING') return 'Active'
   if (key === 'COMPLETED' || key === 'COMPLETE') return 'Completed'
   if (key === 'DRAFT') return 'Draft'
-  if (key === 'EXCEPTION' || key === 'FAILED') return 'Exception'
+  if (key === 'EXCEPTION' || key === 'FAILED') return 'Stopped'
   if (key === 'CANCELLED' || key === 'CANCELED') return 'Cancelled'
   return formatProcessType(status)
 }
@@ -107,8 +105,8 @@ function formatAuditAction(action: string): string {
     APPROVAL_CREATED: 'Approval requested',
     APPROVED: 'Approval granted',
     REJECTED: 'Approval rejected',
-    EXCEPTION_OPENED: 'Exception opened',
-    EXCEPTION_CREATED: 'Exception opened',
+    EXCEPTION_OPENED: 'Process stopped',
+    EXCEPTION_CREATED: 'Process stopped',
     EXECUTE: 'Workflow execution started',
     COMPLETED: 'Process completed',
   }
@@ -186,7 +184,7 @@ const Icons = {
       <path strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
   ),
-  exceptions: (
+  stopped: (
     <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden>
       <path strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
     </svg>
@@ -200,7 +198,7 @@ const Icons = {
 
 type AttentionItem = {
   id: string
-  kind: 'approval' | 'exception' | 'process'
+  kind: 'approval' | 'process'
   title: string
   subtitle: string
   riskLevel?: string
@@ -213,7 +211,6 @@ export default function DashboardPage() {
   const { session, user } = useAuth()
   const [processes, setProcesses] = useState<ProcessRecord[]>([])
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([])
-  const [exceptions, setExceptions] = useState<ExceptionRecord[]>([])
   const [activity, setActivity] = useState<AuditLogRecord[]>([])
   const [activityAvailable, setActivityAvailable] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -226,20 +223,17 @@ export default function DashboardPage() {
       if (!session) {
         setProcesses([])
         setApprovals([])
-        setExceptions([])
         setActivity([])
         setActivityAvailable(true)
         return
       }
 
-      const [procs, pendingApprovals, openExceptions] = await Promise.all([
+      const [procs, pendingApprovals] = await Promise.all([
         listProcesses(),
         listApprovals('PENDING'),
-        listExceptions('open'),
       ])
       setProcesses(procs)
       setApprovals(pendingApprovals)
-      setExceptions(openExceptions)
 
       try {
         const logs = await listAuditLogs({ limit: 12 })
@@ -294,6 +288,11 @@ export default function DashboardPage() {
     return map
   }, [processes])
 
+  const stoppedCount = useMemo(
+    () => processes.filter((p) => p.current_stage === 'EXCEPTION').length,
+    [processes],
+  )
+
   const attentionItems = useMemo((): AttentionItem[] => {
     const items: AttentionItem[] = []
 
@@ -306,18 +305,6 @@ export default function DashboardPage() {
         riskLevel: a.risk_level,
         href: '/approvals',
         cta: 'Review',
-      })
-    }
-
-    for (const ex of exceptions) {
-      items.push({
-        id: `exception-${ex.id}`,
-        kind: 'exception',
-        title: 'Exception',
-        subtitle: ex.description || ex.type || 'Open exception',
-        riskLevel: ex.severity,
-        href: '/exceptions',
-        cta: 'View Exception',
       })
     }
 
@@ -337,23 +324,20 @@ export default function DashboardPage() {
         }
       }
       if (p.current_stage === 'EXCEPTION') {
-        const alreadyCovered = exceptions.some((e) => e.process_id === p.id)
-        if (!alreadyCovered) {
-          items.push({
-            id: `process-exception-${p.id}`,
-            kind: 'process',
-            title: 'Process Exception',
-            subtitle: p.name,
-            meta: 'Needs attention',
-            href: `/processes/${p.id}`,
-            cta: 'View',
-          })
-        }
+        items.push({
+          id: `process-stopped-${p.id}`,
+          kind: 'process',
+          title: 'Process Stopped',
+          subtitle: p.name,
+          meta: 'Rejected or blocked — review the process',
+          href: `/processes/${p.id}`,
+          cta: 'View',
+        })
       }
     }
 
     return items.slice(0, 8)
-  }, [approvals, exceptions, processes, processNameById])
+  }, [approvals, processes, processNameById])
 
   const firstName =
     user?.full_name?.trim().split(/\s+/)[0] ||
@@ -381,7 +365,7 @@ export default function DashboardPage() {
 
       {!session ? (
         <Alert tone="info">
-          Sign in to view processes, approvals, and exceptions for your workspace.{' '}
+          Sign in to view processes and approvals for your workspace.{' '}
           <Link to="/sign-in" className="font-medium underline underline-offset-2">
             Sign in
           </Link>
@@ -415,11 +399,11 @@ export default function DashboardPage() {
                 to="/approvals"
               />
               <SummaryCard
-                label="Open Exceptions"
-                value={session ? exceptions.length : 0}
-                description="Need attention"
-                icon={Icons.exceptions}
-                to="/exceptions"
+                label="Stopped Processes"
+                value={session ? stoppedCount : 0}
+                description="Rejected or blocked"
+                icon={Icons.stopped}
+                to="/processes"
               />
               <SummaryCard
                 label="Completed Processes"

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
@@ -30,7 +31,6 @@ from .table_mapping import (
     SQL_SELECT_WORKLOAD_SNAPSHOTS,
 )
 
-
 SessionFactory = Callable[[], AsyncSession]
 
 
@@ -39,8 +39,8 @@ class PostgresResourceRepository(ResourceRepository):
 
     def __init__(
         self,
-        session_factory: Optional[SessionFactory] = None,
-        session: Optional[AsyncSession] = None,
+        session_factory: SessionFactory | None = None,
+        session: AsyncSession | None = None,
     ):
         if session_factory is None and session is None:
             raise ValueError("PostgresResourceRepository requires session_factory or session")
@@ -65,7 +65,7 @@ class PostgresResourceRepository(ResourceRepository):
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[HumanResourceEvidence]:
+    ) -> list[HumanResourceEvidence]:
         try:
             async with self._session_scope() as session:
                 resource_rows = await self._fetch_all(
@@ -116,7 +116,7 @@ class PostgresResourceRepository(ResourceRepository):
                 )
                 sod_by_resource, coi_by_resource = self._split_conflicts(conflicts)
 
-                results: List[HumanResourceEvidence] = []
+                results: list[HumanResourceEvidence] = []
                 for resource_row in resource_rows:
                     resource_id = resource_row["id"]
                     profile_row = profiles.get(resource_id)
@@ -148,7 +148,7 @@ class PostgresResourceRepository(ResourceRepository):
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[BudgetResourceEvidence]:
+    ) -> list[BudgetResourceEvidence]:
         try:
             async with self._session_scope() as session:
                 resource_rows = await self._fetch_all(
@@ -174,7 +174,7 @@ class PostgresResourceRepository(ResourceRepository):
                     )
                 )
 
-                results: List[BudgetResourceEvidence] = []
+                results: list[BudgetResourceEvidence] = []
                 for resource_row in resource_rows:
                     resource_id = resource_row["id"]
                     profile_row = profiles.get(resource_id)
@@ -200,7 +200,7 @@ class PostgresResourceRepository(ResourceRepository):
         session: AsyncSession,
         sql: str,
         params: Mapping[str, Any],
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         result = await session.execute(text(sql), dict(params))
         return [dict(row._mapping) for row in result.fetchall()]
 
@@ -209,8 +209,8 @@ class PostgresResourceRepository(ResourceRepository):
         rows: Sequence[Mapping[str, Any]],
         *,
         single: bool = False,
-    ) -> Dict[Any, Any]:
-        grouped: Dict[Any, Any] = {}
+    ) -> dict[Any, Any]:
+        grouped: dict[Any, Any] = {}
         for row in rows:
             resource_id = row["resource_id"]
             code = row["code"]
@@ -221,12 +221,12 @@ class PostgresResourceRepository(ResourceRepository):
         return grouped
 
     @staticmethod
-    def _index_by_resource_id(rows: Sequence[Mapping[str, Any]]) -> Dict[Any, Dict[str, Any]]:
+    def _index_by_resource_id(rows: Sequence[Mapping[str, Any]]) -> dict[Any, dict[str, Any]]:
         return {row["resource_id"]: dict(row) for row in rows}
 
     @staticmethod
-    def _first_by_resource_id(rows: Sequence[Mapping[str, Any]]) -> Dict[Any, Dict[str, Any]]:
-        grouped: Dict[Any, Dict[str, Any]] = {}
+    def _first_by_resource_id(rows: Sequence[Mapping[str, Any]]) -> dict[Any, dict[str, Any]]:
+        grouped: dict[Any, dict[str, Any]] = {}
         for row in rows:
             resource_id = row["resource_id"]
             if resource_id not in grouped:
@@ -236,8 +236,8 @@ class PostgresResourceRepository(ResourceRepository):
     @staticmethod
     def _latest_snapshot_by_resource(
         rows: Sequence[Mapping[str, Any]],
-    ) -> Dict[Any, Dict[str, Any]]:
-        grouped: Dict[Any, Dict[str, Any]] = {}
+    ) -> dict[Any, dict[str, Any]]:
+        grouped: dict[Any, dict[str, Any]] = {}
         for row in rows:
             resource_id = row["resource_id"]
             if resource_id not in grouped:
@@ -247,8 +247,8 @@ class PostgresResourceRepository(ResourceRepository):
     @staticmethod
     def _group_rows_by_resource(
         rows: Sequence[Mapping[str, Any]],
-    ) -> Dict[Any, List[Dict[str, Any]]]:
-        grouped: Dict[Any, List[Dict[str, Any]]] = {}
+    ) -> dict[Any, list[dict[str, Any]]]:
+        grouped: dict[Any, list[dict[str, Any]]] = {}
         for row in rows:
             grouped.setdefault(row["resource_id"], []).append(dict(row))
         return grouped
@@ -256,9 +256,9 @@ class PostgresResourceRepository(ResourceRepository):
     @staticmethod
     def _split_conflicts(
         rows: Sequence[Mapping[str, Any]],
-    ) -> tuple[Dict[Any, List[UUID]], Dict[Any, List[str]]]:
-        sod: Dict[Any, List[UUID]] = {}
-        coi: Dict[Any, List[str]] = {}
+    ) -> tuple[dict[Any, list[UUID]], dict[Any, list[str]]]:
+        sod: dict[Any, list[UUID]] = {}
+        coi: dict[Any, list[str]] = {}
         for row in rows:
             resource_id = row["resource_id"]
             conflicting_resource_id = row.get("conflicting_resource_id")

@@ -9,14 +9,11 @@ Tests:
 """
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
 from app.agents.agent2_execution.llm.schemas import OptimizationRecommendationSchema
 from app.agents.agent2_execution.optimization import (
-    bottleneck_detector,
     recommendation_engine,
-    rework_detector,
     simulation,
     sla_predictor,
 )

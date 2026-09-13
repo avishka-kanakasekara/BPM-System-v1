@@ -5,15 +5,6 @@ from uuid import uuid4
 
 import pytest
 
-from app.schemas.agent_message import (
-    AGENT_1,
-    AGENT_2,
-    AGENT_3,
-    AGENT_4,
-    AgentMessage,
-    AgentMessageMetadata,
-    AgentMessageType,
-)
 from app.agents.agent4_orchestrator.adapters import (
     Agent1Adapter,
     Agent2Adapter,
@@ -25,6 +16,15 @@ from app.agents.agent4_orchestrator.exceptions import (
     AgentUnavailableError,
     CommunicationFailureError,
     UnsupportedAgentError,
+)
+from app.schemas.agent_message import (
+    AGENT_1,
+    AGENT_2,
+    AGENT_3,
+    AGENT_4,
+    AgentMessage,
+    AgentMessageMetadata,
+    AgentMessageType,
 )
 
 

@@ -1,9 +1,8 @@
 """Persistence for public.exceptions and related audit_logs events."""
 
-from abc import ABC, abstractmethod
 import asyncio
-from datetime import datetime, timezone
-from typing import Dict, List
+from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -16,19 +15,18 @@ from app.core.supabase_rest import (
     supabase_rest_configured,
     use_supabase_rest_fallback,
 )
-from app.models.audit import AuditLog
 from app.models.exception import ProcessException
 
 from .constants import ExceptionSeverity, ExceptionStatus, ExceptionType
 from .exceptions import BpmExceptionNotFoundError, DatabasePersistenceError
-from .repository import AUDIT_ACTION_UPDATED, AUDIT_ENTITY_PROCESS
+from .repository import AUDIT_ENTITY_PROCESS
 from .schemas import ExceptionRecord
 
 AUDIT_ACTION_CREATED = "created"
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def record_from_orm(row: ProcessException) -> ExceptionRecord:
@@ -78,7 +76,7 @@ def record_from_rest(row: dict) -> ExceptionRecord:
     )
 
 
-def _list_exceptions_rest(status: ExceptionStatus | None) -> List[ExceptionRecord]:
+def _list_exceptions_rest(status: ExceptionStatus | None) -> list[ExceptionRecord]:
     params: dict[str, str] = {
         "select": "id,process_id,task_id,severity,type,description,status,assigned_to,resolution_notes,created_at,resolved_at",
         "order": "created_at.desc",
@@ -194,7 +192,7 @@ class ExceptionRepository(ABC):
     async def list_exceptions(
         self,
         status: ExceptionStatus | None = None,
-    ) -> List[ExceptionRecord]:
+    ) -> list[ExceptionRecord]:
         """Return exception rows, optionally filtered by status."""
 
     @abstractmethod
@@ -222,8 +220,8 @@ class ExceptionRepository(ABC):
 
 class InMemoryExceptionRepository(ExceptionRepository):
     def __init__(self) -> None:
-        self._records: Dict[UUID, ExceptionRecord] = {}
-        self.audit_events: List[dict] = []
+        self._records: dict[UUID, ExceptionRecord] = {}
+        self.audit_events: list[dict] = []
 
     async def create_exception(
         self,
@@ -270,7 +268,7 @@ class InMemoryExceptionRepository(ExceptionRepository):
     async def list_exceptions(
         self,
         status: ExceptionStatus | None = None,
-    ) -> List[ExceptionRecord]:
+    ) -> list[ExceptionRecord]:
         records = list(self._records.values())
         if status is not None:
             records = [record for record in records if record.status is status]
@@ -392,7 +390,7 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
     async def list_exceptions(
         self,
         status: ExceptionStatus | None = None,
-    ) -> List[ExceptionRecord]:
+    ) -> list[ExceptionRecord]:
         if self._prefer_rest():
             return await asyncio.to_thread(_list_exceptions_rest, status)
         try:
@@ -445,51 +443,21 @@ class SqlAlchemyExceptionRepository(ExceptionRepository):
         new_values: dict | None,
         performed_by: UUID | None = None,
     ) -> None:
-        if self._prefer_rest():
-            await asyncio.to_thread(
-                rest_insert,
-                "audit_logs",
-                {
-                    "entity_type": AUDIT_ENTITY_PROCESS,
-                    "entity_id": str(process_id or exception_id),
-                    "action": action,
-                    "performed_by": str(performed_by) if performed_by else None,
-                    "old_values": old_values,
-                    "new_values": new_values,
-                },
-            )
-            return
+        from app.core.audit_writer import write_bpm_audit
+
+        entity_id = process_id or exception_id
         try:
-            self._session.add(
-                AuditLog(
-                    id=uuid4(),
-                    entity_type=AUDIT_ENTITY_PROCESS,
-                    entity_id=process_id or exception_id,
-                    action=action,
-                    performed_by=performed_by,
-                    old_values=old_values,
-                    new_values=new_values,
-                    timestamp=utc_now(),
-                )
+            await write_bpm_audit(
+                self._session if not self._prefer_rest() else None,
+                entity_type=AUDIT_ENTITY_PROCESS,
+                entity_id=entity_id,
+                action=action,
+                old_values=old_values,
+                new_values=new_values,
+                performed_by=performed_by,
+                prefer_rest=self._prefer_rest(),
             )
         except Exception as exc:
-            if supabase_rest_configured():
-                try:
-                    await asyncio.to_thread(
-                        rest_insert,
-                        "audit_logs",
-                        {
-                            "entity_type": AUDIT_ENTITY_PROCESS,
-                            "entity_id": str(process_id or exception_id),
-                            "action": action,
-                            "performed_by": str(performed_by) if performed_by else None,
-                            "old_values": old_values,
-                            "new_values": new_values,
-                        },
-                    )
-                    return
-                except Exception:
-                    pass
             raise DatabasePersistenceError("Failed to record exception audit") from exc
 
     async def commit(self) -> None:

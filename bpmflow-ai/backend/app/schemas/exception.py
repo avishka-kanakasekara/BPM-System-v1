@@ -1,12 +1,15 @@
 """API schemas for exception resources."""
 
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.agents.agent4_orchestrator.constants import ExceptionSeverity, ExceptionStatus, ExceptionType
+from app.agents.agent4_orchestrator.constants import (
+    ExceptionSeverity,
+    ExceptionStatus,
+    ExceptionType,
+)
 from app.agents.agent4_orchestrator.schemas import ExceptionRecord
 
 
@@ -14,16 +17,16 @@ class ExceptionResponse(BaseModel):
     """Exception record exposed to API clients."""
 
     id: UUID
-    process_id: Optional[UUID] = None
-    task_id: Optional[UUID] = None
+    process_id: UUID | None = None
+    task_id: UUID | None = None
     severity: ExceptionSeverity
     type: ExceptionType
     description: str = Field(min_length=1)
     status: ExceptionStatus
-    assigned_to: Optional[UUID] = None
-    resolution_notes: Optional[str] = None
+    assigned_to: UUID | None = None
+    resolution_notes: str | None = None
     created_at: datetime
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
 
 
 class ExceptionResolveRequest(BaseModel):
@@ -35,7 +38,7 @@ class ExceptionResolveRequest(BaseModel):
 class ExceptionRetryRequest(BaseModel):
     """Payload for retrying an exception."""
 
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class ExceptionFailRequest(BaseModel):

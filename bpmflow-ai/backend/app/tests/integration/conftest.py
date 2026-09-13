@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
 from urllib.parse import urlparse
 
 import pytest
@@ -21,7 +20,7 @@ from app.agents.agent3_resources.repositories.session_factory import (
 AGENT3_TEST_DATABASE_URL_ENV = "AGENT3_TEST_DATABASE_URL"
 
 
-def _resolve_test_database_url() -> Optional[str]:
+def _resolve_test_database_url() -> str | None:
     return os.getenv(AGENT3_TEST_DATABASE_URL_ENV)
 
 

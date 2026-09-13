@@ -1,23 +1,22 @@
 """Tests for template-based explanation generation."""
 
-import pytest
 from decimal import Decimal
 from uuid import uuid4
 
-from app.tests.conftest import utc_datetime
 from app.agents.agent3_resources import (
-    TemplateExplainer,
-    ExplanationContext,
-    RequirementResult,
-    RankedHumanCandidate,
-    ScoreBreakdown,
     BudgetValidationChecks,
+    ExplanationContext,
+    GapAlternativeType,
+    GapType,
+    RankedHumanCandidate,
+    RequirementResult,
+    ResourceAlternative,
     ResourceGap,
     ResourceType,
-    GapType,
-    ResourceAlternative,
-    GapAlternativeType,
+    ScoreBreakdown,
+    TemplateExplainer,
 )
+from app.tests.conftest import utc_datetime
 
 
 def _context(**overrides):
@@ -87,8 +86,8 @@ class TestExplainer:
     def test_explanation_includes_excluded_resources(self):
         from app.agents.agent3_resources import (
             ExcludedResource,
-            ExclusionReasonEntry,
             ExclusionReason,
+            ExclusionReasonEntry,
         )
 
         explainer = TemplateExplainer()

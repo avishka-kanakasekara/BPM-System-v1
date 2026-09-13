@@ -1,13 +1,14 @@
 """Map normalized read-path rows into Agent 3 human evidence models."""
 
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 from uuid import UUID
 
 from ...constants import ResourceType
 from ...schemas import HumanResourceEvidence, validate_timezone_aware
-from ..exceptions import CrossTenantGraphError, MissingEvidenceError, MappingError
+from ..exceptions import CrossTenantGraphError, MappingError, MissingEvidenceError
 
 
 def _require_uuid(value: Any, field_name: str) -> UUID:
@@ -42,15 +43,15 @@ def map_human_resource_evidence(
     resource_row: Mapping[str, Any],
     *,
     expected_tenant_id: UUID,
-    roles: List[str],
-    skills: List[str],
-    authority: Optional[str],
-    availability_row: Optional[Mapping[str, Any]],
-    workload_row: Optional[Mapping[str, Any]],
+    roles: list[str],
+    skills: list[str],
+    authority: str | None,
+    availability_row: Mapping[str, Any] | None,
+    workload_row: Mapping[str, Any] | None,
     profile_row: Mapping[str, Any],
-    sod_conflicts: List[UUID],
-    coi_flags: List[str],
-    evidence_rows: List[Mapping[str, Any]],
+    sod_conflicts: list[UUID],
+    coi_flags: list[str],
+    evidence_rows: list[Mapping[str, Any]],
 ) -> HumanResourceEvidence:
     """Map joined rows into HumanResourceEvidence."""
     resource_id = _require_uuid(resource_row.get("id"), "resource_id")
@@ -90,9 +91,9 @@ def map_human_resource_evidence(
     if max_workload < 0 or max_workload > 100 or profile_max < 0 or profile_max > 100:
         raise MappingError("max_workload_pct out of range")
 
-    evidence_references: Dict[str, Any] = {}
-    evidence_checked_at: Optional[datetime] = None
-    evidence_valid_until: Optional[datetime] = None
+    evidence_references: dict[str, Any] = {}
+    evidence_checked_at: datetime | None = None
+    evidence_valid_until: datetime | None = None
 
     for row in evidence_rows:
         key = row.get("evidence_key")

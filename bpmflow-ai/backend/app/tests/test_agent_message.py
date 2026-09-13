@@ -1,6 +1,6 @@
 """Tests for the shared inter-agent message contract."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -54,7 +54,7 @@ class TestAgentMessageMetadata:
             )
 
     def test_timezone_aware_timestamp_accepted(self) -> None:
-        aware = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        aware = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         metadata = AgentMessageMetadata(**_valid_metadata(timestamp=aware))
         assert metadata.timestamp.tzinfo is not None
 
@@ -139,13 +139,13 @@ class TestGenericAgentMessage:
 
 class TestAgent3Compatibility:
     def test_importing_shared_schema_does_not_break_agent3_schemas(self) -> None:
-        from app.agents.agent3_resources.schemas import (
-            AgentMessageMetadata as Agent3Metadata,
-        )
         from app.agents.agent3_resources.constants import (
             AGENT_3_SENDER,
             AGENT_4_RECEIVER,
             MessageType,
+        )
+        from app.agents.agent3_resources.schemas import (
+            AgentMessageMetadata as Agent3Metadata,
         )
 
         assert AgentMessageMetadata is not Agent3Metadata

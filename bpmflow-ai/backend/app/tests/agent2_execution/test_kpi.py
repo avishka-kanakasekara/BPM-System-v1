@@ -5,12 +5,11 @@ Tests cycle time, waiting time, PM4Py log generation, and KPI metrics calculatio
 against known hand-constructed event logs.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 import pandas as pd
-import pytest
 
-from app.agents.agent2_execution.analytics import cycle_time, event_analyzer, kpi_engine, waiting_time
-
+from app.agents.agent2_execution.analytics import cycle_time, event_analyzer, waiting_time
 
 # ---------------------------------------------------------------------------
 # 1. Cycle Time Analytics Unit Tests
@@ -18,7 +17,7 @@ from app.agents.agent2_execution.analytics import cycle_time, event_analyzer, kp
 
 def test_cycle_time_calculation():
     # Hand-constructed log for 2 cases
-    t0 = datetime(2026, 8, 15, 10, 0, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 8, 15, 10, 0, 0, tzinfo=UTC)
     data = [
         {"case:concept:name": "case-1", "concept:name": "Request Validation", "time:timestamp": t0},
         {"case:concept:name": "case-1", "concept:name": "Manager Approval", "time:timestamp": t0 + timedelta(hours=2, minutes=30)},
@@ -40,7 +39,7 @@ def test_cycle_time_calculation():
 # ---------------------------------------------------------------------------
 
 def test_waiting_time_calculation():
-    t0 = datetime(2026, 8, 15, 10, 0, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 8, 15, 10, 0, 0, tzinfo=UTC)
     # Case 1: Request Validation at t0, Manager Approval 18.0h later
     data = [
         {"case:concept:name": "case-1", "concept:name": "Request Validation", "time:timestamp": t0},

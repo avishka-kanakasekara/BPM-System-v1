@@ -10,7 +10,6 @@ Detects, logs, and neutralizes prompt-injection patterns (e.g. "ignore previous 
 
 import logging
 import re
-from typing import Tuple
 
 logger = logging.getLogger("agent_2.security.sanitizer")
 
@@ -30,7 +29,7 @@ INJECTION_PATTERNS = [
 ]
 
 
-def sanitize_prompt_text(text: str) -> Tuple[str, bool, str]:
+def sanitize_prompt_text(text: str) -> tuple[str, bool, str]:
     """
     Sanitize text before inserting it into Gemini prompt context.
 

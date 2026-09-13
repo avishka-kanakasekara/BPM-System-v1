@@ -5,7 +5,7 @@ Simulates AS-IS vs proposed TO-BE process durations and calculates predicted eff
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any
 
 
 @dataclass
@@ -14,7 +14,7 @@ class SimulationResult:
     to_be_cycle_time_hours: float
     hours_saved: float
     improvement_percentage: float
-    proposed_interventions: Dict[str, Any] = field(default_factory=dict)
+    proposed_interventions: dict[str, Any] = field(default_factory=dict)
 
 
 def simulate_to_be_process(

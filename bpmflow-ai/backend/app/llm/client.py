@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.llm.retry import is_transient_llm_error
 from app.llm.structured_output import StructuredOutputError, parse_structured_output
 
 logger = get_logger(__name__)
@@ -22,6 +23,10 @@ logger = get_logger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 _FIXTURE_PATH = Path(__file__).parent / "fixtures" / "mock_llm_responses.json"
+
+
+class LLMUnavailableError(RuntimeError):
+    """Raised when live LLM calls are disabled (GEMINI_OFFLINE) and no mock is active."""
 _MAX_ATTEMPTS = 3
 _INITIAL_BACKOFF_SECONDS = 0.5
 
@@ -44,26 +49,6 @@ def _canned_response(response_model: type[T]) -> T:
             f"Add a '{response_model.__name__}' entry to {_FIXTURE_PATH.name}."
         )
     return response_model.model_validate(payload)
-
-
-def _is_transient(exc: BaseException) -> bool:
-    name = type(exc).__name__
-    if name in {
-        "RateLimitError",
-        "APIConnectionError",
-        "APITimeoutError",
-        "InternalServerError",
-        "OverloadedError",
-        "ServiceUnavailableError",
-    }:
-        return True
-    status = getattr(exc, "status_code", None)
-    if status in {408, 409, 429, 500, 502, 503, 504, 529}:
-        return True
-    text = str(exc)
-    if "RESOURCE_EXHAUSTED" in text or "429" in text:
-        return True
-    return isinstance(exc, (TimeoutError, ConnectionError, OSError))
 
 
 def _gemini_configured() -> bool:
@@ -201,6 +186,11 @@ def call_llm(system_prompt: str, user_content: str, response_model: type[T]) -> 
         )
         return _canned_response(response_model)
 
+    if settings.GEMINI_OFFLINE:
+        raise LLMUnavailableError(
+            "GEMINI_OFFLINE is enabled; callers must use deterministic discovery fallbacks."
+        )
+
     delay = _INITIAL_BACKOFF_SECONDS
     last_error: BaseException | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -224,7 +214,7 @@ def call_llm(system_prompt: str, user_content: str, response_model: type[T]) -> 
             raise
         except Exception as exc:
             last_error = exc
-            if attempt >= _MAX_ATTEMPTS or not _is_transient(exc):
+            if attempt >= _MAX_ATTEMPTS or not is_transient_llm_error(exc):
                 logger.warning(
                     "llm_call_failed",
                     extra={

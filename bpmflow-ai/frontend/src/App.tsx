@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes, useParams } from 'react
 import { AuthProvider } from './auth/AuthContext'
 import AppShell from './components/layout/AppShell'
 import { RequireAuth } from './components/RequireAuth'
+import { RequireRole } from './components/RequireRole'
 import DashboardPage from './pages/DashboardPage'
 import DiscoverPage from './pages/DiscoverPage'
 import ProcessesPage from './pages/ProcessesPage'
@@ -9,16 +10,18 @@ import CreateProcessPage from './pages/CreateProcessPage'
 import ProcessDetailPage from './pages/ProcessDetailPage'
 import ApprovalsPage from './pages/ApprovalsPage'
 import ApprovalDetailPage from './pages/ApprovalDetailPage'
-import ExceptionsPage from './pages/ExceptionsPage'
-import ExceptionDetailPage from './pages/ExceptionDetailPage'
 import AuditPage from './pages/AuditPage'
 import SignInPage from './pages/SignInPage'
 import SignUpPage from './pages/SignUpPage'
 import TasksPage from './pages/TasksPage'
 import SettingsPage from './pages/SettingsPage'
+import Agent2DashboardPage from './pages/agent2/DashboardPage'
+import Agent2ExecutionDetailPage from './pages/agent2/ExecutionDetailPage'
 import Agent2KpisPage from './pages/agent2/KpisPage'
 import Agent2ReceiptsPage from './pages/agent2/ReceiptsPage'
 import Agent2RecommendationsPage from './pages/agent2/RecommendationsPage'
+import Agent2ToolsPage from './pages/agent2/ToolsPage'
+import PoliciesPage from './pages/PoliciesPage'
 import AllocationRequestPage from './features/agent3/pages/AllocationRequestPage'
 import RecommendationResultPage from './features/agent3/pages/RecommendationResultPage'
 import RecommendationLookupPage from './features/agent3/pages/RecommendationLookupPage'
@@ -52,14 +55,46 @@ function App() {
               <Route path="processes/:processId" element={<ProcessDetailPage />} />
               <Route path="workflows" element={<Navigate to="/processes" replace />} />
               <Route path="workflows/:processId" element={<WorkflowProcessRedirect />} />
-              <Route path="tasks" element={<TasksPage />} />
-              <Route path="approvals" element={<ApprovalsPage />} />
-              <Route path="approvals/:approvalId" element={<ApprovalDetailPage />} />
-              <Route path="exceptions" element={<ExceptionsPage />} />
-              <Route path="exceptions/:exceptionId" element={<ExceptionDetailPage />} />
+              <Route
+                path="tasks"
+                element={
+                  <RequireRole roles={['requester', 'admin']}>
+                    <TasksPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="approvals"
+                element={
+                  <RequireRole roles={['approver', 'admin']}>
+                    <ApprovalsPage />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="approvals/:approvalId"
+                element={
+                  <RequireRole roles={['approver', 'admin']}>
+                    <ApprovalDetailPage />
+                  </RequireRole>
+                }
+              />
+              <Route path="exceptions" element={<Navigate to="/processes" replace />} />
+              <Route path="exceptions/:exceptionId" element={<Navigate to="/processes" replace />} />
               <Route path="audit" element={<AuditPage />} />
+              <Route
+                path="policies"
+                element={
+                  <RequireRole roles={['admin']}>
+                    <PoliciesPage />
+                  </RequireRole>
+                }
+              />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="discover" element={<DiscoverPage />} />
+              <Route path="agent2" element={<Agent2DashboardPage />} />
+              <Route path="agent2/tools" element={<Agent2ToolsPage />} />
+              <Route path="agent2/executions/:receiptId" element={<Agent2ExecutionDetailPage />} />
               <Route path="agent2/kpis" element={<Agent2KpisPage />} />
               <Route path="agent2/receipts" element={<Agent2ReceiptsPage />} />
               <Route path="agent2/recommendations" element={<Agent2RecommendationsPage />} />

@@ -1,9 +1,9 @@
 """Tests for Agent 4 BPM orchestration workflow coordinator."""
 
+import inspect
 from decimal import Decimal
 from uuid import uuid4
 
-import inspect
 import pytest
 
 from app.agents.agent4_orchestrator import (

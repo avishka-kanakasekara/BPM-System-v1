@@ -1,16 +1,24 @@
-"""Static migration contract tests for Agent 3 write-path persistence (0004)."""
+"""Static migration contract tests for Agent 3 write-path persistence."""
+
+from pathlib import Path
 
 import pytest
-from pathlib import Path
+
+from app.agents.agent3_resources.repositories.write_table_mapping import MIGRATION_0004_FILENAME
 
 
 class TestMigration0004Contract:
-    """Static contract tests for 0004 migration SQL."""
+    """Static contract tests for Agent 3 write-path migration SQL."""
 
     @pytest.fixture
     def migration_path(self) -> Path:
-        """Path to the 0004 migration file."""
-        return Path(__file__).parent.parent.parent.parent / "supabase" / "migrations" / "0004_agent3_write_path_persistence.sql"
+        """Path to the write-path migration file."""
+        return (
+            Path(__file__).parent.parent.parent.parent
+            / "supabase"
+            / "migrations"
+            / MIGRATION_0004_FILENAME
+        )
 
     @pytest.fixture
     def migration_content(self, migration_path: Path) -> str:

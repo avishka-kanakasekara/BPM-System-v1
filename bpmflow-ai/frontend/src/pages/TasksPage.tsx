@@ -19,14 +19,11 @@ export default function TasksPage() {
       <Panel>
         <EmptyState
           title="Task management is not yet available for this workspace."
-          body="BPMFlow AI stores workflow tasks internally, but a dedicated task inbox API is not exposed yet. Use Approvals and Exceptions for human decisions and recovery today."
+          body="BPMFlow AI stores workflow tasks internally, but a dedicated task inbox API is not exposed yet. Use Approvals and Processes for human decisions today."
           action={
             <>
               <Link to="/approvals" className="btn btn-primary btn-sm">
                 Open Approvals
-              </Link>
-              <Link to="/exceptions" className="btn btn-ghost btn-sm">
-                Open Exceptions
               </Link>
               <Link to="/processes" className="btn btn-ghost btn-sm">
                 View Processes

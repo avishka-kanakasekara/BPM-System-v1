@@ -4,7 +4,8 @@ Agent 2 — Tool Input & Output Pydantic Schemas
 Defines strongly-typed input parameters and return payloads for all 12 tools registered in ToolRegistry.
 """
 
-from typing import Any, Dict, List
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -73,17 +74,31 @@ class SendReminderOutput(BaseModel):
 
 
 # 5. create_po_draft
+class POLineItem(BaseModel):
+    description: str = Field(..., min_length=1)
+    quantity: float = Field(..., gt=0.0)
+    unit_price: float = Field(..., ge=0.0)
+
+
 class CreatePODraftInput(BaseModel):
-    vendor_id: str = Field(..., description="Approved vendor ID")
-    amount: float = Field(..., gt=0.0, description="PO amount")
+    vendor_id: str = Field(..., min_length=1, description="Approved vendor ID")
     process_id: str = Field(..., description="Process instance ID")
+    task_id: str = Field(default="", description="Associated task ID")
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    items: list[POLineItem] = Field(default_factory=list)
     items_summary: str = Field(default="", description="Summary of requested items")
+    amount: float = Field(default=0.0, ge=0.0, description="Legacy total; recalculated server-side")
+    tax_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    notes: str = Field(default="")
 
 
 class CreatePODraftOutput(BaseModel):
     po_number: str = Field(..., description="Generated PO number string")
-    status: str = Field(..., description="PO draft status")
-    amount: float = Field(..., description="PO amount")
+    status: str = Field(..., description="PO draft status (always DRAFT)")
+    amount: float = Field(..., description="Server-calculated total")
+    subtotal: float = Field(..., description="Server-calculated subtotal")
+    tax: float = Field(..., description="Server-calculated tax")
+    currency: str = Field(default="USD")
     created_at: str = Field(..., description="ISO creation timestamp")
 
 
@@ -98,6 +113,7 @@ class RequestQuotationInput(BaseModel):
 class RequestQuotationOutput(BaseModel):
     quotation_id: str = Field(..., description="Quotation request ID")
     status: str = Field(..., description="Quotation request status")
+    email_status: str = Field(default="", description="Email dispatch status if sent")
     requested_at: str = Field(..., description="ISO request timestamp")
 
 
@@ -150,7 +166,7 @@ class GetProcessHistoryInput(BaseModel):
 
 class GetProcessHistoryOutput(BaseModel):
     process_id: str = Field(..., description="Target process instance ID")
-    events: List[Dict[str, Any]] = Field(default_factory=list, description="List of process workflow event dicts")
+    events: list[dict[str, Any]] = Field(default_factory=list, description="List of process workflow event dicts")
     count: int = Field(..., description="Event count returned")
 
 
@@ -161,8 +177,8 @@ class GetTaskHistoryInput(BaseModel):
 
 class GetTaskHistoryOutput(BaseModel):
     task_id: str = Field(..., description="Target task ID")
-    attempts: List[Dict[str, Any]] = Field(default_factory=list, description="Execution attempt dicts")
-    receipts: List[Dict[str, Any]] = Field(default_factory=list, description="Execution receipt dicts")
+    attempts: list[dict[str, Any]] = Field(default_factory=list, description="Execution attempt dicts")
+    receipts: list[dict[str, Any]] = Field(default_factory=list, description="Execution receipt dicts")
 
 
 # 12. calculate_kpi

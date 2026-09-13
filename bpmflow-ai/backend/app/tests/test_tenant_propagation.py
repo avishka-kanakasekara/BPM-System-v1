@@ -1,28 +1,28 @@
 """Tests for trusted tenant_id propagation through Agent 3."""
 
-import pytest
 from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+
 pytestmark = pytest.mark.anyio
 
 from app.agents.agent3_resources import (
-    ResourceAllocationService,
-    HumanResourceStrategy,
-    BudgetResourceStrategy,
-    InMemoryResourceRepository,
-    AllocationRequest,
     AgentMessageMetadata,
-    HumanResourceRequirement,
+    AllocationRequest,
     BudgetResourceRequirement,
+    BudgetResourceStrategy,
+    HumanResourceRequirement,
+    HumanResourceStrategy,
+    InMemoryResourceRepository,
     MessageType,
-    ResourceType,
-    create_human_evidence,
+    ResourceAllocationService,
     create_budget_evidence,
-    get_tenant_a_id,
+    create_human_evidence,
     get_requester_id,
     get_resource_id_1,
+    get_tenant_a_id,
 )
 
 

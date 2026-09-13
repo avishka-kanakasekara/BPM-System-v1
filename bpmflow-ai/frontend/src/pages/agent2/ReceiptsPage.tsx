@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   apiErrorMessage,
   listExecutionReceipts,
@@ -17,6 +18,7 @@ export default function Agent2ReceiptsPage() {
   const [rows, setRows] = useState<ExecutionReceipt[]>([])
   const [processId, setProcessId] = useState('')
   const [status, setStatus] = useState('')
+  const [tool, setTool] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -28,7 +30,9 @@ export default function Agent2ReceiptsPage() {
         status: status || undefined,
         limit: 100,
       })
-      setRows(data)
+      setRows(
+        tool ? data.filter((r) => r.tool_name.toLowerCase().includes(tool.toLowerCase())) : data,
+      )
       setError(null)
     } catch (err) {
       setError(apiErrorMessage(err))
@@ -66,7 +70,14 @@ export default function Agent2ReceiptsPage() {
             <option value="SUCCESS">SUCCESS</option>
             <option value="FAILED">FAILED</option>
             <option value="RETRYING">RETRYING</option>
+            <option value="BLOCKED">BLOCKED</option>
           </select>
+          <input
+            placeholder="Tool name filter"
+            value={tool}
+            onChange={(e) => setTool(e.target.value)}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
           <button
             type="button"
             onClick={() => void refresh()}
@@ -92,6 +103,7 @@ export default function Agent2ReceiptsPage() {
                   <th className="px-2 py-2">Status</th>
                   <th className="px-2 py-2">Latency</th>
                   <th className="px-2 py-2">Process / Task</th>
+                  <th className="px-2 py-2">Detail</th>
                 </tr>
               </thead>
               <tbody>
@@ -114,6 +126,14 @@ export default function Agent2ReceiptsPage() {
                     <td className="px-2 py-3 font-mono text-xs text-slate-500">
                       <div>{r.process_id}</div>
                       <div>{r.task_id}</div>
+                    </td>
+                    <td className="px-2 py-3">
+                      <Link
+                        to={`/agent2/executions/${r.id}`}
+                        className="text-indigo-600 hover:underline text-sm"
+                      >
+                        View
+                      </Link>
                     </td>
                   </tr>
                 ))}

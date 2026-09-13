@@ -23,5 +23,62 @@
         "confidence": 0.81
       }
     ]
+  },
+  "StepSelectionResult": {
+    "process_name": "Procurement Request Process",
+    "steps": [
+      {
+        "name": "Submit Purchase Request",
+        "order": 1,
+        "required": true,
+        "actor_hint": "Requester",
+        "rationale": "Document opens with a purchase request submission requirement.",
+        "source_reference": "page 1",
+        "confidence": 0.93
+      },
+      {
+        "name": "Approve Purchase Request",
+        "order": 2,
+        "required": true,
+        "actor_hint": "Manager",
+        "rationale": "Approval is required before purchasing continues.",
+        "source_reference": "page 1",
+        "confidence": 0.91
+      },
+      {
+        "name": "Create Purchase Order",
+        "order": 3,
+        "required": true,
+        "actor_hint": "Procurement",
+        "rationale": "Evidence requires a purchase order after approval.",
+        "source_reference": "page 1",
+        "confidence": 0.86
+      },
+      {
+        "name": "Receive Goods",
+        "order": 4,
+        "required": true,
+        "actor_hint": "Warehouse",
+        "rationale": "Goods receipt is listed as a required process action.",
+        "source_reference": "page 1",
+        "confidence": 0.84
+      },
+      {
+        "name": "Pay Invoice",
+        "order": 5,
+        "required": true,
+        "actor_hint": "Finance",
+        "rationale": "Payment completes the procurement process in the evidence.",
+        "source_reference": "page 1",
+        "confidence": 0.82
+      }
+    ],
+    "rejected_candidates": [
+      {
+        "name": "Company history overview",
+        "reason": "Narrative background text is not an executable process step."
+      }
+    ],
+    "selection_summary": "Selected the ordered procurement steps required by the uploaded evidence."
   }
 }

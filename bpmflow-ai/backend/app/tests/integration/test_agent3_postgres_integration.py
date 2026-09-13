@@ -6,12 +6,10 @@ migrations 0002 and 0003 applied. Skipped automatically when unset.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
-from typing import Callable
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent3_resources.constants import ResourceType
 from app.agents.agent3_resources.fixtures import get_requester_id

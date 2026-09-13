@@ -8,8 +8,9 @@ status away from PENDING_APPROVAL to APPROVED or REJECTED.
 
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -17,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.database.models import OptimizationRecommendation
 from app.agents.agent2_execution.database.session import get_db_session
+from app.core.security import require_roles
+from app.schemas.auth import CurrentUser
 
 logger = logging.getLogger("agent_2.routers.governance")
 router = APIRouter(prefix="/agent2/recommendations", tags=["Agent 2 — Human Governance Gate"])
@@ -35,15 +38,17 @@ class HumanApprovalDecision(BaseModel):
 async def approve_recommendation(
     recommendation_id: str,
     decision: HumanApprovalDecision,
-    session: Optional[AsyncSession] = Depends(get_db_session),
-) -> Dict[str, Any]:
+    session: AsyncSession | None = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_roles("admin", "approver")),
+) -> dict[str, Any]:
+    _ = current_user
     if session is None:
         logger.info(f"HUMAN GOVERNANCE GATE: Recommendation {recommendation_id!r} APPROVED by human user {decision.user_id!r}")
         return {
             "recommendation_id": recommendation_id,
             "status": "APPROVED",
             "approved_by": decision.user_id,
-            "approved_at": datetime.now(timezone.utc).isoformat(),
+            "approved_at": datetime.now(UTC).isoformat(),
             "notes": decision.notes,
             "message": "Optimization recommendation successfully approved by human governor.",
         }
@@ -56,7 +61,7 @@ async def approve_recommendation(
             "recommendation_id": recommendation_id,
             "status": "APPROVED",
             "approved_by": decision.user_id,
-            "approved_at": datetime.now(timezone.utc).isoformat(),
+            "approved_at": datetime.now(UTC).isoformat(),
             "notes": decision.notes,
             "message": "Optimization recommendation successfully approved by human governor.",
         }
@@ -71,7 +76,7 @@ async def approve_recommendation(
             "recommendation_id": recommendation_id,
             "status": "APPROVED",
             "approved_by": decision.user_id,
-            "approved_at": datetime.now(timezone.utc).isoformat(),
+            "approved_at": datetime.now(UTC).isoformat(),
             "notes": decision.notes,
             "message": "Optimization recommendation successfully approved by human governor.",
         }
@@ -84,7 +89,7 @@ async def approve_recommendation(
 
     rec.status = "APPROVED"
     rec.approved_by = decision.user_id
-    rec.approved_at = datetime.now(timezone.utc)
+    rec.approved_at = datetime.now(UTC)
     await session.commit()
 
     logger.info(f"HUMAN GOVERNANCE GATE: Recommendation {recommendation_id!r} APPROVED by human user {decision.user_id!r}")
@@ -106,15 +111,17 @@ async def approve_recommendation(
 async def reject_recommendation(
     recommendation_id: str,
     decision: HumanApprovalDecision,
-    session: Optional[AsyncSession] = Depends(get_db_session),
-) -> Dict[str, Any]:
+    session: AsyncSession | None = Depends(get_db_session),
+    current_user: CurrentUser = Depends(require_roles("admin", "approver")),
+) -> dict[str, Any]:
+    _ = current_user
     if session is None:
         logger.info(f"HUMAN GOVERNANCE GATE: Recommendation {recommendation_id!r} REJECTED by human user {decision.user_id!r}")
         return {
             "recommendation_id": recommendation_id,
             "status": "REJECTED",
             "rejected_by": decision.user_id,
-            "rejected_at": datetime.now(timezone.utc).isoformat(),
+            "rejected_at": datetime.now(UTC).isoformat(),
             "notes": decision.notes,
             "message": "Optimization recommendation rejected by human governor.",
         }
@@ -127,7 +134,7 @@ async def reject_recommendation(
             "recommendation_id": recommendation_id,
             "status": "REJECTED",
             "rejected_by": decision.user_id,
-            "rejected_at": datetime.now(timezone.utc).isoformat(),
+            "rejected_at": datetime.now(UTC).isoformat(),
             "notes": decision.notes,
             "message": "Optimization recommendation rejected by human governor.",
         }
@@ -142,7 +149,7 @@ async def reject_recommendation(
             "recommendation_id": recommendation_id,
             "status": "REJECTED",
             "rejected_by": decision.user_id,
-            "rejected_at": datetime.now(timezone.utc).isoformat(),
+            "rejected_at": datetime.now(UTC).isoformat(),
             "notes": decision.notes,
             "message": "Optimization recommendation rejected by human governor.",
         }
@@ -161,7 +168,7 @@ async def reject_recommendation(
         "recommendation_id": recommendation_id,
         "status": rec.status,
         "rejected_by": decision.user_id,
-        "rejected_at": datetime.now(timezone.utc).isoformat(),
+        "rejected_at": datetime.now(UTC).isoformat(),
         "notes": decision.notes,
         "message": "Optimization recommendation rejected by human governor.",
     }

@@ -1,18 +1,16 @@
 """Tests for deterministic ranking - scoring formula and tie-breaking."""
 
-import pytest
-from decimal import Decimal
 from datetime import timedelta
+from decimal import Decimal
 
 from app.agents.agent3_resources import (
+    SCORING_WEIGHTS,
     HumanResourceRanker,
     create_human_evidence,
     create_human_requirement,
-    SCORING_WEIGHTS,
-    get_tenant_a_id,
     get_resource_id_1,
     get_resource_id_2,
-    get_resource_id_3,
+    get_tenant_a_id,
 )
 
 

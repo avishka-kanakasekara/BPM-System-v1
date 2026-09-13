@@ -7,8 +7,11 @@ Falls back to PostgREST when the SQLAlchemy session is unavailable.
 
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.database.ids import parse_uuid
@@ -18,6 +21,7 @@ from app.agents.agent2_execution.database.persistence import (
     ensure_task,
     merge_process_metadata,
 )
+from app.agents.agent2_execution.execution.idempotency import register_success_receipt
 
 logger = logging.getLogger("agent_2.execution.receipt_manager")
 
@@ -64,9 +68,9 @@ def _persist_receipt_rest(
     started_at: datetime,
     completed_at: datetime,
     status: str,
-    result: Dict[str, Any],
-    error_type: Optional[str],
-    error_message: Optional[str],
+    result: dict[str, Any],
+    error_type: str | None,
+    error_message: str | None,
     latency_ms: int,
 ) -> None:
     try:
@@ -97,7 +101,7 @@ def _persist_receipt_rest(
             },
         )
         event_type = "TASK_COMPLETED" if status == "SUCCESS" else f"TOOL_{status}"
-        event_row: Dict[str, Any] = {
+        event_row: dict[str, Any] = {
             "process_id": process_id,
             "event_type": event_type,
             "actor": agent_id or "agent_2",
@@ -124,7 +128,7 @@ def _persist_receipt_rest(
 
 
 async def create_receipt(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
     process_id: str,
     task_id: str,
     agent_id: str,
@@ -133,11 +137,11 @@ async def create_receipt(
     attempt_number: int,
     idempotency_key: str,
     started_at: datetime,
-    completed_at: Optional[datetime],
+    completed_at: datetime | None,
     status: str,
-    result: Optional[Dict[str, Any]] = None,
-    error_type: Optional[str] = None,
-    error_message: Optional[str] = None,
+    result: dict[str, Any] | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
     latency_ms: int = 0,
 ) -> ExecutionReceipt:
     """
@@ -148,7 +152,7 @@ async def create_receipt(
     proc_uuid = parse_uuid(process_id)
     task_uuid = parse_uuid(task_id)
     receipt_id = uuid.uuid4()
-    completed = completed_at or datetime.now(timezone.utc)
+    completed = completed_at or datetime.now(UTC)
     result_payload = result or {}
 
     if session is not None:
@@ -214,6 +218,25 @@ async def create_receipt(
                 )
             await session.commit()
             persisted = True
+        except IntegrityError as exc:
+            logger.info(f"Idempotency conflict for key {idempotency_key!r}: {exc}")
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            if idempotency_key:
+                res = await session.execute(
+                    select(ExecutionReceipt)
+                    .where(
+                        ExecutionReceipt.idempotency_key == idempotency_key,
+                        ExecutionReceipt.status == "SUCCESS",
+                    )
+                    .limit(1)
+                )
+                existing = res.scalar_one_or_none()
+                if existing is not None:
+                    register_success_receipt(existing)
+                    return existing
         except Exception as exc:
             logger.warning(f"Failed to persist execution receipt: {exc}")
             try:
@@ -257,5 +280,8 @@ async def create_receipt(
             }
         },
     )
+
+    if status == "SUCCESS":
+        register_success_receipt(receipt_row)
 
     return receipt_row

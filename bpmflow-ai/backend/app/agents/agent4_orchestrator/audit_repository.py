@@ -3,10 +3,9 @@
 Write paths remain in process, approval, and exception repositories.
 """
 
-from abc import ABC, abstractmethod
 import asyncio
-from datetime import datetime, timezone
-from typing import List, Optional
+from abc import ABC, abstractmethod
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -29,9 +28,9 @@ class AuditLogRecord(BaseModel):
     entity_type: str
     entity_id: UUID
     action: str
-    performed_by: Optional[UUID] = None
-    old_values: Optional[dict] = None
-    new_values: Optional[dict] = None
+    performed_by: UUID | None = None
+    old_values: dict | None = None
+    new_values: dict | None = None
     timestamp: datetime
 
 
@@ -68,7 +67,7 @@ def _list_audit_rest(
     entity_id: UUID | None,
     limit: int,
     offset: int,
-) -> List[AuditLogRecord]:
+) -> list[AuditLogRecord]:
     params: dict[str, str] = {
         "select": "id,entity_type,entity_id,action,performed_by,old_values,new_values,timestamp",
         "order": "timestamp.desc",
@@ -92,7 +91,7 @@ class AuditRepository(ABC):
         entity_id: UUID | None = None,
         limit: int = DEFAULT_AUDIT_LIMIT,
         offset: int = 0,
-    ) -> List[AuditLogRecord]:
+    ) -> list[AuditLogRecord]:
         """Return audit rows newest first, with bounded pagination."""
 
 
@@ -100,7 +99,7 @@ class InMemoryAuditRepository(AuditRepository):
     """In-memory stand-in for API tests."""
 
     def __init__(self) -> None:
-        self._records: List[AuditLogRecord] = []
+        self._records: list[AuditLogRecord] = []
 
     def add_record(self, record: AuditLogRecord) -> None:
         self._records.append(record)
@@ -111,7 +110,7 @@ class InMemoryAuditRepository(AuditRepository):
         entity_id: UUID | None = None,
         limit: int = DEFAULT_AUDIT_LIMIT,
         offset: int = 0,
-    ) -> List[AuditLogRecord]:
+    ) -> list[AuditLogRecord]:
         records = list(self._records)
         if entity_type is not None:
             records = [row for row in records if row.entity_type == entity_type]
@@ -133,7 +132,7 @@ class SqlAlchemyAuditRepository(AuditRepository):
         entity_id: UUID | None = None,
         limit: int = DEFAULT_AUDIT_LIMIT,
         offset: int = 0,
-    ) -> List[AuditLogRecord]:
+    ) -> list[AuditLogRecord]:
         bounded_limit = min(max(limit, 1), MAX_AUDIT_LIMIT)
         bounded_offset = max(offset, 0)
         if use_supabase_rest_fallback():

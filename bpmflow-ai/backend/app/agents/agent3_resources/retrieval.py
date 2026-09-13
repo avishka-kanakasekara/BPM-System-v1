@@ -1,12 +1,10 @@
 """Candidate discovery for Agent 3 Resource Allocation."""
 
-from typing import List
-from uuid import UUID
 from datetime import datetime
+from uuid import UUID
 
 from .interfaces import ResourceRepository
-from .schemas import HumanResourceEvidence, BudgetResourceEvidence
-from .constants import ResourceType
+from .schemas import BudgetResourceEvidence, HumanResourceEvidence
 
 
 class CandidateRetriever:
@@ -20,7 +18,7 @@ class CandidateRetriever:
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[HumanResourceEvidence]:
+    ) -> list[HumanResourceEvidence]:
         """Retrieve HUMAN resources filtered by tenant_id only.
         
         Cross-tenant resources are never returned.
@@ -39,7 +37,7 @@ class CandidateRetriever:
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[BudgetResourceEvidence]:
+    ) -> list[BudgetResourceEvidence]:
         """Retrieve BUDGET resources filtered by tenant_id only.
         
         Cross-tenant resources are never returned.

@@ -4,7 +4,7 @@ One Process model for Agent 1 discovery fields and Agent 4 current_stage.
 created_by is a UUID without a users FK so Agent 1 can persist without auth.users rows.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
@@ -18,7 +18,7 @@ JsonDict = JSON().with_variant(JSONB(), "postgresql")
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Process(Base):

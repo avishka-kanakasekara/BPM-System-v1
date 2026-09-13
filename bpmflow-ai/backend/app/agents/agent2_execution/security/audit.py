@@ -7,8 +7,8 @@ Every decision — allowed or blocked — gets an audit log entry with actor, ac
 
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,13 +18,13 @@ logger = logging.getLogger("agent_2.security.audit")
 
 
 async def log_audit_event(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
     actor: str,
     action: str,
     allowed: bool,
     reason: str,
     agent: str = "agent_2",
-    payload: Optional[Dict[str, Any]] = None,
+    payload: dict[str, Any] | None = None,
 ) -> AuditLog:
     """
     Write a structured audit log entry to the audit_logs table.
@@ -47,7 +47,7 @@ async def log_audit_event(
         allowed=allowed,
         reason=reason,
         payload=payload or {},
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
     )
 
     log_level = logging.INFO if allowed else logging.WARNING

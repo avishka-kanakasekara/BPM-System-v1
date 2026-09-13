@@ -5,7 +5,8 @@ Ranks process stages by average duration/waiting time using PM4Py KPI metrics an
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.analytics import kpi_engine
@@ -15,14 +16,14 @@ from app.agents.agent2_execution.analytics import kpi_engine
 class BottleneckAnalysis:
     dominant_bottleneck: str
     dominant_avg_duration_hours: float
-    stage_rankings: List[Dict[str, Any]] = field(default_factory=list)
+    stage_rankings: list[dict[str, Any]] = field(default_factory=list)
     impact_severity: str = "HIGH"
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 async def detect_bottlenecks(
-    session: Optional[AsyncSession],
-    process_id: Optional[str] = None,
+    session: AsyncSession | None,
+    process_id: str | None = None,
 ) -> BottleneckAnalysis:
     """
     Analyze process execution history and rank stages by duration to flag the primary bottleneck.

@@ -4,14 +4,13 @@ These tests verify the API contract matches the specification.
 """
 
 import os
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Optional, Set
-from uuid import uuid4, UUID
+from uuid import UUID, uuid4
 
+import pytest
 from fastapi import FastAPI
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 # Set minimal environment variables for config
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
@@ -19,31 +18,28 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
-from app.api.v1.routes_agent3 import router
-
-from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AgentMessageMetadata,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-    AllocationRecommendation,
-    RecommendationStatus,
-    MessageType,
-)
-from app.api.v1.routes_agent3 import router
 from app.agents.agent3_resources.api_dependencies import (
     Agent3RequestContext,
-    RequestContextProtocol,
     AllocationServiceProtocol,
     PersistenceProtocol,
     ReadRepositoryProtocol,
-    get_request_context,
+    RequestContextProtocol,
     get_allocation_service,
     get_persistence_service,
     get_read_repository,
+    get_request_context,
 )
 from app.agents.agent3_resources.constants import ResourceType
-
+from app.agents.agent3_resources.schemas import (
+    AgentMessageMetadata,
+    AllocationRecommendation,
+    AllocationRequest,
+    BudgetResourceRequirement,
+    HumanResourceRequirement,
+    MessageType,
+    RecommendationStatus,
+)
+from app.api.v1.routes_agent3 import router
 
 # ============================================================================
 # Fake Dependencies for Testing
@@ -53,7 +49,7 @@ from app.agents.agent3_resources.constants import ResourceType
 class FakeRequestContextProvider(RequestContextProtocol):
     """Fake request context provider for testing."""
 
-    def __init__(self, tenant_id: UUID, actor_id: UUID, roles: Set[str]):
+    def __init__(self, tenant_id: UUID, actor_id: UUID, roles: set[str]):
         self.tenant_id = tenant_id
         self.actor_id = actor_id
         self.roles = roles
@@ -74,7 +70,7 @@ class FakeAllocationService(AllocationServiceProtocol):
         self.call_count = 0
 
     async def process_allocation_request(
-        self, request: AllocationRequest, evaluation_timestamp: Optional[datetime] = None
+        self, request: AllocationRequest, evaluation_timestamp: datetime | None = None
     ) -> AllocationRecommendation:
         self.call_count += 1
         if self._recommendation:
@@ -106,18 +102,18 @@ class FakePersistenceService(PersistenceProtocol):
 class FakeReadRepository(ReadRepositoryProtocol):
     """Fake read repository for testing."""
 
-    def __init__(self, data: Optional[dict] = None):
+    def __init__(self, data: dict | None = None):
         self._data = data
         self.last_tenant_id = None
         self.last_recommendation_id = None
         self.last_correlation_id = None
 
-    async def get_recommendation(self, tenant_id: UUID, recommendation_id: UUID) -> Optional[dict]:
+    async def get_recommendation(self, tenant_id: UUID, recommendation_id: UUID) -> dict | None:
         self.last_tenant_id = tenant_id
         self.last_recommendation_id = recommendation_id
         return self._data
 
-    async def get_latest_recommendation_by_correlation_id(self, tenant_id: UUID, correlation_id: UUID) -> Optional[dict]:
+    async def get_latest_recommendation_by_correlation_id(self, tenant_id: UUID, correlation_id: UUID) -> dict | None:
         self.last_tenant_id = tenant_id
         self.last_correlation_id = correlation_id
         return self._data
@@ -166,7 +162,7 @@ def human_requirement(tenant_id):
     return HumanResourceRequirement(
         resource_type=ResourceType.HUMAN,
         requester_id=uuid4(),
-        task_deadline=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        task_deadline=datetime(2024, 6, 1, tzinfo=UTC),
         estimated_effort_hours=Decimal("10"),
         process_stage="resource_allocation",
         required_roles=["developer"],
@@ -179,7 +175,7 @@ def budget_requirement(tenant_id):
     return BudgetResourceRequirement(
         resource_type=ResourceType.BUDGET,
         requester_id=uuid4(),
-        task_deadline=datetime(2024, 6, 1, tzinfo=timezone.utc),
+        task_deadline=datetime(2024, 6, 1, tzinfo=UTC),
         required_amount=Decimal("5000"),
         currency="USD",
         process_stage="resource_allocation",
@@ -409,7 +405,10 @@ class TestPostAllocationsContract:
 
         for test_decimal in test_decimals:
             # Create a recommendation with the test Decimal value
-            from app.agents.agent3_resources.schemas import AllocationRecommendation, RecommendationStatus
+            from app.agents.agent3_resources.schemas import (
+                AllocationRecommendation,
+                RecommendationStatus,
+            )
             
             precise_recommendation = AllocationRecommendation(
                 metadata=metadata,
@@ -457,7 +456,7 @@ class TestGetRecommendationsContract:
             "tenant_id": str(tenant_id),
             "correlation_id": str(correlation_id),
             "status": "GENERATED",
-            "persisted_at": datetime.now(timezone.utc).isoformat(),
+            "persisted_at": datetime.now(UTC).isoformat(),
             "explanation": "Test",
             "confidence": 0.9,
             "requires_human_approval": True,
@@ -511,7 +510,7 @@ class TestGetRecommendationsContract:
             "tenant_id": str(tenant_id),
             "correlation_id": str(correlation_id),
             "status": "GENERATED",
-            "persisted_at": datetime.now(timezone.utc).isoformat(),
+            "persisted_at": datetime.now(UTC).isoformat(),
             "explanation": "Test",
             "confidence": 0.9,
         }
@@ -534,7 +533,7 @@ class TestGetRecommendationsContract:
             "tenant_id": str(tenant_id),
             "correlation_id": str(uuid4()),
             "status": "GENERATED",
-            "persisted_at": datetime.now(timezone.utc).isoformat(),
+            "persisted_at": datetime.now(UTC).isoformat(),
         }
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

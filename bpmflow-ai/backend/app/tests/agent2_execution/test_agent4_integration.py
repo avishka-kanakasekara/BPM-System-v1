@@ -154,9 +154,11 @@ async def test_agent2_adapter_rejects_non_authorized_messages(agent2_instance):
     from app.schemas.agent_message import (
         AGENT_2,
         AGENT_4,
-        AgentMessage as SharedAgentMessage,
         AgentMessageMetadata,
         AgentMessageType,
+    )
+    from app.schemas.agent_message import (
+        AgentMessage as SharedAgentMessage,
     )
 
     adapter = Agent2Adapter(agent=agent2_instance)

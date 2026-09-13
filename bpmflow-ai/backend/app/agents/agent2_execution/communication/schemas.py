@@ -7,10 +7,12 @@ Rule #6 invariant: Email recipients are allow-listed by role (requester, assigne
 """
 
 from typing import Literal
+
 from pydantic import BaseModel, Field
 
-# Re-export AgentMessage from app.agents.agent2_execution.llm.schemas for communication contracts
 from app.agents.agent2_execution.llm.schemas import AgentMessage
+
+__all__ = ["AgentMessage", "EmailRequest", "EmailResult"]
 
 
 class EmailRequest(BaseModel):
@@ -39,6 +41,8 @@ class EmailResult(BaseModel):
     Operational role: Passed back to Tool Guard and recorded in execution receipts & email_events table.
     """
 
-    status: Literal["SENT", "DRY_RUN", "FAILED", "QUEUED"] = Field(..., description="Status of email dispatch")
+    status: Literal[
+        "ACCEPTED_BY_PROVIDER", "SENT", "DRY_RUN", "FAILED", "QUEUED", "RETRYING"
+    ] = Field(..., description="Status of email dispatch")
     message_id: str = Field(default="", description="Unique email message identifier or provider ID")
     error: str = Field(default="", description="Detailed error description if dispatch failed")

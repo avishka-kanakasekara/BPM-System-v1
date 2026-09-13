@@ -12,22 +12,20 @@ These tests verify that Supabase JWT verification works correctly with:
 Tests use ephemeral EC SECP256R1 keys for ES256 signing.
 """
 
-import os
-import pytest
-from datetime import datetime, timezone, timedelta
-from uuid import uuid4, UUID
-from unittest.mock import AsyncMock, patch, MagicMock
-from jose import jwk, jwt
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
-import base64
 import json
+import os
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID, uuid4
 
 import httpx
-from fastapi import HTTPException, Request, status, Depends
-from httpx import AsyncClient, ASGITransport
-from fastapi import FastAPI
+import pytest
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from fastapi import Depends, FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
+from jose import jwk, jwt
 
 # Set minimal environment variables for config
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
@@ -35,16 +33,15 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
-from app.core.security import (
-    VerifiedPrincipal,
-    verify_supabase_token,
-    get_verified_principal,
-    JWKSCache,
-    _get_jwks_url,
-    _get_expected_issuer,
-)
 from app.core.config import settings
-
+from app.core.security import (
+    JWKSCache,
+    VerifiedPrincipal,
+    _get_expected_issuer,
+    _get_jwks_url,
+    get_verified_principal,
+    verify_supabase_token,
+)
 
 # ============================================================================
 # Test Fixtures - Ephemeral Key Generation
@@ -97,8 +94,7 @@ def test_jwks(test_key_pair):
     
     Uses the synthetic kid 'agent3-test-key' for testing.
     """
-    from jose import jwk
-    public_key = test_key_pair["public_key"]
+    test_key_pair["public_key"]
     public_pem = test_key_pair["public_pem"]
     
     # Use jose.jwk to convert the key to JWK format
@@ -120,8 +116,8 @@ def sample_token_payload():
             "tenant_id": str(uuid4()),
         },
         "role": "authenticated",
-        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-        "iat": int(datetime.now(timezone.utc).timestamp()),
+        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+        "iat": int(datetime.now(UTC).timestamp()),
         "iss": "https://test-project.supabase.co/auth/v1",
         "aud": "authenticated",
     }
@@ -139,8 +135,8 @@ def sample_token_with_user_metadata():
             "tenant_id": str(uuid4()),  # This should be ignored
         },
         "role": "authenticated",
-        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-        "iat": int(datetime.now(timezone.utc).timestamp()),
+        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+        "iat": int(datetime.now(UTC).timestamp()),
         "iss": "https://test-project.supabase.co/auth/v1",
         "aud": "authenticated",
     }
@@ -320,7 +316,7 @@ class TestAuthentication:
                 roles=frozenset(["authenticated"]),
                 token_role="authenticated",
                 session_id=None,
-                expires_at=datetime.now(timezone.utc),
+                expires_at=datetime.now(UTC),
             )
             
             principal = await mock_verify("valid.token")
@@ -488,8 +484,8 @@ class TestAuthentication:
                     # Mock jwt.decode to return payload without sub
                     payload_without_sub = {
                         "app_metadata": {"tenant_id": str(uuid4())},
-                        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-                        "iat": int(datetime.now(timezone.utc).timestamp()),
+                        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+                        "iat": int(datetime.now(UTC).timestamp()),
                         "iss": "https://test.supabase.co/auth/v1",
                         "aud": "authenticated",
                     }
@@ -514,8 +510,8 @@ class TestAuthentication:
                     payload_with_invalid_sub = {
                         "sub": "not-a-uuid",
                         "app_metadata": {"tenant_id": str(uuid4())},
-                        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-                        "iat": int(datetime.now(timezone.utc).timestamp()),
+                        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+                        "iat": int(datetime.now(UTC).timestamp()),
                         "iss": "https://test.supabase.co/auth/v1",
                         "aud": "authenticated",
                     }
@@ -539,8 +535,8 @@ class TestAuthentication:
                     # Mock jwt.decode to return payload without app_metadata
                     payload_without_metadata = {
                         "sub": str(uuid4()),
-                        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-                        "iat": int(datetime.now(timezone.utc).timestamp()),
+                        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+                        "iat": int(datetime.now(UTC).timestamp()),
                         "iss": "https://test.supabase.co/auth/v1",
                         "aud": "authenticated",
                     }
@@ -565,8 +561,8 @@ class TestAuthentication:
                     payload_with_empty_metadata = {
                         "sub": str(uuid4()),
                         "app_metadata": {},
-                        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-                        "iat": int(datetime.now(timezone.utc).timestamp()),
+                        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+                        "iat": int(datetime.now(UTC).timestamp()),
                         "iss": "https://test.supabase.co/auth/v1",
                         "aud": "authenticated",
                     }
@@ -591,8 +587,8 @@ class TestAuthentication:
                     payload_with_invalid_tenant = {
                         "sub": str(uuid4()),
                         "app_metadata": {"tenant_id": "not-a-uuid"},
-                        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-                        "iat": int(datetime.now(timezone.utc).timestamp()),
+                        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+                        "iat": int(datetime.now(UTC).timestamp()),
                         "iss": "https://test.supabase.co/auth/v1",
                         "aud": "authenticated",
                     }
@@ -652,8 +648,8 @@ class TestAuthentication:
                     "app_metadata": {"tenant_id": str(uuid4())},
                     "role": "authenticated",
                     "user_roles": ["admin", "editor"],
-                    "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-                    "iat": int(datetime.now(timezone.utc).timestamp()),
+                    "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+                    "iat": int(datetime.now(UTC).timestamp()),
                     "iss": "https://test.supabase.co/auth/v1",
                     "aud": "authenticated",
                 }

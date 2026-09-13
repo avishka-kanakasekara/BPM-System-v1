@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import RoleModelNotice, { ROLES, type AppRole } from '../components/auth/RoleModelNotice'
 import { Alert, PageHeader, Panel, controlClassName } from '../components/ui/primitives'
 
 export default function SignUpPage() {
@@ -10,6 +11,7 @@ export default function SignUpPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [role, setRole] = useState<AppRole>('requester')
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -32,7 +34,7 @@ export default function SignUpPage() {
 
     setSubmitting(true)
     try {
-      const result = await signUp(email.trim(), password, fullName.trim() || undefined)
+      const result = await signUp(email.trim(), password, fullName.trim() || undefined, role)
       if (result.needsEmailConfirmation) {
         setInfo('Account created. Check your email to confirm, then sign in.')
         return
@@ -53,8 +55,27 @@ export default function SignUpPage() {
       />
       {error ? <Alert tone="error">{error}</Alert> : null}
       {info ? <Alert tone="success">{info}</Alert> : null}
+      <RoleModelNotice highlightRegistration />
       <Panel>
         <form className="space-y-4" onSubmit={onSubmit} noValidate>
+          <label className="block text-sm">
+            <span className="mb-1.5 block font-medium text-base-content">Role</span>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as AppRole)}
+              className={controlClassName}
+              aria-describedby="signup-role-help"
+            >
+              {ROLES.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <span id="signup-role-help" className="mt-1.5 block text-xs leading-relaxed text-base-content/60">
+              Choose Requester, Approver, or Admin for this account.
+            </span>
+          </label>
           <label className="block text-sm">
             <span className="mb-1.5 block font-medium text-base-content">Full name</span>
             <input

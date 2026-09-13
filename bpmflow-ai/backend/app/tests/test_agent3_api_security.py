@@ -4,14 +4,13 @@ These tests verify authentication and authorization enforcement.
 """
 
 import os
-import pytest
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
-from uuid import uuid4, UUID
-from typing import Optional, Set
+from uuid import UUID, uuid4
 
+import pytest
 from fastapi import FastAPI
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 # Set minimal environment variables for config
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
@@ -19,26 +18,25 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
-from app.api.v1.routes_agent3 import router
 from app.agents.agent3_resources.api_dependencies import (
     Agent3RequestContext,
-    RequestContextProtocol,
     AllocationServiceProtocol,
     PersistenceProtocol,
     ReadRepositoryProtocol,
-    get_request_context,
+    RequestContextProtocol,
     get_allocation_service,
     get_persistence_service,
     get_read_repository,
-)
-from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AllocationRecommendation,
-    AgentMessageMetadata,
-    RecommendationStatus,
+    get_request_context,
 )
 from app.agents.agent3_resources.constants import MessageType
-
+from app.agents.agent3_resources.schemas import (
+    AgentMessageMetadata,
+    AllocationRecommendation,
+    AllocationRequest,
+    RecommendationStatus,
+)
+from app.api.v1.routes_agent3 import router
 
 # ============================================================================
 # Fake Dependencies for Testing
@@ -48,7 +46,7 @@ from app.agents.agent3_resources.constants import MessageType
 class FakeRequestContextProvider(RequestContextProtocol):
     """Fake request context provider for testing."""
 
-    def __init__(self, tenant_id: UUID, actor_id: UUID, roles: Set[str]):
+    def __init__(self, tenant_id: UUID, actor_id: UUID, roles: set[str]):
         self.tenant_id = tenant_id
         self.actor_id = actor_id
         self.roles = roles
@@ -65,7 +63,7 @@ class FakeAllocationService(AllocationServiceProtocol):
     """Fake allocation service for testing."""
 
     async def process_allocation_request(
-        self, request: AllocationRequest, evaluation_timestamp: Optional[datetime] = None
+        self, request: AllocationRequest, evaluation_timestamp: datetime | None = None
     ) -> AllocationRecommendation:
         return AllocationRecommendation(
             metadata=request.metadata,
@@ -89,10 +87,10 @@ class FakePersistenceService(PersistenceProtocol):
 class FakeReadRepository(ReadRepositoryProtocol):
     """Fake read repository for testing."""
 
-    async def get_recommendation(self, tenant_id: UUID, recommendation_id: UUID) -> Optional[dict]:
+    async def get_recommendation(self, tenant_id: UUID, recommendation_id: UUID) -> dict | None:
         return None
 
-    async def get_latest_recommendation_by_correlation_id(self, tenant_id: UUID, correlation_id: UUID) -> Optional[dict]:
+    async def get_latest_recommendation_by_correlation_id(self, tenant_id: UUID, correlation_id: UUID) -> dict | None:
         return None
 
 
@@ -300,7 +298,6 @@ class TestAgent3APISecurity:
     @pytest.mark.asyncio
     async def test_unknown_top_level_field_rejected_in_response(self, test_app, metadata):
         """Test unknown fields in API response models are rejected."""
-        app = test_app
 
         # This test verifies that the API response models have extra='forbid'
         # by attempting to create a response with extra fields

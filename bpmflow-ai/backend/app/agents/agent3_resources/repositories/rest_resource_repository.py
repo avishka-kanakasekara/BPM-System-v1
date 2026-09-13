@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import UUID
 
 from app.core.supabase_rest import rest_select
@@ -13,19 +13,19 @@ from ..interfaces import ResourceRepository
 from ..schemas import BudgetResourceEvidence, HumanResourceEvidence
 
 
-def _parse_dt(value: Any, *, default: Optional[datetime] = None) -> datetime:
+def _parse_dt(value: Any, *, default: datetime | None = None) -> datetime:
     if value is None:
         if default is not None:
             return default
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
+            return value.replace(tzinfo=UTC)
         return value
     text = str(value).replace("Z", "+00:00")
     parsed = datetime.fromisoformat(text)
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
+        return parsed.replace(tzinfo=UTC)
     return parsed
 
 
@@ -40,7 +40,7 @@ class RestResourceRepository(ResourceRepository):
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[HumanResourceEvidence]:
+    ) -> list[HumanResourceEvidence]:
         tenant = str(tenant_id)
         resources = rest_select(
             "resources",
@@ -112,29 +112,29 @@ class RestResourceRepository(ResourceRepository):
             )
         }
 
-        roles_by_resource: Dict[str, List[str]] = {}
+        roles_by_resource: dict[str, list[str]] = {}
         for row in roles:
             rid = str(row["resource_id"])
             code = role_codes.get(str(row["role_id"]))
             if code:
                 roles_by_resource.setdefault(rid, []).append(code)
 
-        skills_by_resource: Dict[str, List[str]] = {}
+        skills_by_resource: dict[str, list[str]] = {}
         for row in skills:
             rid = str(row["resource_id"])
             code = skill_codes.get(str(row["skill_id"]))
             if code:
                 skills_by_resource.setdefault(rid, []).append(code)
 
-        authority_by_resource: Dict[str, Optional[str]] = {}
+        authority_by_resource: dict[str, str | None] = {}
         for row in authorities:
             rid = str(row["resource_id"])
             authority_by_resource[rid] = authority_codes.get(str(row["authority_id"]))
 
         now = evaluation_timestamp if evaluation_timestamp.tzinfo else evaluation_timestamp.replace(
-            tzinfo=timezone.utc
+            tzinfo=UTC
         )
-        results: List[HumanResourceEvidence] = []
+        results: list[HumanResourceEvidence] = []
         for resource in resources:
             rid = str(resource["id"])
             profile = profiles.get(rid)
@@ -199,7 +199,7 @@ class RestResourceRepository(ResourceRepository):
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[BudgetResourceEvidence]:
+    ) -> list[BudgetResourceEvidence]:
         tenant = str(tenant_id)
         resources = rest_select(
             "resources",
@@ -225,9 +225,9 @@ class RestResourceRepository(ResourceRepository):
             )
         }
         now = evaluation_timestamp if evaluation_timestamp.tzinfo else evaluation_timestamp.replace(
-            tzinfo=timezone.utc
+            tzinfo=UTC
         )
-        results: List[BudgetResourceEvidence] = []
+        results: list[BudgetResourceEvidence] = []
         for resource in resources:
             if not resource.get("is_active", True):
                 continue

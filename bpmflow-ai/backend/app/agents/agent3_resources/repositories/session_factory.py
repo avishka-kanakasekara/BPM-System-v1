@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Callable, Tuple
-
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
 from .postgres_resource_repository import PostgresResourceRepository, SessionFactory
@@ -23,7 +26,7 @@ def create_async_session_factory(
     database_url: str,
     *,
     echo: bool = False,
-) -> Tuple[AsyncEngine, SessionFactory]:
+) -> tuple[AsyncEngine, SessionFactory]:
     """Create a dedicated async engine and session factory for Agent 3 repositories."""
     engine = create_async_engine(
         normalize_async_database_url(database_url),

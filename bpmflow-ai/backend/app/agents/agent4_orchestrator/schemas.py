@@ -2,10 +2,11 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from app.policy_knowledge.schemas import PolicyDecisionPackage, PolicyRiskSnapshot
 
 from .constants import (
     HIGH_VALUE_PURCHASE_THRESHOLD,
@@ -33,18 +34,26 @@ class ProcessStateTransition(BaseModel):
 class RiskEvaluationContext(BaseModel):
     """Structured process facts for deterministic risk analysis.
 
-    Thresholds default to demo values in constants.py and can be overridden
-    per call without changing rule code.
+    When ``policy_snapshot`` is unset, legacy configurable thresholds apply
+    (unit tests / callers that do not integrate the policy repository).
+
+    When ``policy_snapshot`` is set, purchase thresholds and decision-critical
+    policy uncertainty come from that tenant policy evidence — not from the
+    hardcoded legacy default.
     """
 
-    purchase_amount: Optional[Decimal] = Field(default=None, ge=Decimal("0"))
-    required_evidence: List[str] = Field(default_factory=list)
-    provided_evidence: List[str] = Field(default_factory=list)
-    confidence: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
-    requester_id: Optional[UUID] = None
-    approver_id: Optional[UUID] = None
+    purchase_amount: Decimal | None = Field(default=None, ge=Decimal("0"))
+    currency: str | None = None
+    required_evidence: list[str] = Field(default_factory=list)
+    provided_evidence: list[str] = Field(default_factory=list)
+    confidence: Decimal | None = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
+    requester_id: UUID | None = None
+    approver_id: UUID | None = None
+    requester_roles: list[str] = Field(default_factory=list)
     unauthorized_action: bool = False
     budget_validation_failed: bool = False
+    available_budget: Decimal | None = Field(default=None, ge=Decimal("0"))
+    process_age_hours: Decimal | None = Field(default=None, ge=Decimal("0"))
     high_value_threshold: Decimal = Field(
         default=HIGH_VALUE_PURCHASE_THRESHOLD,
         ge=Decimal("0"),
@@ -54,6 +63,7 @@ class RiskEvaluationContext(BaseModel):
         ge=Decimal("0"),
         le=Decimal("1"),
     )
+    policy_snapshot: PolicyRiskSnapshot | None = None
 
 
 class RiskFinding(BaseModel):
@@ -64,14 +74,20 @@ class RiskFinding(BaseModel):
     risk_type: RiskType
     description: str = Field(min_length=1)
     recommendation: RiskRecommendation
+    evidence_refs: list[str] = Field(default_factory=list)
+    policy_version: str | None = None
+    amount: Decimal | None = None
+    threshold: Decimal | None = None
+    currency: str | None = None
 
 
 class RiskAssessment(BaseModel):
     """Complete deterministic risk result for one process/context."""
 
     risk_detected: bool
-    overall_risk_level: Optional[RiskLevel] = None
-    findings: List[RiskFinding] = Field(default_factory=list)
+    overall_risk_level: RiskLevel | None = None
+    findings: list[RiskFinding] = Field(default_factory=list)
+    policy_snapshot: PolicyRiskSnapshot | None = None
 
 
 class ApprovalRequestRecord(BaseModel):
@@ -79,16 +95,16 @@ class ApprovalRequestRecord(BaseModel):
 
     id: UUID
     process_id: UUID
-    task_id: Optional[UUID] = None
-    requested_by: Optional[UUID] = None
-    approver_id: Optional[UUID] = None
+    task_id: UUID | None = None
+    requested_by: UUID | None = None
+    approver_id: UUID | None = None
     status: ApprovalStatus
     risk_level: RiskLevel
     reason: str = Field(min_length=1)
-    decision: Optional[ApprovalStatus] = None
-    comments: Optional[str] = None
+    decision: ApprovalStatus | None = None
+    comments: str | None = None
     created_at: datetime
-    decided_at: Optional[datetime] = None
+    decided_at: datetime | None = None
 
 
 class ApprovalDecisionResult(BaseModel):
@@ -102,24 +118,24 @@ class ApprovalGateResult(BaseModel):
     """Result of applying risk findings to the human-approval gate."""
 
     human_approval_required: bool
-    approval: Optional[ApprovalRequestRecord] = None
-    transition: Optional[ProcessStateTransition] = None
+    approval: ApprovalRequestRecord | None = None
+    transition: ProcessStateTransition | None = None
 
 
 class ExceptionRecord(BaseModel):
     """BPM exception matching public.exceptions columns."""
 
     id: UUID
-    process_id: Optional[UUID] = None
-    task_id: Optional[UUID] = None
+    process_id: UUID | None = None
+    task_id: UUID | None = None
     severity: ExceptionSeverity
     type: ExceptionType
     description: str = Field(min_length=1)
     status: ExceptionStatus
-    assigned_to: Optional[UUID] = None
-    resolution_notes: Optional[str] = None
+    assigned_to: UUID | None = None
+    resolution_notes: str | None = None
     created_at: datetime
-    resolved_at: Optional[datetime] = None
+    resolved_at: datetime | None = None
 
 
 class WorkflowResult(BaseModel):
@@ -129,13 +145,14 @@ class WorkflowResult(BaseModel):
     current_stage: WorkflowStage
     success: bool
     message: str = Field(min_length=1)
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
     eligible_for_execution: bool = False
     human_approval_required: bool = False
-    approval: Optional[ApprovalRequestRecord] = None
-    risk_assessment: Optional[RiskAssessment] = None
-    bpm_exception: Optional[ExceptionRecord] = None
+    approval: ApprovalRequestRecord | None = None
+    risk_assessment: RiskAssessment | None = None
+    policy_decision: PolicyDecisionPackage | None = None
+    bpm_exception: ExceptionRecord | None = None
     # Payload returned by the downstream agent for this step (e.g. Agent 3
     # recommendation or Agent 2 execution receipt summary).
-    agent_response: Optional[dict] = None
+    agent_response: dict | None = None

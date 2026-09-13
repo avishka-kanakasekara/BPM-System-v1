@@ -30,35 +30,32 @@ Testing:
 
 from __future__ import annotations
 
-from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, Header
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.agents.agent3_resources.api_dependencies import (
-    get_request_context,
-    get_allocation_service,
-    get_persistence_service,
-    get_read_repository,
     Agent3RequestContext,
     AllocationServiceProtocol,
     PersistenceProtocol,
     ReadRepositoryProtocol,
+    get_allocation_service,
+    get_persistence_service,
+    get_read_repository,
+    get_request_context,
 )
 from app.agents.agent3_resources.api_schemas import (
     Agent3APIError,
     PersistedAllocationResponse,
     RecommendationSummary,
 )
-from app.agents.agent3_resources.schemas import AllocationRequest
 from app.agents.agent3_resources.repositories.persistence_exceptions import (
-    PersistenceValidationError,
     PersistenceConflictError,
-    PersistenceTransactionError,
     PersistenceError,
+    PersistenceTransactionError,
+    PersistenceValidationError,
 )
-
+from app.agents.agent3_resources.schemas import AllocationRequest
 
 # ============================================================================
 # Router Configuration
@@ -75,7 +72,7 @@ router = APIRouter(
 # ============================================================================
 
 
-def map_persistence_error_to_http(exc: PersistenceError, correlation_id: Optional[UUID]) -> HTTPException:
+def map_persistence_error_to_http(exc: PersistenceError, correlation_id: UUID | None) -> HTTPException:
     """Map persistence exceptions to HTTP responses.
 
     Args:
@@ -128,7 +125,7 @@ def map_persistence_error_to_http(exc: PersistenceError, correlation_id: Optiona
         )
 
 
-def sanitize_internal_error(exc: Exception, correlation_id: Optional[UUID]) -> HTTPException:
+def sanitize_internal_error(exc: Exception, correlation_id: UUID | None) -> HTTPException:
     """Create a sanitized 500 error response.
 
     Never returns exception str(), SQL, DB host, DB URL, password, or stack trace.
@@ -173,7 +170,7 @@ async def create_allocation(
     context: Agent3RequestContext = Depends(get_request_context),
     allocation_service: AllocationServiceProtocol = Depends(get_allocation_service),
     persistence_service: PersistenceProtocol = Depends(get_persistence_service),
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-ID"),
+    x_correlation_id: str | None = Header(None, alias="X-Correlation-ID"),
 ):
     """Submit an allocation request and persist the result.
 

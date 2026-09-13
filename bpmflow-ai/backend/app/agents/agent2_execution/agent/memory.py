@@ -8,15 +8,18 @@ Implements:
    over aggregated KPI metrics and optimization recommendations.
 """
 
-import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.database.ids import parse_uuid
-from app.agents.agent2_execution.database.models import ExecutionReceipt, OptimizationRecommendation, ProcessKPI, WorkflowEvent
-
+from app.agents.agent2_execution.database.models import (
+    ExecutionReceipt,
+    OptimizationRecommendation,
+    ProcessKPI,
+)
 
 # ---------------------------------------------------------------------------
 # 1. Short-Term Memory
@@ -30,10 +33,10 @@ class ShortTermMemory:
     process_id: str
     task_id: str
     current_state: str = "PERCEIVED"
-    active_plan: Optional[Any] = None
-    decisions: List[Any] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
-    evidence: List[str] = field(default_factory=list)
+    active_plan: Any | None = None
+    decisions: list[Any] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +48,7 @@ class EpisodicMemory:
 
     @staticmethod
     async def get_tool_success_rate(
-        session: Optional[AsyncSession], tool_name: str
+        session: AsyncSession | None, tool_name: str
     ) -> float:
         """Calculate historical success rate for a specific tool (0.0 to 1.0)."""
         if session is None or not tool_name:
@@ -72,8 +75,8 @@ class EpisodicMemory:
 
     @staticmethod
     async def get_recent_receipts(
-        session: Optional[AsyncSession], process_id: str, limit: int = 10
-    ) -> List[Dict[str, Any]]:
+        session: AsyncSession | None, process_id: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
         """Fetch recent execution receipts for a process."""
         if session is None or not process_id:
             return []
@@ -114,12 +117,12 @@ class ProcessMemory:
 
     @staticmethod
     async def retrieve_evidence(
-        session: Optional[AsyncSession],
+        session: AsyncSession | None,
         query: str,
         caller_role: str = "manager",
         top_k: int = 3,
         process_id: str = "",
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Retrieve top-K historical facts and evidence strings for Gemini planning context.
 

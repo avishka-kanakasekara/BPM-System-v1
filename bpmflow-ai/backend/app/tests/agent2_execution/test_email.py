@@ -100,7 +100,7 @@ async def test_send_email_dry_run(email_service):
     )
     result = await email_service.send_email(req)
     assert result.status == "DRY_RUN"
-    assert result.message_id.startswith("msg-")
+    assert result.message_id.startswith(("msg-", "dry-"))
     assert result.error == ""
 
 

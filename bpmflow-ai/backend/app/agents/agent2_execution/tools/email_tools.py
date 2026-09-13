@@ -10,10 +10,10 @@ Provides registered tool entry points calling EmailService under the hood:
 - send_approval_notification (sla_warning.html / approval)
 """
 
-from typing import Optional
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.agent2_execution.communication.schemas import EmailRequest, EmailResult
+from app.agents.agent2_execution.communication.schemas import EmailRequest
 from app.agents.agent2_execution.tools.email_service import EmailService
 from app.agents.agent2_execution.tools.schemas import (
     SendEmailInput,
@@ -24,7 +24,7 @@ from app.agents.agent2_execution.tools.schemas import (
 
 
 async def send_email_tool(
-    session: Optional[AsyncSession], input_data: SendEmailInput
+    session: AsyncSession | None, input_data: SendEmailInput
 ) -> SendEmailOutput:
     """Send an outbound role email using EmailService."""
     service = EmailService(session=session)
@@ -47,7 +47,7 @@ async def send_email_tool(
 
 
 async def send_reminder_tool(
-    session: Optional[AsyncSession], input_data: SendReminderInput
+    session: AsyncSession | None, input_data: SendReminderInput
 ) -> SendReminderOutput:
     """Send an SLA reminder email using EmailService."""
     service = EmailService(session=session)

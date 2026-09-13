@@ -1,15 +1,12 @@
 """Repository interfaces for Agent 3 Resource Allocation."""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
-from uuid import UUID
 from datetime import datetime
+from uuid import UUID
 
 from .schemas import (
-    HumanResourceEvidence,
     BudgetResourceEvidence,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
+    HumanResourceEvidence,
 )
 
 
@@ -21,7 +18,7 @@ class ResourceRepository(ABC):
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[HumanResourceEvidence]:
+    ) -> list[HumanResourceEvidence]:
         """Retrieve all HUMAN resources for a tenant.
         
         Filters only by tenant_id and resource_type.
@@ -35,7 +32,7 @@ class ResourceRepository(ABC):
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[BudgetResourceEvidence]:
+    ) -> list[BudgetResourceEvidence]:
         """Retrieve all BUDGET resources for a tenant.
         
         Filters only by tenant_id and resource_type.
@@ -49,8 +46,8 @@ class InMemoryResourceRepository(ResourceRepository):
 
     def __init__(self):
         """Initialize with empty storage."""
-        self._human_resources: List[HumanResourceEvidence] = []
-        self._budget_resources: List[BudgetResourceEvidence] = []
+        self._human_resources: list[HumanResourceEvidence] = []
+        self._budget_resources: list[BudgetResourceEvidence] = []
 
     def add_human_resource(self, resource: HumanResourceEvidence) -> None:
         """Add a HUMAN resource to storage."""
@@ -64,7 +61,7 @@ class InMemoryResourceRepository(ResourceRepository):
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[HumanResourceEvidence]:
+    ) -> list[HumanResourceEvidence]:
         """Retrieve HUMAN resources filtered by tenant_id only."""
         return [
             r for r in self._human_resources
@@ -75,7 +72,7 @@ class InMemoryResourceRepository(ResourceRepository):
         self,
         tenant_id: UUID,
         evaluation_timestamp: datetime,
-    ) -> List[BudgetResourceEvidence]:
+    ) -> list[BudgetResourceEvidence]:
         """Retrieve BUDGET resources filtered by tenant_id only."""
         return [
             r for r in self._budget_resources

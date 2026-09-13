@@ -62,6 +62,10 @@ export default function Agent2RecommendationsPage() {
         title="Agent 2 — Optimizations"
         description="Govern optimization recommendations. Approve or reject before applying operational changes."
       />
+      <Alert tone="warning">
+        Recommendations with status <strong>PENDING_APPROVAL</strong> are proposals only — they do
+        not modify official workflows until a human explicitly approves them.
+      </Alert>
       {error ? <Alert tone="error">{error}</Alert> : null}
       {message ? <Alert tone="success">{message}</Alert> : null}
 

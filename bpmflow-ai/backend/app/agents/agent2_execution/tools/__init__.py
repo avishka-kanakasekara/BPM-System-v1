@@ -6,7 +6,11 @@ Registers all 12 tools in the central ToolRegistry.
 
 from app.agents.agent2_execution.tools.history_tools import get_process_history, get_task_history
 from app.agents.agent2_execution.tools.kpi_tools import calculate_kpi
-from app.agents.agent2_execution.tools.notification_tools import create_exception, send_email, send_reminder
+from app.agents.agent2_execution.tools.notification_tools import (
+    create_exception,
+    send_email,
+    send_reminder,
+)
 from app.agents.agent2_execution.tools.procurement_tools import (
     create_po_draft,
     request_quotation,
@@ -83,7 +87,7 @@ def _register_all_tools():
     # 5. create_po_draft
     registry.register(
         name="create_po_draft",
-        description="Generate purchase order draft in mock ERP",
+        description="Generate purchase order draft and persist on process metadata",
         input_schema=CreatePODraftInput,
         output_schema=CreatePODraftOutput,
         handler=create_po_draft,
@@ -101,7 +105,7 @@ def _register_all_tools():
     # 7. update_procurement_record
     registry.register(
         name="update_procurement_record",
-        description="Update procurement record in mock ERP",
+        description="Update procurement record on process metadata trail",
         input_schema=UpdateProcurementRecordInput,
         output_schema=UpdateProcurementRecordOutput,
         handler=update_procurement_record,

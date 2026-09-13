@@ -1,5 +1,40 @@
 import axios, { type AxiosInstance, type InternalAxiosRequestConfig } from 'axios'
+import type {
+  AdvanceProcessResponse,
+  ApprovalDecisionResponse,
+  ApprovalRecord,
+  AuditLogRecord,
+  CurrentUser,
+  ExceptionRecord,
+  ExecutionReceipt,
+  InvoiceMatchingPayload,
+  ProcessRecord,
+  ProcessStartResponse,
+  WorkflowResult,
+} from '../types/api'
 import { supabase } from './supabaseClient'
+
+export type {
+  AppRole,
+  AdvancementAction,
+  AdvanceProcessResponse,
+  AdvanceProcessResult,
+  ApprovalDecisionResponse,
+  ApprovalRecord,
+  ApprovalStatus,
+  AuditLogRecord,
+  CurrentUser,
+  ExceptionRecord,
+  ExecutionReceipt,
+  InvoiceMatchingPayload,
+  ProcessRecord,
+  ProcessStartResponse,
+  RiskAssessment,
+  RiskFinding,
+  RiskLevel,
+  WorkflowResult,
+  WorkflowStage,
+} from '../types/api'
 
 // In Vite dev, prefer same-origin + vite proxy (/api → :8000) unless overridden.
 const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
@@ -14,14 +49,36 @@ const apiClient: AxiosInstance = axios.create({
   baseURL: API_URL,
 })
 
-apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+let unauthorizedHandler: (() => void) | null = null
+
+/** Register a callback for global 401 handling (sign-out + redirect). */
+export function registerUnauthorizedHandler(handler: () => void): void {
+  unauthorizedHandler = handler
+}
+
+apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
   if (config.data instanceof FormData) {
     config.headers.delete('Content-Type')
   } else if (!config.headers.get('Content-Type')) {
     config.headers.set('Content-Type', 'application/json')
   }
+  const headers = await authHeaders()
+  if (headers.Authorization) {
+    config.headers.set('Authorization', headers.Authorization)
+  }
   return config
 })
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const status = error?.response?.status
+    if (status === 401 && unauthorizedHandler) {
+      unauthorizedHandler()
+    }
+    return Promise.reject(error)
+  },
+)
 
 export async function authHeaders(): Promise<Record<string, string>> {
   if (!supabase) return {}
@@ -39,16 +96,7 @@ export function apiErrorMessage(err: unknown): string {
   return (err as Error).message || 'Request failed'
 }
 
-// --- Types -----------------------------------------------------------------
-
-export type CurrentUser = {
-  id: string
-  email?: string | null
-  full_name?: string | null
-  role: string
-  department?: string | null
-  tenant_id?: string | null
-}
+// --- Types (agent-specific; shared API types live in src/types/api.ts) ----
 
 export type HealthStatus = {
   status: string
@@ -97,100 +145,64 @@ export type ProcessDetail = ProcessSummary & {
   description?: string | null
 }
 
-export type ProcessRecord = {
-  id: string
+export type ExecutionReceiptDetail = ExecutionReceipt & {
+  execution_id?: string
+  receipt_status?: string
+  attempt?: number
+  started_at?: string
+  completed_at?: string
+  result?: Record<string, unknown>
+  authorization?: { agent4_authorized?: boolean; tool_guard?: string }
+  plan_score?: Record<string, unknown>
+}
+
+export type Agent2ToolCapability = {
   name: string
-  description?: string | null
-  process_type: string
-  status: string
-  current_stage: string
-  version: number
-  created_by?: string | null
-  created_at: string
-  updated_at: string
-  metadata_json?: Record<string, unknown> | null
-}
-
-export type ProcessStartResponse = {
-  process: ProcessRecord
-  success: boolean
-  message: string
-  error_code?: string | null
-  error_message?: string | null
-  agent_response?: Record<string, unknown> | null
-}
-
-export type WorkflowResult = {
-  process_id: string
-  current_stage: string
-  success: boolean
-  message: string
-  error_code?: string | null
-  error_message?: string | null
-  human_approval_required?: boolean
-  eligible_for_execution?: boolean
-  approval?: ApprovalRecord | null
-  agent_response?: Record<string, unknown> | null
-}
-
-export type ApprovalRecord = {
-  id: string
-  process_id: string
-  task_id?: string | null
-  requested_by?: string | null
-  approver_id?: string | null
-  status: string
-  risk_level: string
-  reason: string
-  decision?: string | null
-  comments?: string | null
-  created_at: string
-  decided_at?: string | null
-}
-
-export type ApprovalDecisionResponse = {
-  approval: ApprovalRecord
-  decision: string
-  workflow?: Record<string, unknown> | null
-}
-
-export type ExceptionRecord = {
-  id: string
-  process_id?: string | null
-  task_id?: string | null
-  severity: string
-  type: string
   description: string
+  category: string
+  permission_level: string
+  requires_agent4_authorization: boolean
+  read_only: boolean
+  available: boolean
+  required_inputs: string[]
+  input_fields: Array<{
+    name: string
+    type: string
+    description: string
+    required: boolean
+  }>
+}
+
+export type Agent2Dashboard = {
+  agent: string
   status: string
-  assigned_to?: string | null
-  resolution_notes?: string | null
-  created_at: string
-  resolved_at?: string | null
+  process_id?: string | null
+  metrics: {
+    total_executions: number
+    successful: number
+    failed: number
+    blocked: number
+    retrying: number
+    success_rate: number
+    failure_rate: number
+    average_latency_ms: number
+    open_exceptions: number
+    audit_events: number
+  }
+  tool_usage: Record<string, number>
+  recent_executions: Array<Record<string, unknown>>
+  kpis: Record<string, unknown>
+  health: string
 }
 
-export type AuditLogRecord = {
-  id: string
-  entity_type: string
-  entity_id: string
-  action: string
-  performed_by?: string | null
-  old_values?: Record<string, unknown> | null
-  new_values?: Record<string, unknown> | null
-  timestamp: string
-}
-
-export type ExecutionReceipt = {
-  id: string
+export type Agent2Exception = {
+  exception_id: string
   process_id: string
   task_id: string
-  tool_name: string
-  action: string
-  attempt_number: number
-  idempotency_key: string
+  category: string
+  severity: string
+  description: string
   status: string
-  latency_ms?: number | null
-  error_type?: string | null
-  error_message?: string | null
   created_at: string
 }
 
@@ -232,6 +244,28 @@ export async function getHealth(): Promise<HealthStatus> {
 export async function getCurrentUser(): Promise<CurrentUser> {
   const headers = await authHeaders()
   const response = await apiClient.get<CurrentUser>('/api/v1/auth/me', { headers })
+  return response.data
+}
+
+/** Development-only: create a confirmed Supabase user via the backend admin API. */
+export async function registerAccount(payload: {
+  email: string
+  password: string
+  full_name?: string
+  role?: 'requester' | 'approver' | 'admin'
+}): Promise<{ id: string; email: string; confirmed: boolean; role?: string }> {
+  const response = await apiClient.post<{
+    id: string
+    email: string
+    confirmed: boolean
+    role?: string
+  }>('/api/v1/auth/register', payload)
+  return response.data
+}
+
+/** Development-only: confirm an unconfirmed email so password sign-in works. */
+export async function confirmAccountEmail(email: string): Promise<{ ok: boolean }> {
+  const response = await apiClient.post<{ ok: boolean }>('/api/v1/auth/confirm-email', { email })
   return response.data
 }
 
@@ -299,6 +333,32 @@ export async function startProcess(processId: string): Promise<ProcessStartRespo
   return response.data
 }
 
+export async function advanceProcess(
+  processId: string,
+  payload: {
+    correlation_id?: string
+    idempotency_key?: string
+    max_steps?: number
+    reconcile_stale?: boolean
+    invoice?: InvoiceMatchingPayload
+    resource_planning?: {
+      task_id: string
+      tenant_id: string
+      correlation_id?: string
+      human_requirements?: Record<string, unknown>
+      budget_requirements?: Record<string, unknown>
+    }
+  } = {},
+): Promise<AdvanceProcessResponse> {
+  const headers = await authHeaders()
+  const response = await apiClient.post<AdvanceProcessResponse>(
+    `/api/v1/processes/${processId}/advance`,
+    payload,
+    { headers },
+  )
+  return response.data
+}
+
 export async function planResources(
   processId: string,
   payload: {
@@ -347,21 +407,6 @@ export async function executeProcess(
     { headers },
   )
   return response.data
-}
-
-export type InvoiceMatchingPayload = {
-  invoice_number?: string
-  amount?: number
-  currency?: string
-  vendor?: string
-  po_reference?: string
-  expected_po_reference?: string
-  expected_amount?: number
-  expected_currency?: string
-  expected_vendor?: string
-  expected_invoice_number?: string
-  notes?: string
-  reference?: string
 }
 
 export async function completeInvoiceMatching(
@@ -546,6 +591,198 @@ export async function listAgent2AuditLogs(limit = 50): Promise<Agent2AuditLog[]>
     headers,
     params: { limit },
   })
+  return response.data
+}
+
+export async function getAgent2Dashboard(processId?: string): Promise<Agent2Dashboard> {
+  const headers = await authHeaders()
+  const response = await apiClient.get<Agent2Dashboard>('/api/v1/agent2/dashboard', {
+    headers,
+    params: processId ? { process_id: processId } : undefined,
+  })
+  return response.data
+}
+
+export async function listAgent2Tools(): Promise<Agent2ToolCapability[]> {
+  const headers = await authHeaders()
+  const response = await apiClient.get<Agent2ToolCapability[]>('/api/v1/agent2/tools', {
+    headers,
+  })
+  return response.data
+}
+
+export async function getExecutionReceiptDetail(
+  receiptId: string,
+): Promise<ExecutionReceiptDetail> {
+  const headers = await authHeaders()
+  const response = await apiClient.get<ExecutionReceiptDetail>(
+    `/api/v1/agent2/receipts/${receiptId}`,
+    { headers },
+  )
+  return response.data
+}
+
+export async function executeAgent2Tool(payload: {
+  process_id: string
+  task_id: string
+  tool_name: string
+  parameters: Record<string, unknown>
+  correlation_id?: string
+}): Promise<ExecutionReceiptDetail> {
+  const headers = await authHeaders()
+  const response = await apiClient.post<ExecutionReceiptDetail>(
+    '/api/v1/agent2/execute',
+    payload,
+    { headers },
+  )
+  return response.data
+}
+
+export async function retryAgent2Execution(
+  receiptId: string,
+  payload: {
+    process_id: string
+    task_id: string
+    tool_name: string
+    parameters: Record<string, unknown>
+  },
+): Promise<ExecutionReceiptDetail> {
+  const headers = await authHeaders()
+  const response = await apiClient.post<ExecutionReceiptDetail>(
+    `/api/v1/agent2/receipts/${receiptId}/retry`,
+    payload,
+    { headers },
+  )
+  return response.data
+}
+
+export async function listAgent2Exceptions(params?: {
+  process_id?: string
+  status?: string
+  limit?: number
+}): Promise<Agent2Exception[]> {
+  const headers = await authHeaders()
+  const response = await apiClient.get<Agent2Exception[]>('/api/v1/agent2/exceptions', {
+    headers,
+    params,
+  })
+  return response.data
+}
+
+// --- Company policies (Agent 4 knowledge repository) -----------------------
+
+export type PolicyCategory =
+  | 'PROCUREMENT'
+  | 'APPROVAL'
+  | 'BUDGET'
+  | 'AUTHORIZATION'
+  | 'SLA'
+  | 'SECURITY'
+  | 'FINANCE'
+  | 'GENERAL'
+
+export type PolicyVersionStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
+
+export type PolicyRule = {
+  id?: string
+  rule_type: string
+  operator?: string | null
+  threshold_value?: string | null
+  currency?: string | null
+  required_approval?: string | null
+  required_roles?: string[]
+  required_evidence?: string[]
+  sla_hours?: string | null
+  description?: string | null
+}
+
+export type PolicyVersionRecord = {
+  id: string
+  policy_id: string
+  tenant_id: string
+  version_label: string
+  status: PolicyVersionStatus
+  document_name: string
+  document_type: string
+  effective_from: string
+  effective_to?: string | null
+  uploaded_at: string
+  rules: PolicyRule[]
+  chunks?: unknown[]
+}
+
+export type CompanyPolicyRecord = {
+  id: string
+  tenant_id: string
+  name: string
+  category: PolicyCategory
+  description?: string | null
+  versions: PolicyVersionRecord[]
+}
+
+export async function listPolicies(): Promise<CompanyPolicyRecord[]> {
+  const headers = await authHeaders()
+  const response = await apiClient.get<CompanyPolicyRecord[]>('/api/v1/policies', { headers })
+  return response.data
+}
+
+export async function uploadPolicy(input: {
+  name: string
+  category: PolicyCategory
+  version_label: string
+  description?: string
+  document_type?: string
+  activate?: boolean
+  text_content?: string
+  file?: File | null
+  effective_from?: string
+  effective_to?: string
+}): Promise<CompanyPolicyRecord> {
+  const headers = await authHeaders()
+  const form = new FormData()
+  form.append('name', input.name)
+  form.append('category', input.category)
+  form.append('version_label', input.version_label)
+  form.append('document_type', input.document_type || 'txt')
+  form.append('activate', String(input.activate ?? true))
+  if (input.description) form.append('description', input.description)
+  if (input.text_content) form.append('text_content', input.text_content)
+  if (input.effective_from) {
+    form.append('effective_from', new Date(input.effective_from).toISOString())
+  }
+  if (input.effective_to) {
+    form.append('effective_to', new Date(input.effective_to).toISOString())
+  }
+  if (input.file) form.append('file', input.file)
+  const response = await apiClient.post<CompanyPolicyRecord>('/api/v1/policies', form, {
+    headers,
+  })
+  return response.data
+}
+
+export async function activatePolicyVersion(
+  policyId: string,
+  versionId: string,
+): Promise<CompanyPolicyRecord> {
+  const headers = await authHeaders()
+  const response = await apiClient.post<CompanyPolicyRecord>(
+    `/api/v1/policies/${policyId}/versions/${versionId}/activate`,
+    {},
+    { headers },
+  )
+  return response.data
+}
+
+export async function archivePolicyVersion(
+  policyId: string,
+  versionId: string,
+): Promise<CompanyPolicyRecord> {
+  const headers = await authHeaders()
+  const response = await apiClient.post<CompanyPolicyRecord>(
+    `/api/v1/policies/${policyId}/versions/${versionId}/archive`,
+    {},
+    { headers },
+  )
   return response.data
 }
 

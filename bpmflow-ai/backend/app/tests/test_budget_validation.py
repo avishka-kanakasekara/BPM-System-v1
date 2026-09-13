@@ -1,8 +1,9 @@
 """Tests for BUDGET validation strategy."""
 
-import pytest
 from datetime import timedelta
 from decimal import Decimal
+
+import pytest
 
 pytestmark = pytest.mark.anyio
 
@@ -11,9 +12,9 @@ from app.agents.agent3_resources import (
     InMemoryResourceRepository,
     create_budget_evidence,
     create_budget_requirement,
-    get_tenant_a_id,
-    get_resource_id_1,
     get_requester_id,
+    get_resource_id_1,
+    get_tenant_a_id,
 )
 
 

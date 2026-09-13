@@ -6,7 +6,11 @@ from app.llm.prompts.agent1_relation_extraction import (
     AGENT1_RELATION_EXTRACTION_SYSTEM,
     wrap_evidence,
 )
-from app.llm.structured_output import StructuredOutputError, parse_structured_output, strip_markdown_fences
+from app.llm.structured_output import (
+    StructuredOutputError,
+    parse_structured_output,
+    strip_markdown_fences,
+)
 
 
 def test_strip_markdown_fences_unwraps_json_block():

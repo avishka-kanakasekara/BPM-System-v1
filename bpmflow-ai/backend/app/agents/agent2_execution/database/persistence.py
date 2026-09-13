@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,17 +19,30 @@ from app.agents.agent2_execution.database.models import ProcessInstance, Task, W
 
 logger = logging.getLogger("agent_2.database.persistence")
 
+# In-memory process metadata for tests when SQL/REST unavailable.
+_memory_process_metadata: dict[str, dict[str, Any]] = {}
+
+
+def get_memory_process_metadata(process_id: str) -> dict[str, Any]:
+    """Return merged in-memory metadata for a process (test helper)."""
+    return dict(_memory_process_metadata.get(process_id) or {})
+
+
+def clear_memory_process_metadata() -> None:
+    """Clear in-memory process metadata (test isolation)."""
+    _memory_process_metadata.clear()
+
 
 async def ensure_process_instance(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
     process_id: str,
     *,
     title: str = "",
     process_type: str = "procurement",
     department: str = "",
     requester_email: str = "",
-    metadata: Optional[Dict[str, Any]] = None,
-) -> Optional[ProcessInstance]:
+    metadata: dict[str, Any] | None = None,
+) -> ProcessInstance | None:
     if session is None or not process_id:
         return None
 
@@ -44,7 +57,7 @@ async def ensure_process_instance(
                 row.metadata_json = merged
             return row
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # Canonical processes row. Agent 2 only sets its own columns:
         # execution_status is Agent 2's operational status; current_stage
         # stays untouched (Agent 4 / StateMachine owned).
@@ -72,7 +85,7 @@ async def ensure_process_instance(
 
 
 async def ensure_task(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
     process_id: str,
     task_id: str,
     *,
@@ -82,7 +95,7 @@ async def ensure_task(
     assigned_to: str = "",
     sla_hours: float = 24.0,
     priority: str = "MEDIUM",
-) -> Optional[Task]:
+) -> Task | None:
     if session is None or not task_id:
         return None
 
@@ -95,7 +108,7 @@ async def ensure_task(
         if row:
             return row
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         row = Task(
             id=task_uuid,
             process_id=proc_uuid,
@@ -122,7 +135,7 @@ async def ensure_task(
         return None
 
 
-def _merge_dicts(merged: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_dicts(merged: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     out = dict(merged)
     for key, value in patch.items():
         if isinstance(value, list) and isinstance(out.get(key), list):
@@ -136,7 +149,7 @@ def _merge_dicts(merged: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
-def _merge_process_metadata_rest(process_id: str, patch: Dict[str, Any]) -> None:
+def _merge_process_metadata_rest(process_id: str, patch: dict[str, Any]) -> None:
     """Persist tool evidence via PostgREST when SQLAlchemy session is unavailable."""
     try:
         from app.core.supabase_rest import rest_select, rest_update, supabase_rest_configured
@@ -167,7 +180,7 @@ def _record_workflow_event_rest(
     *,
     task_id: str = "",
     actor: str = "agent_2",
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
     previous_state: str = "",
     new_state: str = "",
 ) -> None:
@@ -176,7 +189,7 @@ def _record_workflow_event_rest(
 
         if not supabase_rest_configured():
             return
-        row: Dict[str, Any] = {
+        row: dict[str, Any] = {
             "process_id": process_id,
             "event_type": event_type,
             "actor": actor,
@@ -193,13 +206,15 @@ def _record_workflow_event_rest(
 
 
 async def merge_process_metadata(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
     process_id: str,
-    patch: Dict[str, Any],
+    patch: dict[str, Any],
 ) -> None:
     if not process_id or not patch:
         return
     if session is None:
+        existing = _memory_process_metadata.get(process_id) or {}
+        _memory_process_metadata[process_id] = _merge_dicts(existing, patch)
         _merge_process_metadata_rest(process_id, patch)
         return
     proc = await ensure_process_instance(session, process_id, metadata=patch)
@@ -207,7 +222,7 @@ async def merge_process_metadata(
         _merge_process_metadata_rest(process_id, patch)
         return
     proc.metadata_json = _merge_dicts(dict(proc.metadata_json or {}), patch)
-    proc.updated_at = datetime.now(timezone.utc)
+    proc.updated_at = datetime.now(UTC)
     try:
         await session.commit()
     except Exception as exc:
@@ -220,16 +235,16 @@ async def merge_process_metadata(
 
 
 async def record_workflow_event(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
     process_id: str,
     event_type: str,
     *,
     task_id: str = "",
     actor: str = "agent_2",
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
     previous_state: str = "",
     new_state: str = "",
-) -> Optional[WorkflowEvent]:
+) -> WorkflowEvent | None:
     if not process_id:
         return None
     if session is None:
@@ -251,7 +266,7 @@ async def record_workflow_event(
         event_type=event_type,
         actor=actor,
         agent="agent_2",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         metadata_json=metadata or {},
         previous_state=previous_state or None,
         new_state=new_state or None,

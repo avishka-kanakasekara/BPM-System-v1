@@ -12,7 +12,6 @@ Default-deny policy: Any action not explicitly listed in ALLOWED_ACTIONS is stri
 """
 
 from enum import Enum
-from typing import Set
 
 
 class ActionPermission(str, Enum):
@@ -58,7 +57,7 @@ ACTION_ALIASES = {
     "generate_optimization_proposal": ActionPermission.GENERATE_OPTIMIZATION_PROPOSAL.value,
 }
 
-ALLOWED_ACTIONS: Set[str] = {
+ALLOWED_ACTIONS: set[str] = {
     ActionPermission.CREATE_TASK.value,
     ActionPermission.UPDATE_TASK.value,
     ActionPermission.SEND_EMAIL.value,
@@ -72,7 +71,7 @@ ALLOWED_ACTIONS: Set[str] = {
     *ACTION_ALIASES.keys(),
 }
 
-FORBIDDEN_ACTIONS: Set[str] = {
+FORBIDDEN_ACTIONS: set[str] = {
     ActionPermission.APPROVE_PURCHASE.value,
     ActionPermission.APPROVE_PAYMENT.value,
     ActionPermission.EXECUTE_PAYMENT.value,

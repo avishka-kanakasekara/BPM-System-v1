@@ -10,7 +10,7 @@ Logs every cognitive step (agent, model, action, reason, confidence) so decision
 
 import logging
 import uuid
-from typing import Optional
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.agent.decision_engine import run_decision_pipeline
@@ -25,11 +25,11 @@ class Agent2:
     Agent 2 — Intelligent Workflow Execution, RPA & Process Optimization Agent.
     """
 
-    def __init__(self, gemini_client: Optional[GeminiClient] = None):
+    def __init__(self, gemini_client: GeminiClient | None = None):
         self.gemini_client = gemini_client or GeminiClient()
 
     async def handle(
-        self, message: AgentMessage, session: Optional[AsyncSession] = None
+        self, message: AgentMessage, session: AsyncSession | None = None
     ) -> AgentMessage:
         """
         Handle an incoming inter-agent message by executing the 11-node cognitive cycle.
@@ -47,9 +47,8 @@ class Agent2:
             message=message, session=session, gemini_client=self.gemini_client
         )
 
-        response_status = "COMPLETED" if receipt.status == "SUCCESS" else "FAILED"
         if receipt.status == "BLOCKED":
-            response_status = "REJECTED"
+            pass
 
         response_payload = {
             "execution_receipt_id": str(receipt.id),

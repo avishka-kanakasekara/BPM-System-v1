@@ -2,17 +2,16 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Type, Tuple
 
-from .constants import FailureErrorCode, FAILURE_RETRYABLE, ResourceLookupError
+from .constants import FAILURE_RETRYABLE, FailureErrorCode, ResourceLookupError
 from .schemas import (
-    AllocationRequest,
-    AllocationRecommendation,
     AgentMessageMetadata,
+    AllocationRecommendation,
+    AllocationRequest,
     RecommendationStatus,
 )
 
-RESOURCE_LOOKUP_EXCEPTIONS: Tuple[Type[BaseException], ...] = (
+RESOURCE_LOOKUP_EXCEPTIONS: tuple[type[BaseException], ...] = (
     ResourceLookupError,
     ConnectionError,
     OSError,
@@ -38,7 +37,7 @@ class FailureSpec:
 def detect_invalid_request(
     request: AllocationRequest,
     evaluation_timestamp: datetime,
-) -> Optional[FailureSpec]:
+) -> FailureSpec | None:
     """Detect semantically invalid requests that pass schema validation."""
     if request.human_requirements is None and request.budget_requirements is None:
         return FailureSpec(

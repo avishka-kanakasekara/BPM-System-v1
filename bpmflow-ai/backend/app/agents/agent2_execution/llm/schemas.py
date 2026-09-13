@@ -12,9 +12,9 @@ Gemini Compatibility Rules:
 - Every model includes a docstring documenting who produces it and its operational role.
 """
 
-from typing import Any, Dict, List, Literal
-from pydantic import BaseModel, Field
+from typing import Any, Literal
 
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # 1. AgentMessage
@@ -35,8 +35,8 @@ class AgentMessage(BaseModel):
     sender: str = Field(..., description="Identifier of the sending agent (e.g., agent_4)")
     receiver: str = Field(..., description="Identifier of the receiving agent (e.g., agent_2)")
     task_type: str = Field(..., description="Actionable task category or event type")
-    payload: Dict[str, Any] = Field(default_factory=dict, description="Task context, parameters, or result data")
-    evidence_refs: List[str] = Field(default_factory=list, description="References to supporting receipts, document IDs, or logs")
+    payload: dict[str, Any] = Field(default_factory=dict, description="Task context, parameters, or result data")
+    evidence_refs: list[str] = Field(default_factory=list, description="References to supporting receipts, document IDs, or logs")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Agent confidence score (0.0 to 1.0)")
     status: Literal[
         "AUTHORIZED",
@@ -63,8 +63,8 @@ class ExecutionPlan(BaseModel):
 
     task_id: str = Field(..., description="ID of the task to be executed")
     objective: str = Field(..., description="Clear statement of what execution aims to achieve")
-    steps: List[str] = Field(..., description="Sequential step-by-step description of the execution path")
-    selected_tools: List[str] = Field(..., description="List of tool names required for execution")
+    steps: list[str] = Field(..., description="Sequential step-by-step description of the execution path")
+    selected_tools: list[str] = Field(..., description="List of tool names required for execution")
     reasoning_summary: str = Field(..., description="Summary of Gemini's reasoning behind this plan")
     risk_level: Literal["LOW", "MEDIUM", "HIGH"] = Field(..., description="Assessed execution risk level")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Gemini's self-assessed plan confidence score")
@@ -88,7 +88,7 @@ class AgentDecision(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0, description="Decision confidence score (0.0 to 1.0)")
     selected_tool: str = Field(default="", description="Name of the tool selected for execution (if EXECUTE)")
     reason: str = Field(..., description="Detailed rationale for the decision")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Structured parameters for the tool call")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Structured parameters for the tool call")
     risk_level: Literal["LOW", "MEDIUM", "HIGH"] = Field(default="MEDIUM", description="Risk level of taking this action")
     fallback_strategy: str = Field(default="", description="Fallback action if the primary tool call fails")
     requires_human: bool = Field(default=False, description="Whether human approval is required prior to execution")
@@ -108,7 +108,7 @@ class CycleStepDecision(BaseModel):
     selected_tool: str = Field(default="", description="Next allowed tool if next_action is EXECUTE")
     reason: str = Field(..., description="Why this step was chosen given the observations")
     confidence: float = Field(default=0.7, ge=0.0, le=1.0, description="Confidence in this step")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the next tool")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Parameters for the next tool")
     goal_achieved: bool = Field(default=False, description="True if the assigned task is already satisfied")
     critic_notes: str = Field(default="", description="Verification of whether the last result matches the objective")
 
@@ -126,7 +126,7 @@ class ToolCallContract(BaseModel):
     """
 
     name: str = Field(..., description="Allowed tool identifier (e.g., send_role_email, create_po_draft)")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="JSON argument payload for tool execution")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="JSON argument payload for tool execution")
 
 
 class ToolResultContract(BaseModel):
@@ -138,7 +138,7 @@ class ToolResultContract(BaseModel):
     """
 
     name: str = Field(..., description="Name of the executed tool")
-    result: Dict[str, Any] = Field(default_factory=dict, description="Return payload from tool execution")
+    result: dict[str, Any] = Field(default_factory=dict, description="Return payload from tool execution")
     status: Literal["SUCCESS", "FAILED", "BLOCKED", "TIMEOUT"] = Field(..., description="Execution status")
     latency_ms: int = Field(default=0, ge=0, description="Tool execution duration in milliseconds")
     error_message: str = Field(default="", description="Detailed error text if execution failed or was blocked")
@@ -214,7 +214,7 @@ class ExecutionReceipt(BaseModel):
     started_at: str = Field(..., description="Execution start timestamp (ISO-8601)")
     completed_at: str = Field(default="", description="Execution completion timestamp (ISO-8601)")
     status: Literal["RUNNING", "SUCCESS", "FAILED", "BLOCKED", "SKIPPED"] = Field(..., description="Receipt status")
-    result: Dict[str, Any] = Field(default_factory=dict, description="Result payload")
+    result: dict[str, Any] = Field(default_factory=dict, description="Result payload")
     error_type: str = Field(default="", description="Error category if failed")
     error_message: str = Field(default="", description="Detailed error message")
     latency_ms: int = Field(default=0, ge=0, description="Execution duration in milliseconds")
@@ -242,7 +242,7 @@ class KPIResult(BaseModel):
     failure_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Task execution failure rate (0.0 to 1.0)")
     throughput: int = Field(default=0, ge=0, description="Total completed process instances in window")
     bottleneck_task: str = Field(default="", description="Identifier of the task with highest average delay")
-    kpi_data: Dict[str, Any] = Field(default_factory=dict, description="Raw aggregated metrics payload")
+    kpi_data: dict[str, Any] = Field(default_factory=dict, description="Raw aggregated metrics payload")
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ class OptimizationRecommendationSchema(BaseModel):
     recommendation_type: str = Field(..., description="Optimization type (e.g. BOTTLENECK_REDUCTION, AUTOMATION_CANDIDATE)")
     problem: str = Field(..., description="Description of the identified inefficiency or bottleneck")
     root_cause: str = Field(..., description="Root cause analysis based on process mining data")
-    evidence: Dict[str, Any] = Field(default_factory=dict, description="Supporting KPI data, logs, and trace evidence")
+    evidence: dict[str, Any] = Field(default_factory=dict, description="Supporting KPI data, logs, and trace evidence")
     baseline_metric: float = Field(default=0.0, description="Current baseline metric value (e.g. 48.0 hours)")
     predicted_metric: float = Field(default=0.0, description="Projected metric value after optimization (e.g. 12.0 hours)")
     improvement_percent: float = Field(default=0.0, description="Expected percentage improvement")

@@ -1,37 +1,37 @@
 """Service orchestration for Agent 3 Resource Allocation."""
 
+import inspect
 from datetime import datetime
 from decimal import Decimal
-import asyncio
-import inspect
-from typing import Optional, Any
+from typing import Any
 
+from .advisory import assert_advisory_recommendation
+from .constants import MessageType
+from .explainer_template import ExplanationContext, TemplateExplainer
+from .failures import (
+    build_failed_recommendation,
+    build_internal_error_failure,
+    build_resource_lookup_failure,
+    detect_invalid_request,
+    is_resource_lookup_error,
+)
+from .gaps import GapDetector
 from .interfaces import ResourceRepository
+from .llm_explainer import (
+    ExplanationGenerator,
+    ResilientFallbackExplainer,
+    TemplateExplainerAdapter,
+)
 from .schemas import (
-    AllocationRequest,
-    AllocationRecommendation,
     AgentMessageMetadata,
+    AllocationRecommendation,
+    AllocationRequest,
     RecommendationStatus,
     utc_now,
     validate_timezone_aware,
 )
-from .strategies.human import HumanResourceStrategy
 from .strategies.budget import BudgetResourceStrategy
-from .gaps import GapDetector
-from .explainer_template import TemplateExplainer, ExplanationContext
-from .llm_explainer import (
-    ResilientFallbackExplainer,
-    ExplanationGenerator,
-    TemplateExplainerAdapter,
-)
-from .constants import MessageType
-from .failures import (
-    detect_invalid_request,
-    build_failed_recommendation,
-    build_resource_lookup_failure,
-    build_internal_error_failure,
-    is_resource_lookup_error,
-)
+from .strategies.human import HumanResourceStrategy
 
 
 class ResourceAllocationService:
@@ -40,7 +40,7 @@ class ResourceAllocationService:
     def __init__(
         self,
         repository: ResourceRepository,
-        explainer: Optional[Any] = None,
+        explainer: Any | None = None,
     ):
         """Initialize with a resource repository and optional explanation generator.
 
@@ -56,8 +56,8 @@ class ResourceAllocationService:
             self.explainer: ExplanationGenerator = ResilientFallbackExplainer()
         elif isinstance(explainer, TemplateExplainer):
             self.explainer = TemplateExplainerAdapter(explainer)
-        elif hasattr(explainer, "generate_explanation") and callable(getattr(explainer, "generate_explanation")):
-            if not inspect.iscoroutinefunction(getattr(explainer, "generate_explanation")):
+        elif hasattr(explainer, "generate_explanation") and callable(explainer.generate_explanation):
+            if not inspect.iscoroutinefunction(explainer.generate_explanation):
                 self.explainer = TemplateExplainerAdapter(explainer)
             else:
                 self.explainer = explainer
@@ -67,14 +67,14 @@ class ResourceAllocationService:
     async def process_allocation_request(
         self,
         request: AllocationRequest,
-        evaluation_timestamp: Optional[datetime] = None,
+        evaluation_timestamp: datetime | None = None,
     ) -> AllocationRecommendation:
         """Process a resource allocation request.
 
         Business constraint outcomes return PENDING_HUMAN_APPROVAL.
         Technical failures return FAILED. This method never raises.
         """
-        response_metadata: Optional[AgentMessageMetadata] = None
+        response_metadata: AgentMessageMetadata | None = None
 
         try:
             if evaluation_timestamp is None:
@@ -136,7 +136,7 @@ class ResourceAllocationService:
         response_metadata: AgentMessageMetadata,
         human_result,
         budget_result,
-        request: Optional[AllocationRequest] = None,
+        request: AllocationRequest | None = None,
     ) -> AllocationRecommendation:
         """Build a completed business recommendation, including constraint outcomes."""
         resource_gaps = []
@@ -171,7 +171,7 @@ class ResourceAllocationService:
         )
         explanation = await self.explainer.generate_explanation(explanation_context)
 
-        return AllocationRecommendation(
+        recommendation = AllocationRecommendation(
             metadata=response_metadata,
             status=RecommendationStatus.PENDING_HUMAN_APPROVAL,
             human_requirement_result=human_result,
@@ -184,6 +184,8 @@ class ResourceAllocationService:
             confidence=confidence,
             limitations=limitations,
         )
+        assert_advisory_recommendation(recommendation)
+        return recommendation
 
     def _build_response_metadata(
         self,

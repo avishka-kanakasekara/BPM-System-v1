@@ -1,15 +1,9 @@
 """Base strategy interface for resource allocation."""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple
 
 from ..schemas import (
     RequirementResult,
-    ExcludedResource,
-    HumanResourceEvidence,
-    BudgetResourceEvidence,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
 )
 
 

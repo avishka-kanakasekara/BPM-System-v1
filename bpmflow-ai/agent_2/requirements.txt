@@ -1,3 +1,0 @@
-# SUPERSEDED — install from bpmflow-ai/backend/requirements.txt instead.
-# Agent 2 runs inside the FastAPI monolith; this file remains only as a pointer.
--r ../backend/requirements.txt

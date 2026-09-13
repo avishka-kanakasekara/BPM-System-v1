@@ -3,65 +3,52 @@
 import asyncio
 from datetime import timedelta
 from decimal import Decimal
-from typing import Optional
 from uuid import uuid4
 
 import pytest
 
 from app.agents.agent3_resources import (
-    AllocationRequest,
     AgentMessageMetadata,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-    HumanResourceEvidence,
-    BudgetResourceEvidence,
-    InMemoryResourceRepository,
-    ResourceAllocationService,
-    ExplanationContext,
-    RequirementResult,
-    RankedHumanCandidate,
-    ScoreBreakdown,
+    AllocationRequest,
     BudgetValidationResult,
-    ExcludedResource,
-    ExclusionReasonEntry,
-    ExclusionReason,
-    ResourceGap,
-    ResourceType,
-    GapType,
-    ResourceAlternative,
-    GapAlternativeType,
+    ExplanationContext,
+    HumanResourceRequirement,
+    InMemoryResourceRepository,
+    LLMExplanationError,
+    OpenAIExplanationGenerator,
+    RankedHumanCandidate,
     RecommendationStatus,
+    RequirementResult,
+    ResilientFallbackExplainer,
+    ResourceAllocationService,
+    ResourceType,
+    ScoreBreakdown,
     TemplateExplainer,
     TemplateExplainerAdapter,
-    OpenAIExplanationGenerator,
-    ResilientFallbackExplainer,
-    LLMOutputValidator,
-    LLMExplanationError,
-    sanitize_explanation_context,
     build_user_prompt,
-    get_tenant_a_id,
+    create_human_evidence,
     get_requester_id,
     get_resource_id_1,
-    create_human_evidence,
+    get_tenant_a_id,
+    sanitize_explanation_context,
     utc_now,
 )
 from app.tests.conftest import utc_datetime
-
 
 # ============================================================================
 # Fake OpenAI Responses API Client Helpers (No Real Network Calls)
 # ============================================================================
 
 class DummyResponse:
-    def __init__(self, output_text: Optional[str]):
+    def __init__(self, output_text: str | None):
         self.output_text = output_text
 
 
 class FakeOpenAIClient:
     def __init__(
         self,
-        return_content: Optional[str] = "The allocation for Candidate 1 is recommended. This recommendation requires human approval before execution.",
-        raise_exc: Optional[Exception] = None,
+        return_content: str | None = "The allocation for Candidate 1 is recommended. This recommendation requires human approval before execution.",
+        raise_exc: Exception | None = None,
         delay: float = 0.0,
         return_invalid_shape: bool = False,
     ):

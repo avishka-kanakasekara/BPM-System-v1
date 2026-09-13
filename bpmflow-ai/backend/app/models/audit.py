@@ -5,7 +5,7 @@ Two tables, two classes:
 - AuditLog → public.audit_logs (BPM entity change log used by Agents 3/4)
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Text
@@ -20,7 +20,7 @@ JsonDict = JSON().with_variant(JSONB(), "postgresql")
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class IngestionAuditLog(CoreBase):

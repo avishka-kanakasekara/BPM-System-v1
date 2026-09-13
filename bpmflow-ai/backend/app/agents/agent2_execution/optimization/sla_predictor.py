@@ -6,7 +6,7 @@ risk_score = 0.35*(elapsed/sla) + 0.35*(hist_avg/sla) + 0.15*workload_factor + 0
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 @dataclass
@@ -16,7 +16,7 @@ class SLARiskPrediction:
     breach_probability: float
     risk_level: str  # LOW, MEDIUM, HIGH, CRITICAL
     is_at_risk: bool
-    explainability_features: Dict[str, Any] = field(default_factory=dict)
+    explainability_features: dict[str, Any] = field(default_factory=dict)
 
 
 def predict_sla_risk(

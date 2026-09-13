@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from typing import Optional
 
 
-def parse_uuid(value: Optional[str]) -> uuid.UUID:
+def parse_uuid(value: str | None) -> uuid.UUID:
     """
     Convert a process/task identifier into a UUID.
 

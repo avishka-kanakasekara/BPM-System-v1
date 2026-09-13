@@ -4,13 +4,13 @@ Agent 2 — Reasoning Helpers
 Assembles Gemini prompts for planning, email drafting, and the observe-replan loop.
 """
 
-from typing import Any, Dict, List
+from typing import Any
 
 from app.agents.agent2_execution.agent.context_engine import ProcessContext
 
 
 def format_planning_context_prompt(
-    context: ProcessContext, evidence: List[str], available_tools: List[str]
+    context: ProcessContext, evidence: list[str], available_tools: list[str]
 ) -> str:
     """Format structured context and retrieved evidence into a Gemini planning prompt."""
     evidence_text = "\n".join([f"- {ev}" for ev in evidence]) if evidence else "- No historical evidence"
@@ -51,8 +51,8 @@ def format_email_drafting_prompt(
 def format_loop_prompt(
     context: ProcessContext,
     objective: str,
-    observations: List[Dict[str, Any]],
-    remaining_tools: List[str],
+    observations: list[dict[str, Any]],
+    remaining_tools: list[str],
 ) -> str:
     """Format observations for the post-ACT critic / next-step decision."""
     if observations:

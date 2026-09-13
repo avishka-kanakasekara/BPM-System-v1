@@ -10,8 +10,8 @@ Agent 2 MUST NEVER self-approve its own recommendations.
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.database.ids import parse_uuid
@@ -21,19 +21,17 @@ from app.agents.agent2_execution.llm import prompts
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
 from app.agents.agent2_execution.llm.schemas import OptimizationRecommendationSchema
 from app.agents.agent2_execution.optimization import (
-    anomaly_detector,
     bottleneck_detector,
     rework_detector,
     root_cause,
     simulation,
-    sla_predictor,
 )
 
 
 async def generate_optimization_proposal(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
     process_id: str = "proc-global-procurement",
-    gemini_client: Optional[GeminiClient] = None,
+    gemini_client: GeminiClient | None = None,
 ) -> OptimizationRecommendationSchema:
     """
     Generate an OptimizationRecommendation based on historical analytics and TO-BE simulation.
@@ -78,7 +76,7 @@ async def generate_optimization_proposal(
 
     # 2. Score Confidence & Risk Deterministically
     # Confidence scales with sample size and effect size
-    case_count = rework.total_rework_events + 500
+    rework.total_rework_events + 500
     confidence_score = round(min(0.95, max(0.60, 0.70 + (sim.improvement_percentage / 200.0))), 2)
 
     # Risk is LOW because proposed intervention uses allowed send_reminder actions
@@ -111,7 +109,7 @@ async def generate_optimization_proposal(
         risk=risk_level,
         requires_human_approval=True,  # Rule #5
         status="PENDING_APPROVAL",      # Rule #5
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
     )
 
     # 4. Save Record to Database Table if session present
@@ -132,7 +130,7 @@ async def generate_optimization_proposal(
                 confidence=schema_obj.confidence,
                 risk=schema_obj.risk,
                 status="PENDING_APPROVAL",  # Rule #5
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             )
             session.add(db_row)
             await session.commit()

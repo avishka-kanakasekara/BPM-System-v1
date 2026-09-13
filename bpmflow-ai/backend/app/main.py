@@ -1,13 +1,16 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from app.api.v1.router import api_router
+from app.core import shutdown as shutdown_state
 from app.core.config import settings
 from app.core.database import close_db, init_db
+from app.core.health import live_payload, ready_payload, run_dependency_probes
 from app.core.logging import configure_logging, get_logger
+from app.core.middleware import CorrelationMiddleware, RateLimitMiddleware, RequestGuardMiddleware
 
 configure_logging()
 logger = get_logger(__name__)
@@ -15,17 +18,35 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: lazy async engine. Shutdown: dispose engine and Agent 3 LLM if present."""
+    """Startup: validate prod config, init DB, scheduler. Shutdown: drain, release leases."""
     try:
-        settings.assert_production_llm_config()
+        settings.assert_production_config()
     except RuntimeError:
-        logger.exception("production_llm_config_invalid")
+        logger.exception("production_config_invalid")
         raise
     try:
         await init_db()
     except Exception:
         logger.warning("async_db_init_skipped", exc_info=True)
+    try:
+        from app.agents.agent2_execution.scheduler import start_scheduler
+
+        start_scheduler()
+    except Exception:
+        logger.warning("agent2_scheduler_start_skipped", exc_info=True)
     yield
+    shutdown_state.begin_shutdown()
+    drained = await shutdown_state.wait_for_drain(settings.SHUTDOWN_DRAIN_SECONDS)
+    logger.info(
+        "shutdown_drain_complete",
+        extra={"drained": drained, "in_flight": shutdown_state.in_flight_count()},
+    )
+    try:
+        from app.agents.agent2_execution.scheduler import stop_scheduler
+
+        await stop_scheduler(release_leases=True)
+    except Exception:
+        logger.warning("agent2_scheduler_stop_skipped", exc_info=True)
     try:
         await close_db()
     except Exception:
@@ -47,19 +68,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Outermost first: correlation → rate limit → request guard → CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
-    # Local Vite / CRA hosts often alternate between localhost and 127.0.0.1.
     allow_origin_regex=(
         r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
         if settings.is_development
         else None
     ),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Correlation-ID", "X-Request-ID"],
 )
+app.add_middleware(RequestGuardMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(CorrelationMiddleware)
 
 
 @app.get("/")
@@ -72,43 +96,30 @@ async def root():
     }
 
 
+@app.get("/health/live")
+async def health_live():
+    """Process is up — no dependency checks."""
+    return live_payload()
+
+
+@app.get("/health/ready")
+async def health_ready(response: Response):
+    """Ready only when a persistence backend and auth config are usable."""
+    payload = await ready_payload()
+    if payload["status"] != "ready":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return payload
+
+
 @app.get("/health")
-async def health_check():
-    """Liveness + dependency probe.
-
-    Prefers a fast Supabase REST ping (HTTPS) so environments that block the
-    Postgres pooler ports (6543/5432) still report healthy when Supabase is
-    reachable. Postgres is probed only when REST is unavailable/unconfigured.
-    """
-    logger.info("health_check")
-    database = "unknown"
-    try:
-        from app.core.database import get_sync_engine
-        from app.core.supabase_rest import ping_rest, supabase_rest_configured
-        from sqlalchemy import text
-
-        if supabase_rest_configured() and ping_rest():
-            # Do not call get_sync_engine() here — a blocked pooler port can
-            # hang for many seconds even though Supabase HTTPS is fine.
-            database = "supabase_rest"
-        else:
-            engine = get_sync_engine()
-            if engine is not None:
-                with engine.connect() as connection:
-                    connection.execute(text("SELECT 1"))
-                database = "postgres"
-            else:
-                database = "disconnected"
-    except Exception as exc:
-        logger.exception("health_database_failed")
-        database = f"error: {type(exc).__name__}"
-    return {
-        "status": "healthy" if database in {"postgres", "supabase_rest"} else "degraded",
-        "env": settings.ENV,
-        "database": database,
-        "database_url_configured": bool(settings.DATABASE_URL),
-        "supabase": "configured" if settings.SUPABASE_URL else "not configured",
-    }
+@app.get("/health/deps")
+async def health_deps(response: Response):
+    """Full dependency probe report (truthful when a dependency is broken)."""
+    report = await run_dependency_probes()
+    overall = "healthy" if report["ready"] else "degraded"
+    if not report["ready"]:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {"status": overall, "env": settings.ENV, **report}
 
 
 app.include_router(api_router, prefix="/api/v1")

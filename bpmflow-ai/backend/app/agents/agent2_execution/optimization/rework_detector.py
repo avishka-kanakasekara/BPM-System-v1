@@ -6,8 +6,9 @@ grouping rework reasons to identify the dominant root cause and impact fraction.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-from sqlalchemy import func, select
+from typing import Any
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.database.models import WorkflowEvent
@@ -19,12 +20,12 @@ class ReworkAnalysis:
     dominant_rework_reason: str
     dominant_reason_count: int
     dominant_reason_fraction: float
-    rework_breakdown: Dict[str, int] = field(default_factory=dict)
-    details: Dict[str, Any] = field(default_factory=dict)
+    rework_breakdown: dict[str, int] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 async def detect_rework_patterns(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
 ) -> ReworkAnalysis:
     """
     Query workflow_events for REWORK events and group by reason metadata.
@@ -32,7 +33,7 @@ async def detect_rework_patterns(
     :param session: Active AsyncSession (optional)
     :return: ReworkAnalysis instance
     """
-    rework_counts: Dict[str, int] = {}
+    rework_counts: dict[str, int] = {}
     if session is None:
         rework_counts = {"missing cost centre": 113, "missing quotation": 70, "incorrect supplier": 22}
 
@@ -43,7 +44,7 @@ async def detect_rework_patterns(
             rework_rows = res.scalars().all()
 
             if rework_rows:
-                db_counts: Dict[str, int] = {}
+                db_counts: dict[str, int] = {}
                 for r in rework_rows:
                     reason = (r.metadata_json or {}).get("reason", "missing cost centre")
                     db_counts[reason] = db_counts.get(reason, 0) + 1

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from app.core.supabase_rest import rest_insert, rest_select
@@ -63,7 +63,7 @@ class RestRecommendationWriteRepository:
                     "idempotency_key": idempotency_key,
                     "correlation_id": str(correlation_id),
                     "requester_id": str(requester_id),
-                    "evaluation_timestamp": evaluation_timestamp.astimezone(timezone.utc).isoformat(),
+                    "evaluation_timestamp": evaluation_timestamp.astimezone(UTC).isoformat(),
                     "process_instance_id": str(request.metadata.process_instance_id),
                     "task_id": str(request.metadata.task_id),
                     "request_payload": request.model_dump(mode="json"),
@@ -107,7 +107,7 @@ class RestRecommendationWriteRepository:
         self,
         tenant_id: UUID,
         recommendation_id: UUID,
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         rows = rest_select(
             "allocation_recommendations",
             {
@@ -123,7 +123,7 @@ class RestRecommendationWriteRepository:
         self,
         tenant_id: UUID,
         correlation_id: UUID,
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         rows = rest_select(
             "allocation_recommendations",
             {

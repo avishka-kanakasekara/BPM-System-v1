@@ -13,15 +13,13 @@ Tenant ID is extracted from app_metadata.tenant_id (administratively controlled)
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional, Set
+from typing import Optional
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+from fastapi import Depends
 
-from app.core.security import VerifiedPrincipal, get_verified_principal
 from app.core.database import get_session_factory
-
+from app.core.security import VerifiedPrincipal, get_verified_principal
 
 # ============================================================================
 # Trusted Request Context Contract
@@ -48,8 +46,8 @@ class Agent3RequestContext:
         self,
         tenant_id: UUID,
         actor_id: UUID,
-        roles: Set[str],
-        correlation_id: Optional[UUID] = None,
+        roles: set[str],
+        correlation_id: UUID | None = None,
     ):
         self.tenant_id = tenant_id
         self.actor_id = actor_id
@@ -202,7 +200,11 @@ async def get_allocation_service(
     Uses Postgres when reachable; otherwise Supabase REST against real seeded
     resource tables. Optional explanations prefer Gemini when configured.
     """
-    from app.agents.agent3_resources.service import ResourceAllocationService
+    from app.agents.agent3_resources.llm_explainer import (
+        GeminiExplanationGenerator,
+        OpenAIExplanationGenerator,
+        ResilientFallbackExplainer,
+    )
     from app.agents.agent3_resources.repositories.postgres_resource_repository import (
         PostgresResourceRepository,
     )
@@ -213,11 +215,7 @@ async def get_allocation_service(
         get_agent3_llm_config,
         get_shared_openai_client,
     )
-    from app.agents.agent3_resources.llm_explainer import (
-        GeminiExplanationGenerator,
-        OpenAIExplanationGenerator,
-        ResilientFallbackExplainer,
-    )
+    from app.agents.agent3_resources.service import ResourceAllocationService
     from app.core.config import get_settings
     from app.core.supabase_rest import use_supabase_rest_fallback
 

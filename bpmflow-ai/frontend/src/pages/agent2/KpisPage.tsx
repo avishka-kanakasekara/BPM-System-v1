@@ -13,12 +13,19 @@ export default function Agent2KpisPage() {
   const [options, setOptions] = useState<{ id: string; name: string }[]>([])
   const [kpis, setKpis] = useState<Record<string, unknown> | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [processListError, setProcessListError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     void listProcesses()
-      .then((rows) => setOptions(rows.map((r) => ({ id: r.id, name: r.name }))))
-      .catch(() => undefined)
+      .then((rows) => {
+        setOptions(rows.map((r) => ({ id: r.id, name: r.name })))
+        setProcessListError(null)
+      })
+      .catch((err) => {
+        setOptions([])
+        setProcessListError(apiErrorMessage(err))
+      })
   }, [])
 
   async function load() {
@@ -46,6 +53,9 @@ export default function Agent2KpisPage() {
         description="Execution metrics from the Agent 2 analytics engine."
       />
       {error ? <Alert tone="error">{error}</Alert> : null}
+      {processListError ? (
+        <Alert tone="warning">Process filter unavailable: {processListError}</Alert>
+      ) : null}
 
       <Panel title="Scope">
         <div className="flex flex-wrap gap-3">

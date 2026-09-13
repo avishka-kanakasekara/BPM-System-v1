@@ -23,7 +23,7 @@ const STAGE_FILTERS: Array<{ value: string; label: string }> = [
   { value: 'WORKFLOW_EXECUTION', label: 'Workflow Execution' },
   { value: 'INVOICE_MATCHING', label: 'Invoice Matching' },
   { value: 'COMPLETED', label: 'Completed' },
-  { value: 'EXCEPTION', label: 'Exception' },
+  { value: 'EXCEPTION', label: 'Stopped' },
 ]
 
 const KNOWN_TYPES = ['PROCUREMENT', 'INVOICE', 'GENERAL'] as const
@@ -44,7 +44,7 @@ function formatProcessStatus(status: string | null | undefined): string {
   if (key === 'ACTIVE' || key === 'IN_PROGRESS' || key === 'RUNNING') return 'Active'
   if (key === 'COMPLETED' || key === 'COMPLETE') return 'Completed'
   if (key === 'DRAFT') return 'Draft'
-  if (key === 'EXCEPTION' || key === 'FAILED') return 'Exception'
+  if (key === 'EXCEPTION' || key === 'FAILED') return 'Stopped'
   if (key === 'CANCELLED' || key === 'CANCELED') return 'Cancelled'
   return formatProcessType(status)
 }

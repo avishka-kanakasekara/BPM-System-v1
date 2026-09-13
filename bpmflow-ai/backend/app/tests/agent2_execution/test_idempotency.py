@@ -6,12 +6,16 @@ Same key called twice only executes once — second call short-circuits and retu
 """
 
 import uuid
+
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.execution.execution_engine import execute_with_recovery
-from app.agents.agent2_execution.execution.idempotency import generate_idempotency_key
+from app.agents.agent2_execution.execution.idempotency import (
+    clear_memory_receipts,
+    generate_idempotency_key,
+)
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
+from app.agents.agent2_execution.security.tool_guard import ExecutionGuardContext
 
 
 def test_idempotency_key_generation():
@@ -24,6 +28,7 @@ def test_idempotency_key_generation():
 
 @pytest.mark.asyncio
 async def test_idempotency_short_circuit():
+    clear_memory_receipts()
     proc_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
     tool_name = "create_po_draft"
@@ -31,44 +36,63 @@ async def test_idempotency_short_circuit():
         "vendor_id": "vendor-100",
         "amount": 1500.00,
         "process_id": proc_id,
+        "task_id": task_id,
     }
     gemini_client = GeminiClient(is_offline=True)
+    guard = ExecutionGuardContext(
+        message_status="AUTHORIZED",
+        process_stage="WORKFLOW_EXECUTION",
+        process_id=proc_id,
+    )
 
-    # First call: Executes tool and returns receipt
     receipt1 = await execute_with_recovery(
         process_id=proc_id,
         task_id=task_id,
         tool_name=tool_name,
         parameters=params,
-        session=None,  # session None uses in-memory ORM object for return
+        session=None,
         gemini_client=gemini_client,
+        guard_context=guard,
     )
     assert receipt1.status == "SUCCESS"
     assert receipt1.attempt_number == 1
     assert receipt1.idempotency_key == f"{proc_id}-{task_id}-{tool_name}"
 
-    # Note: In-memory receipt test without DB session verifies receipt object structure;
-    # with DB session, idempotency.check_existing_receipt queries stored SUCCESS receipt.
+    receipt2 = await execute_with_recovery(
+        process_id=proc_id,
+        task_id=task_id,
+        tool_name=tool_name,
+        parameters=params,
+        session=None,
+        gemini_client=gemini_client,
+        guard_context=guard,
+    )
+    assert receipt2.status == "SUCCESS"
+    assert receipt2.id == receipt1.id
 
 
 @pytest.mark.asyncio
 async def test_concurrent_idempotency_replays():
     """Adversarial Case 3: Replaying the same idempotency key 5 times concurrently."""
     import asyncio
+
+    clear_memory_receipts()
     proc_id = str(uuid.uuid4())
     task_id = str(uuid.uuid4())
-    tool_name = "send_email"
+    tool_name = "create_po_draft"
     params = {
-        "recipient": "frank.miller@acmeglobal.com",
-        "subject": "Concurrent Test",
-        "body": "Test body",
+        "vendor_id": "vendor-100",
+        "amount": 1500.00,
         "process_id": proc_id,
         "task_id": task_id,
-        "recipient_role": "manager",
     }
     gemini_client = GeminiClient(is_offline=True)
+    guard = ExecutionGuardContext(
+        message_status="AUTHORIZED",
+        process_stage="WORKFLOW_EXECUTION",
+        process_id=proc_id,
+    )
 
-    # Launch 5 concurrent calls
     tasks = [
         execute_with_recovery(
             process_id=proc_id,
@@ -77,6 +101,7 @@ async def test_concurrent_idempotency_replays():
             parameters=params,
             session=None,
             gemini_client=gemini_client,
+            guard_context=guard,
         )
         for _ in range(5)
     ]
@@ -84,6 +109,8 @@ async def test_concurrent_idempotency_replays():
     receipts = await asyncio.gather(*tasks)
 
     assert len(receipts) == 5
+    success_ids = {r.id for r in receipts if r.status == "SUCCESS"}
+    assert len(success_ids) == 1
     for r in receipts:
-        assert r.status in ["SUCCESS", "DRY_RUN"]
+        assert r.status == "SUCCESS"
         assert r.idempotency_key == f"{proc_id}-{task_id}-{tool_name}"

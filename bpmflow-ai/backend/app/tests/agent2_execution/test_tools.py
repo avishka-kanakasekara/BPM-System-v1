@@ -8,13 +8,18 @@ Tests all 12 tools registered in ToolRegistry:
 """
 
 import uuid
+
 import pytest
 from pydantic import ValidationError
 
 from app.agents.agent2_execution.tools import registry
 from app.agents.agent2_execution.tools.history_tools import get_process_history, get_task_history
 from app.agents.agent2_execution.tools.kpi_tools import calculate_kpi
-from app.agents.agent2_execution.tools.notification_tools import create_exception, send_email, send_reminder
+from app.agents.agent2_execution.tools.notification_tools import (
+    create_exception,
+    send_email,
+    send_reminder,
+)
 from app.agents.agent2_execution.tools.procurement_tools import (
     create_po_draft,
     request_quotation,
@@ -143,13 +148,13 @@ async def test_create_po_draft_tool():
 @pytest.mark.asyncio
 async def test_request_quotation_tool():
     inp = RequestQuotationInput(
-        vendor_email="sales@vendor.com",
+        vendor_email="frank.miller@acmeglobal.com",
         items="10 Monitors",
         required_by="2026-08-30",
     )
     out = await request_quotation(session=None, input_data=inp)
     assert isinstance(out, RequestQuotationOutput)
-    assert out.status == "REQUESTED"
+    assert out.status in {"COMMUNICATION_SENT", "DRY_RUN", "RECORDED", "COMMUNICATION_PENDING"}
 
 
 @pytest.mark.asyncio

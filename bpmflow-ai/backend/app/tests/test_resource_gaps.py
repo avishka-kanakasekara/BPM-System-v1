@@ -1,17 +1,16 @@
 """Tests for resource gap detection and alternatives ordering."""
 
-import pytest
 from decimal import Decimal
 from uuid import uuid4
 
-from app.tests.conftest import utc_datetime
 from app.agents.agent3_resources import (
+    GapAlternativeType,
     GapDetector,
+    GapType,
     RequirementResult,
     ResourceType,
-    GapAlternativeType,
-    GapType,
 )
+from app.tests.conftest import utc_datetime
 
 
 class TestResourceGaps:

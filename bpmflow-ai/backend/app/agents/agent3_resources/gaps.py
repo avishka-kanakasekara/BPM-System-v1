@@ -1,15 +1,13 @@
 """Resource gap detection and alternatives for Agent 3."""
 
-from typing import List, Optional, Tuple
-
 from decimal import Decimal
 
+from .constants import ExclusionReason, GapAlternativeType, GapType, ResourceType
 from .schemas import (
     RequirementResult,
-    ResourceGap,
     ResourceAlternative,
+    ResourceGap,
 )
-from .constants import ResourceType, GapAlternativeType, GapType, ExclusionReason
 
 
 def _all_have_exclusion_reason(excluded_resources, reason: ExclusionReason) -> bool:
@@ -34,11 +32,11 @@ class GapDetector:
     def analyze_human_constraint(
         self,
         requirement_result: RequirementResult,
-    ) -> Tuple[List[ResourceGap], List[ResourceAlternative], List[str]]:
+    ) -> tuple[list[ResourceGap], list[ResourceAlternative], list[str]]:
         """Analyze a completed HUMAN requirement for business constraint gaps."""
-        gaps: List[ResourceGap] = []
-        alternatives: List[ResourceAlternative] = []
-        limitations: List[str] = []
+        gaps: list[ResourceGap] = []
+        alternatives: list[ResourceAlternative] = []
+        limitations: list[str] = []
 
         if not requirement_result or requirement_result.eligible_candidates:
             return gaps, alternatives, limitations
@@ -136,10 +134,10 @@ class GapDetector:
     def analyze_budget_constraint(
         self,
         requirement_result: RequirementResult,
-    ) -> Tuple[List[ResourceGap], List[str]]:
+    ) -> tuple[list[ResourceGap], list[str]]:
         """Analyze a completed BUDGET requirement for business constraint gaps."""
-        gaps: List[ResourceGap] = []
-        limitations: List[str] = []
+        gaps: list[ResourceGap] = []
+        limitations: list[str] = []
 
         if requirement_result is None:
             return gaps, limitations
@@ -186,7 +184,7 @@ class GapDetector:
     def detect_human_resource_gap(
         self,
         requirement_result: RequirementResult,
-    ) -> Optional[ResourceGap]:
+    ) -> ResourceGap | None:
         """Backward-compatible helper returning the first HUMAN gap if present."""
         gaps, _, _ = self.analyze_human_constraint(requirement_result)
         return gaps[0] if gaps else None
@@ -194,7 +192,7 @@ class GapDetector:
     def generate_alternatives(
         self,
         resource_type: ResourceType,
-    ) -> List[ResourceAlternative]:
+    ) -> list[ResourceAlternative]:
         """Generate alternatives in exact required order."""
         if resource_type != ResourceType.HUMAN:
             return []

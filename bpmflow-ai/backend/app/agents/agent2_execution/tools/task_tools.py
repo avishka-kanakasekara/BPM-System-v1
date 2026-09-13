@@ -6,8 +6,8 @@ agents (Agent 1 discovery steps, Agent 4 approvals FK, Agent 2 execution).
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,10 +23,10 @@ from app.agents.agent2_execution.tools.schemas import (
 
 
 async def create_workflow_task(
-    session: Optional[AsyncSession], input_data: CreateTaskInput
+    session: AsyncSession | None, input_data: CreateTaskInput
 ) -> CreateTaskOutput:
     """Create a new workflow task and persist it when a DB session is available."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     task_uuid = uuid.uuid4()
     process_uuid = parse_uuid(input_data.process_id)
 
@@ -63,10 +63,10 @@ async def create_workflow_task(
 
 
 async def update_task(
-    session: Optional[AsyncSession], input_data: UpdateTaskInput
+    session: AsyncSession | None, input_data: UpdateTaskInput
 ) -> UpdateTaskOutput:
     """Update an existing workflow task status and assigned user."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     task_uuid = parse_uuid(input_data.task_id)
 
     if session is not None:

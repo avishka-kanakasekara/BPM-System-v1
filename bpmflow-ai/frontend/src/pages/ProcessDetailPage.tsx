@@ -2,29 +2,27 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   apiErrorMessage,
-  completeInvoiceMatching,
-  executeProcess,
+  advanceProcess,
   getDiscoveredProcess,
   getProcess,
   listApprovals,
   listAuditLogs,
-  listExceptions,
   listExecutionReceipts,
-  planResources,
-  riskReview,
-  startProcess,
   type AgentMessage,
   type ApprovalRecord,
   type AuditLogRecord,
-  type ExceptionRecord,
   type ExecutionReceipt,
   type ProcessDetail,
   type ProcessRecord,
-  type ProcessStartResponse,
+  type AdvanceProcessResponse,
   type WorkflowResult,
 } from '../services/apiClient'
+import type { InvoiceMatchingPayload, RiskFinding } from '../types/api'
 import { useAuth } from '../auth/AuthContext'
+import { buildCorrelationTimeline } from '../lib/correlationTimeline'
+import { stageActions } from '../lib/stageActions'
 import ProcessDiscoveryPanel from '../components/discovery/ProcessDiscoveryPanel'
+import Agent3ProcessResultsPanel from '../components/resources/Agent3ProcessResultsPanel'
 import {
   Alert,
   EmptyState,
@@ -33,10 +31,7 @@ import {
   ProcessStageBadge,
   RiskBadge,
 } from '../components/ui/primitives'
-import {
-  formatExceptionStatus,
-  formatProcessStage,
-} from '../lib/statusPresentation'
+import { formatProcessStage } from '../lib/statusPresentation'
 
 const JOURNEY: Array<{ key: string; short: string; label: string }> = [
   { key: 'DRAFT', short: 'Draft', label: 'Draft' },
@@ -51,16 +46,16 @@ const JOURNEY: Array<{ key: string; short: string; label: string }> = [
 
 const STAGE_COPY: Record<string, { title: string; body: string }> = {
   DRAFT: {
-    title: 'Upload process evidence',
-    body: 'Upload documents for this process. Discovery results stay on this process. Then start discovery to advance the stage through Agent 4.',
+    title: 'Start by learning how this process works',
+    body: 'Upload a file that shows the real steps (for example a CSV event log, PDF, or Word doc). We will turn that into a simple step-by-step picture of the process. Nothing is approved or purchased yet.',
   },
   DISCOVERING: {
-    title: 'Process Discovery',
-    body: 'Discovery evidence is available. Continue to resource planning when ready.',
+    title: 'We found your process steps',
+    body: 'Review the discovered steps below. When they look right, continue to resource planning to choose people and budget.',
   },
   RESOURCE_PLANNING: {
     title: 'Resource Planning',
-    body: 'Workforce and budget requirements are being evaluated. Recommendations are advisory — not approvals.',
+    body: 'Run Agent 3 to rank people and validate budget. Full results appear in the Resource Planning Results panel below — recommendations are advisory, not approvals.',
   },
   RISK_REVIEW: {
     title: 'Risk Assessment',
@@ -83,8 +78,8 @@ const STAGE_COPY: Record<string, { title: string; body: string }> = {
     body: 'This process has completed successfully.',
   },
   EXCEPTION: {
-    title: 'Process requires attention',
-    body: 'This process has encountered an exception and requires attention.',
+    title: 'Process stopped',
+    body: 'This process was stopped after a rejection or blocked control. Review the history below.',
   },
 }
 
@@ -102,7 +97,7 @@ function formatProcessStatus(status: string | null | undefined): string {
   if (key === 'ACTIVE' || key === 'IN_PROGRESS' || key === 'RUNNING') return 'Active'
   if (key === 'COMPLETED' || key === 'COMPLETE') return 'Completed'
   if (key === 'DRAFT') return 'Draft'
-  if (key === 'EXCEPTION' || key === 'FAILED') return 'Exception'
+  if (key === 'EXCEPTION' || key === 'FAILED') return 'Stopped'
   if (key === 'CANCELLED' || key === 'CANCELED') return 'Cancelled'
   return formatProcessType(status)
 }
@@ -118,29 +113,6 @@ function formatDateTime(value: string | null | undefined): string {
     hour: 'numeric',
     minute: '2-digit',
   })
-}
-
-function formatAuditAction(action: string): string {
-  const map: Record<string, string> = {
-    PROCESS_CREATED: 'Process created',
-    CREATED: 'Process created',
-    STAGE_UPDATED: 'Stage updated',
-    START: 'Discovery started',
-    PLAN_RESOURCES: 'Resources planned',
-    RISK_REVIEW: 'Risk assessed',
-    APPROVAL_REQUESTED: 'Approval requested',
-    APPROVED: 'Approved by human',
-    REJECTED: 'Approval rejected',
-    EXECUTE: 'Execution started',
-    COMPLETED: 'Process completed',
-    EXCEPTION_OPENED: 'Exception opened',
-  }
-  const key = action.toUpperCase()
-  if (map[key]) return map[key]
-  return action
-    .replace(/_/g, ' ')
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 function detailErrorMessage(err: unknown): string {
@@ -176,30 +148,30 @@ function journeyIndex(stage: string): number {
 }
 
 function StageStepper({ stage }: { stage: string }) {
-  const isException = stage === 'EXCEPTION'
+  const isStopped = stage === 'EXCEPTION'
+  // ... keep rest of journey using isStopped instead of isStopped
   const currentIdx = journeyIndex(stage)
 
   return (
     <Panel
       title="Process journey"
       actions={
-        isException ? (
-          <span className="text-xs font-medium text-rose-700">Exception path</span>
+        isStopped ? (
+          <span className="text-xs font-medium text-rose-700">Stopped</span>
         ) : null
       }
     >
-      {isException ? (
+      {isStopped ? (
         <Alert tone="warning">
-          This process is on the exception path and requires attention. The main journey is paused until
-          the exception is resolved.
+          This process was stopped after a rejection or blocked control. The main journey will not continue.
         </Alert>
       ) : null}
 
       {/* Desktop horizontal */}
       <ol className="hidden items-start justify-between gap-1 md:flex">
         {JOURNEY.map((step, idx) => {
-          const done = !isException && currentIdx > idx
-          const current = !isException && currentIdx === idx
+          const done = !isStopped && currentIdx > idx
+          const current = !isStopped && currentIdx === idx
           return (
             <li key={step.key} className="flex min-w-0 flex-1 flex-col items-center text-center">
               <span
@@ -234,8 +206,8 @@ function StageStepper({ stage }: { stage: string }) {
       {/* Mobile vertical */}
       <ol className="space-y-0 md:hidden">
         {JOURNEY.map((step, idx) => {
-          const done = !isException && currentIdx > idx
-          const current = !isException && currentIdx === idx
+          const done = !isStopped && currentIdx > idx
+          const current = !isStopped && currentIdx === idx
           return (
             <li key={step.key} className="flex gap-3">
               <div className="flex w-8 flex-col items-center">
@@ -280,16 +252,18 @@ export default function ProcessDetailPage() {
   const [process, setProcess] = useState<ProcessRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [secondaryError, setSecondaryError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
   const [discovery, setDiscovery] = useState<ProcessDetail | null>(null)
   const [latestDiscoveryMessage, setLatestDiscoveryMessage] = useState<AgentMessage | null>(null)
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([])
-  const [exceptions, setExceptions] = useState<ExceptionRecord[]>([])
   const [audit, setAudit] = useState<AuditLogRecord[]>([])
   const [receipts, setReceipts] = useState<ExecutionReceipt[]>([])
   const [lastWorkflow, setLastWorkflow] = useState<WorkflowResult | null>(null)
+  const [lastAdvancement, setLastAdvancement] = useState<AdvanceProcessResponse | null>(null)
+  const [autopilotRunning, setAutopilotRunning] = useState(false)
   const [invoiceForm, setInvoiceForm] = useState({
     invoice_number: '',
     amount: '',
@@ -307,31 +281,58 @@ export default function ProcessDetailPage() {
     if (!processId) return
     setLoading(true)
     setError(null)
+    setSecondaryError(null)
     try {
       const row = await getProcess(processId)
       setProcess(row)
 
-      const [approvalRows, exceptionRows, auditRows, receiptRows] = await Promise.all([
-        listApprovals().catch(() => [] as ApprovalRecord[]),
-        listExceptions().catch(() => [] as ExceptionRecord[]),
-        listAuditLogs({ entity_type: 'process', entity_id: processId, limit: 30 }).catch(
-          () => [] as AuditLogRecord[],
-        ),
-        listExecutionReceipts({ process_id: processId, limit: 50 }).catch(
-          () => [] as ExecutionReceipt[],
-        ),
+      const partialErrors: string[] = []
+
+      const [approvalResult, auditResult, receiptResult, discoveryResult] = await Promise.all([
+        listApprovals()
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
+        listAuditLogs({ entity_type: 'process', entity_id: processId, limit: 30 })
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
+        listExecutionReceipts({ process_id: processId, limit: 50 })
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
+        getDiscoveredProcess(processId)
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
       ])
 
-      setApprovals(approvalRows.filter((a) => a.process_id === processId))
-      setExceptions(exceptionRows.filter((e) => e.process_id === processId))
-      setAudit(auditRows)
-      setReceipts(receiptRows)
+      if (approvalResult.ok) {
+        setApprovals(approvalResult.rows.filter((a) => a.process_id === processId))
+      } else {
+        setApprovals([])
+        partialErrors.push(`Approvals: ${detailErrorMessage(approvalResult.err)}`)
+      }
 
-      try {
-        const disc = await getDiscoveredProcess(processId)
-        setDiscovery(disc)
-      } catch {
+      if (auditResult.ok) {
+        setAudit(auditResult.rows)
+      } else {
+        setAudit([])
+        partialErrors.push(`Audit trail: ${detailErrorMessage(auditResult.err)}`)
+      }
+
+      if (receiptResult.ok) {
+        setReceipts(receiptResult.rows)
+      } else {
+        setReceipts([])
+        partialErrors.push(`Receipts: ${detailErrorMessage(receiptResult.err)}`)
+      }
+
+      if (discoveryResult.ok) {
+        setDiscovery(discoveryResult.rows)
+      } else {
         setDiscovery(null)
+        partialErrors.push(`Discovery: ${detailErrorMessage(discoveryResult.err)}`)
+      }
+
+      if (partialErrors.length > 0) {
+        setSecondaryError(partialErrors.join(' · '))
       }
     } catch (err) {
       setError(detailErrorMessage(err))
@@ -344,6 +345,26 @@ export default function ProcessDetailPage() {
     setLatestDiscoveryMessage(null)
     void refresh()
   }, [refresh])
+
+  const inFlightStages = useMemo(
+    () =>
+      new Set([
+        'DISCOVERING',
+        'RESOURCE_PLANNING',
+        'RISK_REVIEW',
+        'WORKFLOW_EXECUTION',
+      ]),
+    [],
+  )
+
+  useEffect(() => {
+    if (!processId || !process || autopilotRunning) return
+    if (!inFlightStages.has(process.current_stage)) return
+    const timer = window.setInterval(() => {
+      void refresh()
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [processId, process?.current_stage, autopilotRunning, inFlightStages, refresh])
 
   const stage = process?.current_stage ?? ''
   const stageMeta = STAGE_COPY[stage] ?? {
@@ -401,13 +422,6 @@ export default function ProcessDetailPage() {
     })[0] ?? null
   }, [approvals])
 
-  const openException = useMemo(
-    () =>
-      exceptions.find((e) => e.status === 'open' || e.status === 'in_progress') ??
-      exceptions[0] ??
-      null,
-    [exceptions],
-  )
 
   const riskFromWorkflow = useMemo(() => {
     const payload = asRecord(lastWorkflow?.agent_response) || asRecord(lastWorkflow)
@@ -424,11 +438,6 @@ export default function ProcessDetailPage() {
     return { overall, reason, humanRequired: Boolean(lastWorkflow?.human_approval_required) }
   }, [lastWorkflow, pendingApproval, decidedApproval])
 
-  const resourcePayload = useMemo(
-    () => asRecord(lastWorkflow?.agent_response),
-    [lastWorkflow],
-  )
-
   const receiptSummary = useMemo(() => {
     const total = receipts.length
     const successful = receipts.filter((r) => /success|ok|completed/i.test(r.status)).length
@@ -437,142 +446,139 @@ export default function ProcessDetailPage() {
     return { total, successful, failed, blocked }
   }, [receipts])
 
-  async function runAction(
-    key: string,
-    fn: () => Promise<WorkflowResult | ProcessStartResponse>,
+  const riskFindings = useMemo((): RiskFinding[] => {
+    const fromWorkflow = lastWorkflow?.risk_assessment?.findings
+    if (fromWorkflow?.length) return fromWorkflow
+    const fromAdvance = lastAdvancement?.advancement.last_step?.risk_assessment?.findings
+    if (fromAdvance?.length) return fromAdvance
+    const meta = asRecord(process?.metadata_json)
+    const stored = asRecord(meta?.last_risk_assessment)
+    const findings = stored?.findings
+    if (Array.isArray(findings)) {
+      return findings.filter(
+        (f): f is RiskFinding =>
+          f != null && typeof f === 'object' && 'risk_type' in f && 'description' in f,
+      )
+    }
+    return []
+  }, [lastWorkflow, lastAdvancement, process?.metadata_json])
+
+  const correlationTimeline = useMemo(
+    () =>
+      buildCorrelationTimeline({
+        audit,
+        autonomousActions: lastAdvancement?.advancement.autonomous_actions ?? [],
+        receipts,
+        correlationId: lastAdvancement?.advancement.correlation_id,
+      }),
+    [audit, receipts, lastAdvancement],
+  )
+
+  const availableActions = useMemo(
+    () =>
+      stageActions({
+        stage: (stage || 'DRAFT') as Parameters<typeof stageActions>[0]['stage'],
+        hasDiscovery: hasDiscoveryResults,
+        hasTenant: Boolean(user?.tenant_id),
+        busy: busy !== null,
+        humanApprovalPending: Boolean(pendingApproval),
+      }),
+    [stage, hasDiscoveryResults, user?.tenant_id, busy, pendingApproval],
+  )
+
+  function buildResourcePlanningPayload() {
+    const tenantId = user?.tenant_id
+    if (!tenantId || !user?.id) return undefined
+    const discoveryJson = asRecord(discovery?.process_json)
+    const analytics = asRecord(discoveryJson?.analytics)
+    const riskFacts = asRecord(analytics?.risk_facts) || asRecord(discoveryJson?.risk_facts)
+    const discoveredAmount =
+      riskFacts?.purchase_amount != null && riskFacts.purchase_amount !== ''
+        ? String(riskFacts.purchase_amount)
+        : '5000.00'
+    const discoveredCurrency =
+      typeof riskFacts?.currency === 'string' && riskFacts.currency
+        ? String(riskFacts.currency)
+        : 'USD'
+    const costCentre =
+      typeof riskFacts?.cost_centre === 'string' && riskFacts.cost_centre
+        ? String(riskFacts.cost_centre)
+        : 'SYN-DEP-FIN'
+    const deadline = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    return {
+      task_id: crypto.randomUUID(),
+      tenant_id: tenantId,
+      correlation_id: crypto.randomUUID(),
+      human_requirements: {
+        resource_type: 'HUMAN',
+        required_roles: ['developer'],
+        mandatory_skills: ['python'],
+        preferred_skills: ['fastapi'],
+        requester_id: user.id,
+        task_deadline: deadline,
+        estimated_effort_hours: '8.00',
+        process_stage: 'RESOURCE_PLANNING',
+      },
+      budget_requirements: {
+        resource_type: 'BUDGET',
+        required_amount: discoveredAmount,
+        currency: discoveredCurrency,
+        cost_centre: costCentre,
+        requester_id: user.id,
+        task_deadline: deadline,
+        process_stage: 'RESOURCE_PLANNING',
+      },
+    }
+  }
+
+  async function onAdvanceAutopilot(
+    invoicePayload?: InvoiceMatchingPayload,
+    busyKey: string = invoicePayload ? 'invoice' : 'advance',
   ) {
-    if (!processId || busy) return
-    setBusy(key)
+    const tenantId = user?.tenant_id
+    if (!tenantId) {
+      setError('Tenant context is missing from your session. Sign in again and retry.')
+      return
+    }
+    setAutopilotRunning(!invoicePayload)
+    setBusy(busyKey)
     setError(null)
     setNotice(null)
     try {
-      const res = await fn()
-      if ('process' in res && 'success' in res) {
-        const startRes = res as ProcessStartResponse
-        if (!startRes.success) {
-          if (startRes.error_code === 'AGENT_UNAVAILABLE') {
-            setNotice(
-              'Process discovery is currently unavailable. The process has not been marked as completed.',
-            )
-          } else {
-            setNotice(
-              startRes.error_message ||
-                startRes.message ||
-                'Required service is currently unavailable. The process has not been marked as completed.',
-            )
-          }
-        } else if (startRes.message) {
-          setNotice(startRes.message)
-        }
+      const result = await advanceProcess(processId, {
+        idempotency_key: `ui-${processId}-${Date.now()}`,
+        max_steps: 12,
+        resource_planning: invoicePayload ? undefined : buildResourcePlanningPayload(),
+        invoice: invoicePayload,
+      })
+      setLastAdvancement(result)
+      setProcess(result.process)
+      if (result.advancement.last_step) {
+        setLastWorkflow(result.advancement.last_step)
+      }
+      const adv = result.advancement
+      const actionSummary =
+        adv.autonomous_actions.length > 0
+          ? adv.autonomous_actions.map((a) => a.action).join(' → ')
+          : adv.message
+      if (adv.human_approval_required || adv.waiting_for === 'human_approval') {
+        setNotice(
+          `Autopilot paused for human approval. Steps: ${actionSummary}. After you approve, Agent 2 runs all execution tools automatically from discovery data.`,
+        )
+      } else if (adv.waiting_for === 'invoice_input') {
+        setNotice(`Autopilot reached invoice matching. Submit invoice evidence to finish.`)
+      } else if (adv.status === 'COMPLETED') {
+        setNotice(`Process completed automatically. Steps: ${actionSummary}`)
       } else {
-        const workflowRes = res as WorkflowResult
-        setLastWorkflow(workflowRes)
-        if (!workflowRes.success) {
-          if (workflowRes.error_code === 'AGENT_UNAVAILABLE') {
-            setNotice(
-              'Required service is currently unavailable. The process has not been marked as completed.',
-            )
-          } else {
-            setNotice(workflowRes.error_message || workflowRes.message || 'Action did not succeed.')
-          }
-        } else if (workflowRes.message) {
-          const ar = asRecord(workflowRes.agent_response)
-          const tool = typeof ar.tool_name === 'string' ? ar.tool_name : null
-          const receipt =
-            typeof ar.receipt_status === 'string' ? ar.receipt_status : null
-          const detail =
-            tool || receipt
-              ? `${workflowRes.message}${tool ? ` · tool ${tool}` : ''}${
-                  receipt ? ` · ${receipt}` : ''
-                }`
-              : workflowRes.message
-          setNotice(detail)
-        }
+        setNotice(adv.message || actionSummary)
       }
       await refresh()
     } catch (err) {
       setError(detailErrorMessage(err))
     } finally {
       setBusy(null)
+      setAutopilotRunning(false)
     }
-  }
-
-  async function onStart() {
-    await runAction('start', () => startProcess(processId))
-  }
-
-  async function onPlanResources() {
-    const tenantId = user?.tenant_id
-    if (!tenantId) {
-      setError('Tenant context is missing from your session. Sign in again and retry.')
-      return
-    }
-    if (!user?.id) {
-      setError('Authenticated user id is missing from your session.')
-      return
-    }
-    const deadline = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    await runAction('plan', () =>
-      planResources(processId, {
-        task_id: crypto.randomUUID(),
-        tenant_id: tenantId,
-        correlation_id: crypto.randomUUID(),
-        human_requirements: {
-          resource_type: 'HUMAN',
-          required_roles: ['developer'],
-          mandatory_skills: ['python'],
-          preferred_skills: ['fastapi'],
-          requester_id: user.id,
-          task_deadline: deadline,
-          estimated_effort_hours: '8.00',
-          process_stage: 'RESOURCE_PLANNING',
-        },
-        budget_requirements: {
-          resource_type: 'BUDGET',
-          required_amount: '5000.00',
-          currency: 'USD',
-          cost_centre: 'SYN-DEP-FIN',
-          requester_id: user.id,
-          task_deadline: deadline,
-          process_stage: 'RESOURCE_PLANNING',
-        },
-      }),
-    )
-  }
-
-  async function onRiskReview() {
-    await runAction('risk', () => riskReview(processId))
-  }
-
-  async function onExecute() {
-    const meta = (process?.metadata_json || {}) as Record<string, unknown>
-    const purchase =
-      meta.purchase_order && typeof meta.purchase_order === 'object'
-        ? (meta.purchase_order as Record<string, unknown>)
-        : {}
-    const amountRaw = purchase.amount ?? meta.amount ?? meta.required_amount ?? 2500
-    const amount = Number(amountRaw)
-    const vendor = String(
-      purchase.vendor_id ||
-        purchase.vendor ||
-        meta.vendor_id ||
-        meta.vendor ||
-        'VENDOR-ACME',
-    )
-    await runAction('execute', () =>
-      executeProcess(processId, {
-        task_id: crypto.randomUUID(),
-        task_type: 'EXECUTE_TASK',
-        correlation_id: crypto.randomUUID(),
-        parameters: {
-          tool_name: 'create_po_draft',
-          vendor_id: vendor,
-          amount: Number.isFinite(amount) && amount > 0 ? amount : 2500,
-          items_summary: `${process?.name || 'Process'} procurement items`,
-          process_id: processId,
-        },
-      }),
-    )
   }
 
   async function onCompleteInvoice() {
@@ -580,20 +586,18 @@ export default function ProcessDetailPage() {
     const expectedAmount = invoiceForm.expected_amount.trim()
       ? Number(invoiceForm.expected_amount)
       : undefined
-    await runAction('invoice', () =>
-      completeInvoiceMatching(processId, {
-        invoice_number: invoiceForm.invoice_number.trim() || undefined,
-        amount: Number.isFinite(amount) ? amount : undefined,
-        currency: invoiceForm.currency.trim() || undefined,
-        vendor: invoiceForm.vendor.trim() || undefined,
-        po_reference: invoiceForm.po_reference.trim() || undefined,
-        expected_amount: Number.isFinite(expectedAmount) ? expectedAmount : undefined,
-        expected_po_reference: invoiceForm.expected_po_reference.trim() || undefined,
-        expected_currency: invoiceForm.expected_currency.trim() || undefined,
-        expected_vendor: invoiceForm.expected_vendor.trim() || undefined,
-        notes: invoiceForm.notes.trim() || undefined,
-      }),
-    )
+    await onAdvanceAutopilot({
+      invoice_number: invoiceForm.invoice_number.trim() || undefined,
+      amount: Number.isFinite(amount) ? amount : undefined,
+      currency: invoiceForm.currency.trim() || undefined,
+      vendor: invoiceForm.vendor.trim() || undefined,
+      po_reference: invoiceForm.po_reference.trim() || undefined,
+      expected_amount: Number.isFinite(expectedAmount) ? expectedAmount : undefined,
+      expected_po_reference: invoiceForm.expected_po_reference.trim() || undefined,
+      expected_currency: invoiceForm.expected_currency.trim() || undefined,
+      expected_vendor: invoiceForm.expected_vendor.trim() || undefined,
+      notes: invoiceForm.notes.trim() || undefined,
+    })
   }
 
   if (loading && !process) {
@@ -674,7 +678,33 @@ export default function ProcessDetailPage() {
           </div>
         </Alert>
       ) : null}
+      {secondaryError ? (
+        <Alert tone="warning">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>Some sections could not be loaded: {secondaryError}</span>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => void refresh()}>
+              Retry
+            </button>
+          </div>
+        </Alert>
+      ) : null}
       {notice ? <Alert tone="info">{notice}</Alert> : null}
+      {autopilotRunning ? (
+        <Alert tone="info">Autopilot is running — advancing stages automatically…</Alert>
+      ) : null}
+      {lastAdvancement?.advancement.autonomous_actions?.length ? (
+        <Panel title="Autonomous actions (audit trail)">
+          <ol className="space-y-2 text-sm text-slate-700">
+            {lastAdvancement.advancement.autonomous_actions.map((action, idx) => (
+              <li key={`${action.action}-${idx}`} className="rounded-lg border border-slate-200 px-3 py-2">
+                <span className="font-medium text-slate-900">{action.action}</span>
+                <span className="text-slate-500"> @ {action.stage}</span>
+                <p className="mt-1 text-xs text-slate-500">{action.guardrail}</p>
+              </li>
+            ))}
+          </ol>
+        </Panel>
+      ) : null}
 
       <StageStepper stage={process.current_stage} />
 
@@ -687,49 +717,103 @@ export default function ProcessDetailPage() {
 
             <div className="mt-5 space-y-3">
               {stage === 'DRAFT' ? (
-                <div className="space-y-3">
-                  <p className="text-sm text-slate-600">
-                    Use Process Discovery below to upload process evidence. After discovery
-                    completes, start the process journey to advance the stage.
-                  </p>
+                <div className="space-y-4">
+                  <ol className="space-y-2 text-sm text-slate-700">
+                    <li className="flex gap-3">
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] font-semibold text-white">
+                        1
+                      </span>
+                      <span>
+                        <span className="font-medium text-slate-900">Upload evidence</span>
+                        <span className="block text-slate-600">
+                          Use the upload area below. CSV process logs work well; PDF and DOCX are
+                          also supported.
+                        </span>
+                      </span>
+                    </li>
+                    <li className="flex gap-3">
+                      <span
+                        className={[
+                          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold',
+                          hasDiscoveryResults
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-200 text-slate-600',
+                        ].join(' ')}
+                      >
+                        2
+                      </span>
+                      <span>
+                        <span className="font-medium text-slate-900">Review the discovered steps</span>
+                        <span className="block text-slate-600">
+                          We list the activities, who does them, and anything unclear or missing.
+                        </span>
+                      </span>
+                    </li>
+                    <li className="flex gap-3">
+                      <span
+                        className={[
+                          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold',
+                          hasDiscoveryResults
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-200 text-slate-600',
+                        ].join(' ')}
+                      >
+                        3
+                      </span>
+                      <span>
+                        <span className="font-medium text-slate-900">Run process autopilot</span>
+                        <span className="block text-slate-600">
+                          One click chains discovery → resources → risk review. Human approval is
+                          the only mandatory stop before execution.
+                        </span>
+                      </span>
+                    </li>
+                  </ol>
+
                   {hasDiscoveryResults ? (
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm w-full sm:w-auto"
-                      disabled={busy !== null}
-                      onClick={() => void onStart()}
-                    >
-                      {busy === 'start' ? 'Starting Process...' : 'Start Process Discovery'}
-                    </button>
+                    <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-3">
+                      <p className="text-sm font-medium text-emerald-950">
+                        Discovery looks ready. Run autopilot to reach human approval automatically.
+                      </p>
+                      {availableActions
+                        .filter((a) => a.id === 'autopilot')
+                        .map((action) => (
+                          <button
+                            key={action.id}
+                            type="button"
+                            className="btn btn-primary btn-sm w-full sm:w-auto"
+                            disabled={!action.enabled}
+                            title={action.reason}
+                            onClick={() => void onAdvanceAutopilot()}
+                          >
+                            {busy === 'advance' ? 'Running autopilot…' : action.label}
+                          </button>
+                        ))}
+                    </div>
                   ) : (
-                    <p className="text-xs text-slate-500">
-                      Upload process evidence first. Starting without discovery evidence may fail
-                      until documents have been analyzed.
+                    <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                      Upload and analyze evidence below first. The start button appears when we have
+                      discovered steps to work with.
                     </p>
                   )}
                 </div>
               ) : null}
 
-              {stage === 'DISCOVERING' || stage === 'RESOURCE_PLANNING' ? (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm w-full sm:w-auto"
-                  disabled={busy !== null || !user?.tenant_id}
-                  onClick={() => void onPlanResources()}
-                >
-                  {busy === 'plan' ? 'Planning Resources...' : 'Run Resource Planning'}
-                </button>
-              ) : null}
-
-              {stage === 'RISK_REVIEW' ? (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm w-full sm:w-auto"
-                  disabled={busy !== null}
-                  onClick={() => void onRiskReview()}
-                >
-                  {busy === 'risk' ? 'Running Risk Review...' : 'Run Risk Assessment'}
-                </button>
+              {stage === 'DISCOVERING' || stage === 'RESOURCE_PLANNING' || stage === 'RISK_REVIEW' ? (
+                availableActions
+                  .filter((a) => a.id === 'continue_autopilot')
+                  .map((action) => (
+                    <button
+                      key={action.id}
+                      type="button"
+                      className="btn btn-primary btn-sm w-full sm:w-auto"
+                      disabled={!action.enabled}
+                      title={action.reason}
+                      onClick={() => void onAdvanceAutopilot()}
+                    >
+                      {busy === 'advance' ? 'Continuing autopilot…' : action.label}
+                    </button>
+                  ))
               ) : null}
 
               {stage === 'AWAITING_HUMAN_APPROVAL' ? (
@@ -739,14 +823,10 @@ export default function ProcessDetailPage() {
               ) : null}
 
               {stage === 'WORKFLOW_EXECUTION' ? (
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm w-full sm:w-auto"
-                  disabled={busy !== null}
-                  onClick={() => void onExecute()}
-                >
-                  {busy === 'execute' ? 'Executing Workflow...' : 'Run Workflow Execution'}
-                </button>
+                <p className="text-sm text-slate-600">
+                  Execution runs automatically after human approval. If this stage persists, use
+                  Continue autopilot or refresh — a reconciliation pass will resume the chain.
+                </p>
               ) : null}
 
               {stage === 'INVOICE_MATCHING' ? (
@@ -795,11 +875,7 @@ export default function ProcessDetailPage() {
                 </div>
               ) : null}
 
-              {stage === 'EXCEPTION' ? (
-                <Link to="/exceptions" className="btn btn-primary btn-sm w-full sm:w-auto">
-                  View Exception
-                </Link>
-              ) : null}
+
 
               {stage === 'DISCOVERING' && !user?.tenant_id ? (
                 <p className="text-xs text-amber-800">
@@ -822,80 +898,32 @@ export default function ProcessDetailPage() {
               stage={stage}
               onDiscoveryComplete={async (message) => {
                 setLatestDiscoveryMessage(message)
-                setNotice('Process discovery completed. Review the results below.')
+                setNotice('We finished reading your evidence. Review the discovered steps below.')
                 await refresh()
               }}
               showContinueToPlanning={stage === 'DISCOVERING'}
-              onContinueToPlanning={() => void onPlanResources()}
-              planningBusy={busy === 'plan'}
+              onContinueToPlanning={() => void onAdvanceAutopilot()}
+              planningBusy={busy === 'advance'}
               planningDisabled={!user?.tenant_id}
             />
           ) : null}
 
-          {/* Resource recommendation */}
-          {(stage === 'RESOURCE_PLANNING' ||
-            stage === 'RISK_REVIEW' ||
-            stage === 'AWAITING_HUMAN_APPROVAL' ||
-            resourcePayload) &&
-          ['RESOURCE_PLANNING', 'RISK_REVIEW', 'AWAITING_HUMAN_APPROVAL', 'WORKFLOW_EXECUTION'].includes(
-            stage,
-          ) ? (
-            <Panel title="Resource Recommendation">
-              <p className="mb-3 text-sm text-slate-500">
-                Advisory recommendation only — not a governance approval.
-              </p>
-              {resourcePayload ? (
-                <div className="space-y-3 text-sm">
-                  {typeof resourcePayload.recommendation_id === 'string' ||
-                  typeof resourcePayload.recommendation_status === 'string' ||
-                  typeof resourcePayload.message === 'string' ? (
-                    <dl className="grid gap-3 sm:grid-cols-2">
-                      {typeof resourcePayload.recommendation_status === 'string' ? (
-                        <div>
-                          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                            Status
-                          </dt>
-                          <dd className="mt-1 font-medium text-slate-800">
-                            {String(resourcePayload.recommendation_status)}
-                          </dd>
-                        </div>
-                      ) : null}
-                      {typeof resourcePayload.recommendation_id === 'string' ? (
-                        <div>
-                          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                            Recommendation ID
-                          </dt>
-                          <dd className="mt-1 break-all text-slate-700">
-                            {String(resourcePayload.recommendation_id)}
-                          </dd>
-                        </div>
-                      ) : null}
-                      {typeof resourcePayload.message === 'string' ? (
-                        <div className="sm:col-span-2">
-                          <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                            Summary
-                          </dt>
-                          <dd className="mt-1 text-slate-700">{String(resourcePayload.message)}</dd>
-                        </div>
-                      ) : null}
-                    </dl>
-                  ) : null}
-                  <details className="rounded-lg border border-slate-100 bg-slate-50/80">
-                    <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-600">
-                      Full recommendation payload
-                    </summary>
-                    <pre className="max-h-48 overflow-auto border-t border-slate-100 p-3 text-xs text-slate-700">
-                      {JSON.stringify(resourcePayload, null, 2)}
-                    </pre>
-                  </details>
-                </div>
-              ) : (
-                <p className="text-sm text-slate-500">
-                  No resource recommendation is available yet. Run resource planning when ready.
-                </p>
-              )}
-            </Panel>
-          ) : null}
+          {/* Agent 3 resource planning results — full recommendation visibility */}
+          <Agent3ProcessResultsPanel
+            processId={processId}
+            stage={stage}
+            metadataJson={(process?.metadata_json || null) as Record<string, unknown> | null}
+            workflowAgentResponse={
+              lastWorkflow?.agent_response &&
+              typeof lastWorkflow.agent_response === 'object' &&
+              !Array.isArray(lastWorkflow.agent_response)
+                ? (lastWorkflow.agent_response as Record<string, unknown>)
+                : null
+            }
+            planningBusy={busy === 'advance'}
+            planningDisabled={!user?.tenant_id}
+            onPlanResources={() => void onAdvanceAutopilot()}
+          />
 
           {/* Risk assessment */}
           {(stage === 'RISK_REVIEW' ||
@@ -946,6 +974,26 @@ export default function ProcessDetailPage() {
                     {riskFromWorkflow.reason || pendingApproval?.reason}
                   </p>
                 </div>
+              )}
+              {riskFindings.length > 0 ? (
+                <ul className="mt-4 divide-y divide-slate-100 rounded-lg border border-slate-200">
+                  {riskFindings.map((finding, idx) => (
+                    <li key={`${finding.risk_type}-${idx}`} className="px-3 py-3 text-sm">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <RiskBadge level={finding.risk_level} />
+                        <span className="font-medium text-slate-900">{finding.risk_type}</span>
+                      </div>
+                      <p className="mt-1 text-slate-700">{finding.description}</p>
+                      {finding.recommendation ? (
+                        <p className="mt-1 text-xs text-slate-500">{finding.recommendation}</p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-4 text-sm text-slate-500">
+                  Detailed risk findings will appear here after risk review completes.
+                </p>
               )}
             </Panel>
           ) : null}
@@ -1015,7 +1063,7 @@ export default function ProcessDetailPage() {
             <Panel title="Approval Rejected">
               <p className="text-sm text-slate-600">
                 A human rejected this process. The backend determines the resulting stage — typically
-                Exception.
+                Stopped.
               </p>
               <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                 <div>
@@ -1105,38 +1153,12 @@ export default function ProcessDetailPage() {
             </Panel>
           ) : null}
 
-          {/* Exception */}
-          {stage === 'EXCEPTION' || openException ? (
-            <Panel title="Exception">
-              {openException ? (
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <RiskBadge level={openException.severity} />
-                    <span className="text-sm text-slate-600">
-                      {formatExceptionStatus(openException.status)}
-                    </span>
-                    <span className="text-sm text-slate-500">{openException.type}</span>
-                  </div>
-                  <p className="text-sm text-slate-700">{openException.description}</p>
-                  {openException.resolution_notes ? (
-                    <p className="text-sm text-slate-500">
-                      Notes: {openException.resolution_notes}
-                    </p>
-                  ) : null}
-                  <Link to="/exceptions" className="btn btn-ghost btn-sm">
-                    View Exception
-                  </Link>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-sm text-slate-600">
-                    This process is in an exception state. Open Exceptions for details.
-                  </p>
-                  <Link to="/exceptions" className="btn btn-primary btn-sm">
-                    View Exception
-                  </Link>
-                </div>
-              )}
+          {stage === 'EXCEPTION' ? (
+            <Panel title="Process stopped">
+              <p className="text-sm text-slate-600">
+                This process was stopped after a rejection or blocked control. Review the audit
+                history for details. Agent 2 will not execute from this state.
+              </p>
             </Panel>
           ) : null}
 
@@ -1155,28 +1177,45 @@ export default function ProcessDetailPage() {
             </Panel>
           ) : null}
 
-          {/* Timeline */}
+          {/* Correlation-threaded timeline */}
           <Panel title="Process Timeline">
-            {audit.length === 0 ? (
+            {correlationTimeline.length === 0 ? (
               <EmptyState
                 title="No timeline events yet"
-                body="Activity will appear here when audit data is available for this process."
+                body="Audit entries, autonomous actions, and execution receipts will appear here as the process runs."
               />
             ) : (
               <ol className="space-y-0">
-                {audit.slice(0, 12).map((log, idx) => (
-                  <li key={log.id} className="flex gap-3">
+                {correlationTimeline.slice(0, 20).map((event, idx) => (
+                  <li key={event.id} className="flex gap-3">
                     <div className="flex w-4 flex-col items-center">
-                      <span className="mt-1.5 h-2 w-2 rounded-full bg-slate-400" />
-                      {idx < Math.min(audit.length, 12) - 1 ? (
+                      <span
+                        className={[
+                          'mt-1.5 h-2 w-2 rounded-full',
+                          event.source === 'advancement'
+                            ? 'bg-sky-500'
+                            : event.source === 'receipt'
+                              ? 'bg-emerald-500'
+                              : 'bg-slate-400',
+                        ].join(' ')}
+                      />
+                      {idx < Math.min(correlationTimeline.length, 20) - 1 ? (
                         <span className="my-1 w-px flex-1 bg-slate-200" aria-hidden />
                       ) : null}
                     </div>
                     <div className="min-w-0 pb-4">
-                      <p className="text-sm font-medium text-slate-800">
-                        {formatAuditAction(log.action)}
+                      <p className="text-sm font-medium text-slate-800">{event.title}</p>
+                      <p className="text-xs text-slate-500">
+                        {formatDateTime(event.timestamp)}
+                        {event.correlationId ? (
+                          <span className="ml-2 font-mono text-[10px] text-slate-400">
+                            {event.correlationId.slice(0, 8)}
+                          </span>
+                        ) : null}
                       </p>
-                      <p className="text-xs text-slate-500">{formatDateTime(log.timestamp)}</p>
+                      {event.detail ? (
+                        <p className="mt-0.5 text-xs text-slate-600">{event.detail}</p>
+                      ) : null}
                     </div>
                   </li>
                 ))}
@@ -1235,11 +1274,6 @@ export default function ProcessDetailPage() {
               <li>
                 <Link to="/approvals" className="font-medium text-slate-700 hover:text-slate-900">
                   Approvals
-                </Link>
-              </li>
-              <li>
-                <Link to="/exceptions" className="font-medium text-slate-700 hover:text-slate-900">
-                  Exceptions
                 </Link>
               </li>
               <li>

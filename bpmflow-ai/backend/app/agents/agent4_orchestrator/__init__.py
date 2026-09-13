@@ -1,11 +1,14 @@
 # Agent 4: Orchestrator, Coordination & Risk Analysis
 
+from .adapters import Agent1Adapter, Agent2Adapter, Agent3Adapter
 from .approval_repository import (
-    InMemoryApprovalRepository,
     ApprovalRepository,
+    InMemoryApprovalRepository,
     SqlAlchemyApprovalRepository,
 )
 from .approvals import ApprovalService
+from .communication import AgentAdapter
+from .communication_service import AgentCommunicationService
 from .constants import (
     HIGH_VALUE_PURCHASE_THRESHOLD,
     LOW_CONFIDENCE_THRESHOLD,
@@ -18,16 +21,23 @@ from .constants import (
     RiskType,
     WorkflowStage,
 )
+from .exception_repository import (
+    ExceptionRepository,
+    InMemoryExceptionRepository,
+    SqlAlchemyExceptionRepository,
+)
+from .exception_service import ExceptionService
 from .exceptions import (
     AgentUnavailableError,
     ApprovalAlreadyDecidedError,
     ApprovalNotFoundError,
+    BpmExceptionNotFoundError,
     CommunicationFailureError,
     DatabasePersistenceError,
+    ExecutionEnrichmentError,
     InvalidExceptionStatusError,
     InvalidMessageError,
     InvalidRetryError,
-    BpmExceptionNotFoundError,
     ProcessAlreadyExistsError,
     ProcessNotFoundError,
     UnsupportedAgentError,
@@ -40,12 +50,6 @@ from .repository import (
     SqlAlchemyProcessRepository,
 )
 from .risk_rules import RiskAnalysisEngine
-from .exception_repository import (
-    InMemoryExceptionRepository,
-    ExceptionRepository,
-    SqlAlchemyExceptionRepository,
-)
-from .exception_service import ExceptionService
 from .schemas import (
     ApprovalDecisionResult,
     ApprovalGateResult,
@@ -57,16 +61,18 @@ from .schemas import (
     RiskFinding,
     WorkflowResult,
 )
-from .workflow import Agent4Workflow
-from .communication import AgentAdapter
-from .communication_service import AgentCommunicationService
-from .adapters import Agent1Adapter, Agent2Adapter, Agent3Adapter
 from .service import OrchestratorService
 from .state_machine import (
     ALLOWED_TRANSITIONS,
+    TRANSITION_TABLE,
     InvalidTransitionError,
+    SideEffect,
     StateMachine,
+    TransitionContext,
+    TransitionPreconditionError,
+    TransitionSpec,
 )
+from .workflow import Agent4Workflow
 
 __all__ = [
     "WorkflowStage",
@@ -108,6 +114,7 @@ __all__ = [
     "Agent1Adapter",
     "Agent2Adapter",
     "Agent3Adapter",
+    "ExecutionEnrichmentError",
     "UnsupportedAgentError",
     "AgentUnavailableError",
     "InvalidMessageError",
@@ -122,6 +129,11 @@ __all__ = [
     "AUDIT_ENTITY_PROCESS",
     "AUDIT_ACTION_UPDATED",
     "ALLOWED_TRANSITIONS",
+    "TRANSITION_TABLE",
+    "TransitionSpec",
+    "TransitionContext",
+    "TransitionPreconditionError",
+    "SideEffect",
     "InvalidTransitionError",
     "StateMachine",
 ]

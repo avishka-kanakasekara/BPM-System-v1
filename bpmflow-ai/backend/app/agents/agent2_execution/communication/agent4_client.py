@@ -6,7 +6,8 @@ outbound header signing. New code should not call it.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
+
 import httpx
 
 from app.agents.agent2_execution.communication.schemas import AgentMessage
@@ -21,10 +22,10 @@ class Agent4Client:
     HTTP client for Agent 2 -> Agent 4 inter-agent communications.
     """
 
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(self, base_url: str | None = None):
         self.base_url = (base_url or settings.AGENT4_BASE_URL or "http://localhost:8004").rstrip("/")
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """Generate Authorization Bearer JWT header for outbound request."""
         token = create_access_token({"sub": "agent_2", "role": "execution_agent"})
         return {
@@ -32,7 +33,7 @@ class Agent4Client:
             "Content-Type": "application/json",
         }
 
-    async def send_message(self, message: AgentMessage) -> Dict[str, Any]:
+    async def send_message(self, message: AgentMessage) -> dict[str, Any]:
         """
         Send an AgentMessage to Agent 4's inbound message endpoint.
 
@@ -53,13 +54,13 @@ class Agent4Client:
             logger.warning(f"Agent 4 HTTP request failed ({url}): {exc}")
             return {"status": "DELIVERY_FAILED", "error": str(exc)}
 
-    async def notify_execution_result(self, message: AgentMessage) -> Dict[str, Any]:
+    async def notify_execution_result(self, message: AgentMessage) -> dict[str, Any]:
         """Convenience wrapper to deliver execution result back to Agent 4."""
         return await self.send_message(message)
 
     async def submit_optimization_recommendation(
-        self, recommendation_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, recommendation_data: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Submit a generated optimization recommendation to Agent 4 for human approval.
         Enforces Rule #5 (Agent 2 never self-approves proposals).

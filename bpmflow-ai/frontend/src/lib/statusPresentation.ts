@@ -14,7 +14,7 @@ const STAGE_LABELS: Record<string, string> = {
   WORKFLOW_EXECUTION: 'Workflow Execution',
   INVOICE_MATCHING: 'Invoice Matching',
   COMPLETED: 'Completed',
-  EXCEPTION: 'Exception',
+  EXCEPTION: 'Stopped',
 }
 
 const RISK_LABELS: Record<string, string> = {

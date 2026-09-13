@@ -37,6 +37,20 @@ from app.tests.auth_helpers import override_current_user
 FORBIDDEN_DETAIL = "Insufficient permissions"
 ALREADY_DECIDED_DETAIL = "Approval request has already been decided"
 
+DISCOVERY_META = {
+    "process_json": {
+        "analytics": {
+            "risk_facts": {
+                "purchase_amount": "2500",
+                "currency": "USD",
+                "vendor_id": "VENDOR-ACME",
+                "cost_centre": "IT-OPS",
+                "provided_evidence": ["quotation"],
+            }
+        }
+    }
+}
+
 
 def _agent2_success_reply(message):
     """Well-formed Agent 2 execution response for the approve continuation."""
@@ -165,6 +179,9 @@ async def _create_pending_approval(setup) -> dict:
         name="Approval process",
         process_type="procurement",
     )
+    setup["process_repo"]._records[process.id] = (
+        await setup["process_repo"].get_process(process.id)
+    ).model_copy(update={"metadata_json": DISCOVERY_META})
     await setup["process_repo"].update_process_stage(
         process.id,
         WorkflowStage.AWAITING_HUMAN_APPROVAL,

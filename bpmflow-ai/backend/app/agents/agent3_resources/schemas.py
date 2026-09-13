@@ -1,27 +1,28 @@
 """Pydantic schemas for Agent 3 Resource Allocation (local contract)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
 from .constants import (
-    ResourceType,
+    AGENT_3_SENDER,
+    AGENT_4_RECEIVER,
+    SCHEMA_VERSION,
     ExclusionReason,
-    RecommendationStatus,
     GapAlternativeType,
     GapType,
     MessageType,
-    SCHEMA_VERSION,
-    AGENT_3_SENDER,
-    AGENT_4_RECEIVER,
+    RecommendationStatus,
+    ResourceType,
 )
 
 
 def utc_now() -> datetime:
     """Return the current UTC time as a timezone-aware datetime."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def validate_timezone_aware(value: datetime, field_name: str) -> datetime:
@@ -79,10 +80,10 @@ class HumanResourceRequirement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     resource_type: Literal[ResourceType.HUMAN] = ResourceType.HUMAN
-    required_roles: List[str] = Field(default_factory=list)
-    mandatory_skills: List[str] = Field(default_factory=list)
-    preferred_skills: List[str] = Field(default_factory=list)
-    required_authority: Optional[str] = None
+    required_roles: list[str] = Field(default_factory=list)
+    mandatory_skills: list[str] = Field(default_factory=list)
+    preferred_skills: list[str] = Field(default_factory=list)
+    required_authority: str | None = None
     requester_id: UUID
     task_deadline: datetime
     estimated_effort_hours: Decimal = Field(ge=Decimal("0"))
@@ -102,7 +103,7 @@ class BudgetResourceRequirement(BaseModel):
     resource_type: Literal[ResourceType.BUDGET] = ResourceType.BUDGET
     required_amount: Decimal = Field(ge=Decimal("0"))
     currency: str
-    cost_centre: Optional[str] = None
+    cost_centre: str | None = None
     requester_id: UUID
     task_deadline: datetime
     process_stage: str
@@ -119,8 +120,8 @@ class AllocationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metadata: AgentMessageMetadata
-    human_requirements: Optional[HumanResourceRequirement] = None
-    budget_requirements: Optional[BudgetResourceRequirement] = None
+    human_requirements: HumanResourceRequirement | None = None
+    budget_requirements: BudgetResourceRequirement | None = None
 
 
 # ============================================================================
@@ -134,20 +135,20 @@ class HumanResourceEvidence(BaseModel):
     resource_type: Literal[ResourceType.HUMAN] = ResourceType.HUMAN
     name: str
     is_active: bool = True
-    roles: List[str] = Field(default_factory=list)
-    mandatory_skills: List[str] = Field(default_factory=list)
-    preferred_skills: List[str] = Field(default_factory=list)
-    authority: Optional[str] = None
+    roles: list[str] = Field(default_factory=list)
+    mandatory_skills: list[str] = Field(default_factory=list)
+    preferred_skills: list[str] = Field(default_factory=list)
+    authority: str | None = None
     available_from: datetime
-    available_until: Optional[datetime] = None
+    available_until: datetime | None = None
     current_workload_percentage: Decimal = Field(ge=Decimal("0"), le=Decimal("100"))
     max_workload_percentage: Decimal = Field(ge=Decimal("0"), le=Decimal("100"))
     projected_workload_percentage: Decimal = Field(ge=Decimal("0"), le=Decimal("100"))
-    segregation_of_duties_conflicts: List[UUID] = Field(default_factory=list)
-    conflict_of_interest_flags: List[str] = Field(default_factory=list)
+    segregation_of_duties_conflicts: list[UUID] = Field(default_factory=list)
+    conflict_of_interest_flags: list[str] = Field(default_factory=list)
     evidence_checked_at: datetime
     evidence_valid_until: datetime
-    evidence_references: Dict[str, Any] = Field(default_factory=dict)
+    evidence_references: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator(
         "available_from",
@@ -157,7 +158,7 @@ class HumanResourceEvidence(BaseModel):
         mode="after",
     )
     @classmethod
-    def validate_datetimes(cls, value: Optional[datetime], info) -> Optional[datetime]:
+    def validate_datetimes(cls, value: datetime | None, info) -> datetime | None:
         if value is not None:
             return validate_timezone_aware(value, info.field_name)
         return value
@@ -171,13 +172,13 @@ class BudgetResourceEvidence(BaseModel):
     name: str
     available_balance: Decimal = Field(ge=Decimal("0"))
     currency: str
-    cost_centre: Optional[str] = None
+    cost_centre: str | None = None
     valid_from: datetime
-    valid_until: Optional[datetime] = None
-    authorization_limit: Optional[Decimal] = Field(ge=Decimal("0"), default=None)
+    valid_until: datetime | None = None
+    authorization_limit: Decimal | None = Field(ge=Decimal("0"), default=None)
     evidence_checked_at: datetime
     evidence_valid_until: datetime
-    evidence_references: Dict[str, Any] = Field(default_factory=dict)
+    evidence_references: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator(
         "valid_from",
@@ -187,7 +188,7 @@ class BudgetResourceEvidence(BaseModel):
         mode="after",
     )
     @classmethod
-    def validate_datetimes(cls, value: Optional[datetime], info) -> Optional[datetime]:
+    def validate_datetimes(cls, value: datetime | None, info) -> datetime | None:
         if value is not None:
             return validate_timezone_aware(value, info.field_name)
         return value
@@ -201,7 +202,7 @@ class ExclusionReasonEntry(BaseModel):
     """Single exclusion reason with details."""
     reason: ExclusionReason
     description: str
-    evidence_reference: Optional[str] = None
+    evidence_reference: str | None = None
 
 
 class ExcludedResource(BaseModel):
@@ -209,12 +210,21 @@ class ExcludedResource(BaseModel):
     resource_id: UUID
     resource_type: ResourceType
     name: str
-    exclusion_reasons: List[ExclusionReasonEntry] = Field(default_factory=list)
+    exclusion_reasons: list[ExclusionReasonEntry] = Field(default_factory=list)
 
 
 # ============================================================================
 # Scoring and Ranking
 # ============================================================================
+
+class WeightedScoreComponent(BaseModel):
+    """One inspectable factor in the weighted allocation score."""
+
+    factor: str
+    raw_score: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    weight: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    weighted_contribution: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+
 
 class ScoreBreakdown(BaseModel):
     """Detailed score breakdown for a ranked candidate."""
@@ -224,20 +234,28 @@ class ScoreBreakdown(BaseModel):
     workload_fit: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
     authority_match: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
     total_score: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    weighted_components: dict[str, WeightedScoreComponent] = Field(default_factory=dict)
 
     @field_validator("total_score")
     @classmethod
     def validate_total_score(cls, v: Decimal, info) -> Decimal:
         """Ensure total score matches weighted sum."""
         data = info.data
-        from .constants import SCORING_WEIGHTS
-        expected = (
-            data.get("role_match", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["role_match"])) +
-            data.get("skill_match", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["skill_match"])) +
-            data.get("availability_score", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["availability_score"])) +
-            data.get("workload_fit", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["workload_fit"])) +
-            data.get("authority_match", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["authority_match"]))
-        )
+        components = data.get("weighted_components") or {}
+        if components:
+            expected = sum(
+                component.weighted_contribution
+                for component in components.values()
+            )
+        else:
+            from .constants import SCORING_WEIGHTS
+            expected = (
+                data.get("role_match", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["role_match"])) +
+                data.get("skill_match", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["skill_match"])) +
+                data.get("availability_score", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["availability_score"])) +
+                data.get("workload_fit", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["workload_fit"])) +
+                data.get("authority_match", Decimal("0")) * Decimal(str(SCORING_WEIGHTS["authority_match"]))
+            )
         if abs(v - expected) > Decimal("0.01"):
             raise ValueError(f"Total score {v} does not match weighted sum {expected}")
         return v
@@ -254,12 +272,12 @@ class RankedHumanCandidate(BaseModel):
     current_workload_percentage: Decimal
     projected_workload_percentage: Decimal
     available_from: datetime
-    available_until: Optional[datetime] = None
-    evidence_refs: Dict[str, Any] = Field(default_factory=dict)
+    available_until: datetime | None = None
+    evidence_refs: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("available_from", "available_until", mode="after")
     @classmethod
-    def validate_datetimes(cls, value: Optional[datetime], info) -> Optional[datetime]:
+    def validate_datetimes(cls, value: datetime | None, info) -> datetime | None:
         if value is not None:
             return validate_timezone_aware(value, info.field_name)
         return value
@@ -292,7 +310,7 @@ class BudgetValidationResult(BaseModel):
     within_authorization_limit: bool
     available_balance: Decimal
     required_amount: Decimal
-    evidence_references: Dict[str, Any] = Field(default_factory=dict)
+    evidence_references: dict[str, Any] = Field(default_factory=dict)
 
 
 BudgetValidationChecks = BudgetValidationResult
@@ -305,9 +323,9 @@ BudgetValidationChecks = BudgetValidationResult
 class RequirementResult(BaseModel):
     """Result for a single resource requirement."""
     resource_type: ResourceType
-    eligible_candidates: List[RankedHumanCandidate] = Field(default_factory=list)
-    excluded_resources: List[ExcludedResource] = Field(default_factory=list)
-    budget_validation: Optional[BudgetValidationResult] = None
+    eligible_candidates: list[RankedHumanCandidate] = Field(default_factory=list)
+    excluded_resources: list[ExcludedResource] = Field(default_factory=list)
+    budget_validation: BudgetValidationResult | None = None
 
     @model_validator(mode="after")
     def validate_result_shape(self) -> "RequirementResult":
@@ -336,8 +354,8 @@ class ResourceAlternative(BaseModel):
     alternative_type: GapAlternativeType
     description: str
     requires_approval: bool = True
-    estimated_effort_hours: Optional[Decimal] = None
-    cost_impact: Optional[Decimal] = None
+    estimated_effort_hours: Decimal | None = None
+    cost_impact: Decimal | None = None
 
 
 # ============================================================================
@@ -355,18 +373,18 @@ class AllocationRecommendation(BaseModel):
     """Final allocation recommendation from Agent 3."""
     metadata: AgentMessageMetadata
     status: RecommendationStatus = RecommendationStatus.PENDING_HUMAN_APPROVAL
-    human_requirement_result: Optional[RequirementResult] = None
-    budget_requirement_result: Optional[RequirementResult] = None
-    resource_gaps: List[ResourceGap] = Field(default_factory=list)
-    alternatives: List[ResourceAlternative] = Field(default_factory=list)
+    human_requirement_result: RequirementResult | None = None
+    budget_requirement_result: RequirementResult | None = None
+    resource_gaps: list[ResourceGap] = Field(default_factory=list)
+    alternatives: list[ResourceAlternative] = Field(default_factory=list)
     explanation: str = ""
     requires_human_approval: bool = True
     manual_intervention_required: bool = False
-    confidence: Optional[Decimal] = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
-    limitations: List[str] = Field(default_factory=list)
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    retryable: Optional[bool] = None
+    confidence: Decimal | None = Field(default=None, ge=Decimal("0"), le=Decimal("1"))
+    limitations: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+    retryable: bool | None = None
 
     @field_validator("status")
     @classmethod

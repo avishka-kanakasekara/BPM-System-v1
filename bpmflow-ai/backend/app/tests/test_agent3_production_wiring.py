@@ -8,10 +8,10 @@ These tests verify that:
 """
 
 import os
+from unittest.mock import AsyncMock
+
 import pytest
-from uuid import uuid4
-from unittest.mock import AsyncMock, patch, MagicMock
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Set minimal environment variables for config
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
@@ -20,15 +20,13 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
 from app.core.database import (
-    get_engine,
-    get_session_factory,
+    close_db,
     dispose_engine,
     get_db,
-    get_session,
+    get_engine,
+    get_session_factory,
     init_db,
-    close_db,
 )
-
 
 # ============================================================================
 # Database Assembly Tests
@@ -66,7 +64,7 @@ class TestDatabaseAssembly:
         engine_id1 = id(engine1)
 
         # Get session factory (should use same engine)
-        session_factory = get_session_factory()
+        get_session_factory()
         
         # Get engine again
         engine2 = get_engine()
@@ -107,7 +105,7 @@ class TestDatabaseAssembly:
         session_factory = get_session_factory()
 
         try:
-            async with session_factory() as session:
+            async with session_factory():
                 # Simulate an error
                 raise ValueError("Test error")
         except ValueError:
@@ -192,7 +190,7 @@ class TestFastAPIDependencies:
         # Dispose any existing engine
         await dispose_engine()
 
-        session_factory = get_session_factory()
+        get_session_factory()
         
         # Use the dependency
         async for session in get_db():

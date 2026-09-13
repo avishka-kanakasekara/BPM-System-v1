@@ -148,7 +148,7 @@ class TestApprovalCreation:
         assert result.approval is not None
         assert result.approval.risk_level is RiskLevel.CRITICAL
 
-    async def test_non_approval_risks_do_not_create_request(
+    async def test_missing_evidence_also_creates_approval_gate(
         self,
         process_id,
         orchestrator,
@@ -158,10 +158,11 @@ class TestApprovalCreation:
             process_id,
             _assessment(_missing_evidence_finding()),
         )
-        assert result.human_approval_required is False
-        assert result.approval is None
-        assert await approval_service.get_pending_approval_for_process(process_id) is None
-        assert await orchestrator.get_current_stage(process_id) is WorkflowStage.RISK_REVIEW
+        assert result.human_approval_required is True
+        assert result.approval is not None
+        assert await orchestrator.get_current_stage(process_id) is (
+            WorkflowStage.AWAITING_HUMAN_APPROVAL
+        )
 
     async def test_approval_reason_contains_risk_information(
         self, process_id, approval_service
@@ -173,7 +174,7 @@ class TestApprovalCreation:
         assert result.approval is not None
         assert "HIGH_VALUE_PURCHASE" in result.approval.reason
         assert "exceeds the high-value threshold" in result.approval.reason
-        assert "MISSING_EVIDENCE" not in result.approval.reason
+        assert "MISSING_EVIDENCE" in result.approval.reason
 
     async def test_invalid_stage_is_rejected_by_state_machine(
         self,

@@ -1,24 +1,25 @@
 """Idempotency tests for Agent 3 write-path persistence."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID, uuid4
 from unittest.mock import MagicMock
+from uuid import uuid4
 
-from app.agents.agent3_resources.repositories.recommendation_repository import (
-    RecommendationWriteRepository,
-)
+import pytest
+
 from app.agents.agent3_resources.repositories.persistence_exceptions import (
     PersistenceConflictError,
 )
+from app.agents.agent3_resources.repositories.recommendation_repository import (
+    RecommendationWriteRepository,
+)
 from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AllocationRecommendation,
-    HumanResourceRequirement,
-    RequirementResult,
     AgentMessageMetadata,
+    AllocationRecommendation,
+    AllocationRequest,
+    HumanResourceRequirement,
     RecommendationStatus,
+    RequirementResult,
     ResourceType,
 )
 
@@ -118,7 +119,7 @@ class TestIdempotency:
             human_requirements=HumanResourceRequirement(
                 resource_type=ResourceType.HUMAN,
                 requester_id=uuid4(),
-                task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
                 estimated_effort_hours=Decimal("10"),
                 process_stage="resource_allocation",
             ),
@@ -164,7 +165,7 @@ class TestIdempotency:
         session_factory = FakeSessionFactory(fake_session)
         repository = RecommendationWriteRepository(session_factory)
         
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         asyncio.run(repository.persist_allocation_result(
             sample_request,
@@ -192,7 +193,7 @@ class TestIdempotency:
         session_factory = FakeSessionFactory(fake_session)
         repository = RecommendationWriteRepository(session_factory)
 
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         with pytest.raises(PersistenceConflictError, match="Recommendation already exists"):
             asyncio.run(repository.persist_allocation_result(
@@ -219,7 +220,7 @@ class TestIdempotency:
         session_factory = FakeSessionFactory(fake_session)
         repository = RecommendationWriteRepository(session_factory)
 
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
         # Should succeed with allow_versioning=True
         asyncio.run(repository.persist_allocation_result(
@@ -247,7 +248,7 @@ class TestIdempotency:
         session_factory = FakeSessionFactory(fake_session)
         repository = RecommendationWriteRepository(session_factory)
         
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         asyncio.run(repository.persist_allocation_result(
             sample_request,

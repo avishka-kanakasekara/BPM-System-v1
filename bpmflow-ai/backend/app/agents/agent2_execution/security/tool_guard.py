@@ -11,11 +11,24 @@ Enforces Non-Negotiable Rules #1, #2, #4, #6, #7:
 
 import json
 import os
-from typing import Any, Dict, List, Optional, Set
+from dataclasses import dataclass
+from typing import Any
+
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.security import audit, authorization
+from app.agents.agent2_execution.tools.metadata import READ_ONLY_TOOLS
+
+
+@dataclass(frozen=True)
+class ExecutionGuardContext:
+    """Server-side execution authorization context for Tool Guard."""
+
+    message_status: str = "AUTHORIZED"
+    process_stage: str = "WORKFLOW_EXECUTION"
+    is_retry: bool = False
+    process_id: str = ""
 
 
 class ToolGuardResult(BaseModel):
@@ -24,7 +37,7 @@ class ToolGuardResult(BaseModel):
     allowed: bool = Field(..., description="Whether tool execution is permitted")
     reason: str = Field(..., description="Explanation for allowed or blocked decision")
     tool_name: str = Field(..., description="Target tool identifier")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="Validated parameters payload")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Validated parameters payload")
     error: str = Field(default="", description="Error details if blocked")
 
 
@@ -36,7 +49,7 @@ ORG_DIR_PATH = os.path.join(
     os.path.dirname(__file__), "..", "data", "org_directory.json"
 )
 
-ALLOWED_EMAIL_ROLES: Set[str] = {
+ALLOWED_EMAIL_ROLES: set[str] = {
     "requester",
     "assigned_employee",
     "manager",
@@ -46,7 +59,7 @@ ALLOWED_EMAIL_ROLES: Set[str] = {
 }
 
 
-def load_allowed_email_recipients() -> Set[str]:
+def load_allowed_email_recipients() -> set[str]:
     """
     Load allowed recipient email addresses from org_directory.json.
     Only emails associated with an allowed role are valid recipients.
@@ -54,7 +67,7 @@ def load_allowed_email_recipients() -> Set[str]:
     allowed_emails = set()
     if os.path.exists(ORG_DIR_PATH):
         try:
-            with open(ORG_DIR_PATH, "r") as f:
+            with open(ORG_DIR_PATH) as f:
                 data = json.load(f)
                 for user in data.get("users", []):
                     role = user.get("role", "").strip().lower()
@@ -71,15 +84,16 @@ class ToolGuard:
     Central security choke point for tool invocation.
     """
 
-    def __init__(self, session: Optional[AsyncSession] = None):
+    def __init__(self, session: AsyncSession | None = None):
         self.session = session
         self.allowed_emails = load_allowed_email_recipients()
 
     async def check(
         self,
         tool_name: str,
-        parameters: Dict[str, Any],
+        parameters: dict[str, Any],
         actor: str = "agent_2",
+        guard_context: ExecutionGuardContext | None = None,
     ) -> ToolGuardResult:
         """
         Evaluate a proposed tool call against all security gates in sequence.
@@ -95,6 +109,53 @@ class ToolGuard:
             return ToolGuardResult(allowed=False, reason=reason, tool_name="", parameters=parameters, error="EMPTY_TOOL_NAME")
 
         tool_clean = tool_name.strip().lower()
+        ctx = guard_context or ExecutionGuardContext()
+
+        # Gate 0: Inter-agent path requires AUTHORIZED message status
+        if ctx.message_status and ctx.message_status != "AUTHORIZED":
+            reason = (
+                f"Tool call rejected: message status must be AUTHORIZED "
+                f"(got {ctx.message_status!r})"
+            )
+            await audit.log_audit_event(self.session, actor, tool_clean, False, reason, payload=parameters)
+            return ToolGuardResult(
+                allowed=False,
+                reason=reason,
+                tool_name=tool_clean,
+                parameters=parameters,
+                error="NOT_AUTHORIZED",
+            )
+
+        # Gate 0b: Mutating tools require WORKFLOW_EXECUTION stage
+        if tool_clean not in READ_ONLY_TOOLS:
+            stage = (ctx.process_stage or "").upper()
+            if stage != "WORKFLOW_EXECUTION":
+                reason = (
+                    f"Tool {tool_clean!r} requires WORKFLOW_EXECUTION stage "
+                    f"(current: {stage or 'UNKNOWN'})"
+                )
+                await audit.log_audit_event(self.session, actor, tool_clean, False, reason, payload=parameters)
+                return ToolGuardResult(
+                    allowed=False,
+                    reason=reason,
+                    tool_name=tool_clean,
+                    parameters=parameters,
+                    error="STAGE_NOT_AUTHORIZED",
+                )
+
+        # Gate 0c: Read-only tools require a process_id
+        if tool_clean in READ_ONLY_TOOLS:
+            process_id = str(parameters.get("process_id") or ctx.process_id or "").strip()
+            if not process_id:
+                reason = f"Read-only tool {tool_clean!r} requires a valid process_id"
+                await audit.log_audit_event(self.session, actor, tool_clean, False, reason, payload=parameters)
+                return ToolGuardResult(
+                    allowed=False,
+                    reason=reason,
+                    tool_name=tool_clean,
+                    parameters=parameters,
+                    error="MISSING_PROCESS_ID",
+                )
 
         # Gate 1: Authorization Allow-list Check (Rule #4)
         if not authorization.is_permitted(tool_clean):
@@ -161,7 +222,7 @@ class ToolGuard:
             error="",
         )
 
-    def _validate_parameters(self, tool_name: str, params: Dict[str, Any]) -> str:
+    def _validate_parameters(self, tool_name: str, params: dict[str, Any]) -> str:
         """Helper to validate parameters per tool schema."""
         if not isinstance(params, dict):
             return "Parameters must be a dictionary"

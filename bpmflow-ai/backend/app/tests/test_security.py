@@ -1,6 +1,6 @@
 """Tests for shared Supabase Auth JWT security."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -17,13 +17,14 @@ from app.core.security import (
     NOT_AUTHENTICATED_DETAIL,
     PROFILE_NOT_FOUND_DETAIL,
     require_roles,
+    require_tenant,
     tenant_id_from_app_metadata,
     verify_supabase_access_token,
 )
 from app.main import app
 from app.schemas.auth import CurrentUser
 
-UTC = timezone.utc
+UTC = UTC
 TEST_SECRET = "test-supabase-jwt-secret-for-unit-tests-only"
 
 
@@ -98,6 +99,19 @@ def test_invalid_bearer_token_returns_401(client) -> None:
     body = response.text
     assert TEST_SECRET not in body
     assert "Traceback" not in body
+
+
+def test_bad_signature_returns_401(client) -> None:
+    user_id = uuid4()
+    token = _encode(sub=str(user_id), secret="wrong-secret-not-the-server-key")
+    _override_db(_user_row(user_id=user_id, role="requester"))
+
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == NOT_AUTHENTICATED_DETAIL
 
 
 def test_malformed_token_returns_401(client) -> None:
@@ -312,3 +326,28 @@ async def test_require_roles_dependency_accepts_and_rejects() -> None:
     with pytest.raises(Exception) as exc_info:
         await checker(current_user=requester)
     assert getattr(exc_info.value, "status_code", None) == 403
+
+
+@pytest.mark.asyncio
+async def test_require_tenant_rejects_missing_tenant_outside_dev(monkeypatch) -> None:
+    monkeypatch.setattr("app.core.security.settings.ENV", "production")
+    checker = require_tenant(allow_dev_default=False)
+    user = CurrentUser(id=uuid4(), email="a@example.com", role="requester", tenant_id=None)
+
+    with pytest.raises(Exception) as exc_info:
+        await checker(current_user=user)
+    assert getattr(exc_info.value, "status_code", None) == 403
+
+
+@pytest.mark.asyncio
+async def test_require_tenant_accepts_app_metadata_tenant() -> None:
+    tenant_id = uuid4()
+    checker = require_tenant(allow_dev_default=False)
+    user = CurrentUser(
+        id=uuid4(),
+        email="a@example.com",
+        role="requester",
+        tenant_id=tenant_id,
+    )
+    accepted = await checker(current_user=user)
+    assert accepted.tenant_id == tenant_id

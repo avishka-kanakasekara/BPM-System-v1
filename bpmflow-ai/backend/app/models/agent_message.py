@@ -1,6 +1,6 @@
 """Persisted AgentMessage envelope for inter-agent / UI consumption."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, Float, ForeignKey, Text
@@ -14,7 +14,7 @@ JsonDict = JSON().with_variant(JSONB(), "postgresql")
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class AgentMessageRecord(Base):

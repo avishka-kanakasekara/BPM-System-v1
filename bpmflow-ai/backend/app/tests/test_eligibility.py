@@ -5,13 +5,13 @@ from decimal import Decimal
 
 from app.agents.agent3_resources import (
     EligibilityEvaluator,
+    ExclusionReason,
     create_human_evidence,
     create_human_requirement,
-    ExclusionReason,
-    get_tenant_a_id,
     get_requester_id,
     get_resource_id_1,
     get_resource_id_2,
+    get_tenant_a_id,
 )
 
 

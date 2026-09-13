@@ -5,10 +5,11 @@ Assembles process context, retrieved memory evidence, and available tool declara
 returning a structured ExecutionPlan object.
 """
 
-from typing import List, Optional
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.agent.context_engine import ProcessContext
+from app.agents.agent2_execution.agent.planner_fallback import validate_execution_plan
 from app.agents.agent2_execution.agent.reasoning import format_planning_context_prompt
 from app.agents.agent2_execution.database.ids import parse_uuid
 from app.agents.agent2_execution.database.models import ExecutionPlan as ExecutionPlanRow
@@ -21,9 +22,9 @@ from app.agents.agent2_execution.tools import registry
 
 async def generate_plan(
     context: ProcessContext,
-    evidence: List[str],
-    gemini_client: Optional[GeminiClient] = None,
-    session: Optional[AsyncSession] = None,
+    evidence: list[str],
+    gemini_client: GeminiClient | None = None,
+    session: AsyncSession | None = None,
 ) -> ExecutionPlan:
     """
     REASON & PLAN: Call Gemini to generate a structured ExecutionPlan.
@@ -46,6 +47,8 @@ async def generate_plan(
     )
     if plan.task_id in {"", "task-offline", "task-stub-101"}:
         plan = plan.model_copy(update={"task_id": context.task_id})
+
+    plan = validate_execution_plan(plan)
 
     if session is not None:
         try:

@@ -10,7 +10,8 @@ and Task stage records into PM4Py-compatible Pandas DataFrames with standard PM4
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,10 +22,10 @@ logger = logging.getLogger("agent_2.analytics.event_analyzer")
 
 
 async def fetch_workflow_events(
-    session: Optional[AsyncSession],
-    process_id: Optional[str] = None,
-    since: Optional[datetime] = None,
-) -> List[Dict[str, Any]]:
+    session: AsyncSession | None,
+    process_id: str | None = None,
+    since: datetime | None = None,
+) -> list[dict[str, Any]]:
     """Fetch workflow_events and Task stage records from DB as clean dicts."""
     if session is None:
         return []
@@ -101,7 +102,7 @@ async def fetch_workflow_events(
     return events
 
 
-def build_pm4py_event_log(events: List[Dict[str, Any]]) -> pd.DataFrame:
+def build_pm4py_event_log(events: list[dict[str, Any]]) -> pd.DataFrame:
     """
     Transform raw workflow event dicts into a PM4Py standard EventLog DataFrame.
 

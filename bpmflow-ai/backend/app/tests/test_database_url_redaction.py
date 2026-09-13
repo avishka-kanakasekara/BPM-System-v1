@@ -1,6 +1,5 @@
 """Unit tests for database URL credential redaction (no database required)."""
 
-import pytest
 
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -59,7 +58,7 @@ class TestDatabaseURLRedaction:
         fake_password = "FAKE_PASSWORD_XYZ987"
         
         # Simulate a persistence error message
-        error_message = f"Transaction failed: connection error to database"
+        error_message = "Transaction failed: connection error to database"
         
         # The fake password should not appear in error messages
         assert fake_password not in error_message, f"Password {fake_password} leaked in error message"

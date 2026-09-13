@@ -22,18 +22,13 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Type, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
 from app.agents.agent2_execution.config import settings
 from app.agents.agent2_execution.llm import function_declarations, prompts
 from app.agents.agent2_execution.llm.schemas import (
-    AgentDecision,
-    ExecutionPlan,
-    FailureDiagnosis,
-    OptimizationRecommendationSchema,
-    RecoveryDecision,
     ToolCallContract,
 )
 
@@ -63,7 +58,7 @@ class GeminiClient:
     Client wrapper for Google Gemini LLM API via google-genai SDK.
     """
 
-    def __init__(self, api_key: Optional[str] = None, is_offline: Optional[bool] = None):
+    def __init__(self, api_key: str | None = None, is_offline: bool | None = None):
         self.api_key = api_key or settings.GEMINI_API_KEY
         env_offline = os.getenv("GEMINI_OFFLINE", "").strip().lower()
         env_name = (
@@ -129,11 +124,11 @@ class GeminiClient:
             return settings.GEMINI_MODEL_PRO or "gemini-3.6-flash"
         return settings.GEMINI_MODEL_FLASH or "gemini-3.6-flash"
 
-    def _model_candidates(self, tier: str) -> List[str]:
+    def _model_candidates(self, tier: str) -> list[str]:
         primary = self._select_model(tier)
         ordered = [self._working_model, primary, settings.GEMINI_MODEL_FLASH, settings.GEMINI_MODEL_PRO, *MODEL_FALLBACKS]
         seen = set()
-        unique: List[str] = []
+        unique: list[str] = []
         for name in ordered:
             if name and name not in seen:
                 unique.append(name)
@@ -147,7 +142,7 @@ class GeminiClient:
     def _sanitize_gemini_schema(self, obj: Any, *, in_properties: bool = False) -> Any:
         """Strip JSON Schema fields Gemini Developer API rejects (additionalProperties, etc.)."""
         if isinstance(obj, dict):
-            out: Dict[str, Any] = {}
+            out: dict[str, Any] = {}
             for key, value in obj.items():
                 # Only strip schema metadata keys — never property names like "title".
                 if not in_properties and key in {"additionalProperties", "$schema", "default"}:
@@ -173,7 +168,7 @@ class GeminiClient:
             return [self._sanitize_gemini_schema(item, in_properties=in_properties) for item in obj]
         return obj
 
-    def _pydantic_schema_for_gemini(self, response_schema: Type[BaseModel]) -> Dict[str, Any]:
+    def _pydantic_schema_for_gemini(self, response_schema: type[BaseModel]) -> dict[str, Any]:
         return self._sanitize_gemini_schema(response_schema.model_json_schema())
 
     def _normalize_schema(self, obj: Any) -> Any:
@@ -190,7 +185,7 @@ class GeminiClient:
             f"Real LLM execution is required (GEMINI_OFFLINE is false). Last error: {detail}"
         )
 
-    def _sdk_tools(self, declarations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _sdk_tools(self, declarations: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if declarations and isinstance(declarations[0], dict) and "function_declarations" in declarations[0]:
             wrapped = declarations
         else:
@@ -211,7 +206,7 @@ class GeminiClient:
                     return str(text).strip()
         return ""
 
-    def _extract_function_call(self, response: Any) -> Optional[ToolCallContract]:
+    def _extract_function_call(self, response: Any) -> ToolCallContract | None:
         calls = getattr(response, "function_calls", None) or []
         if calls:
             fc = calls[0]
@@ -232,7 +227,7 @@ class GeminiClient:
                         return ToolCallContract(name=name, parameters=args)
         return None
 
-    def _parse_model_json(self, raw_text: str, response_schema: Type[T]) -> Optional[T]:
+    def _parse_model_json(self, raw_text: str, response_schema: type[T]) -> T | None:
         if not raw_text:
             return None
         cleaned = raw_text.strip()
@@ -256,7 +251,7 @@ class GeminiClient:
             return ""
         return match.group(1).strip().strip("()[],")
 
-    def _infer_tools_from_prompt(self, prompt: str) -> List[str]:
+    def _infer_tools_from_prompt(self, prompt: str) -> list[str]:
         prompt_lower = prompt.lower()
         if any(k in prompt_lower for k in ("reminder", "email", "notify", "approval pending")):
             return ["send_email"]
@@ -317,7 +312,7 @@ class GeminiClient:
     async def generate_structured_output(
         self,
         prompt: str,
-        response_schema: Type[T],
+        response_schema: type[T],
         system_instruction: str = "",
         model_tier: str = "flash",
         max_retries: int = 2,
@@ -395,7 +390,7 @@ class GeminiClient:
     async def generate_function_call(
         self,
         prompt: str,
-        tools: Optional[List[Dict[str, Any]]] = None,
+        tools: list[dict[str, Any]] | None = None,
         system_instruction: str = "",
         model_tier: str = "flash",
         max_retries: int = 2,
@@ -444,7 +439,7 @@ class GeminiClient:
         self._require_live_or_raise(last_error, "function call proposal")
         return self._generate_offline_tool_call(prompt, tool_declarations)
 
-    def _parse_tool_call_json(self, raw_text: str) -> Optional[ToolCallContract]:
+    def _parse_tool_call_json(self, raw_text: str) -> ToolCallContract | None:
         if not raw_text:
             return None
         try:
@@ -462,7 +457,7 @@ class GeminiClient:
             return None
         return None
 
-    def _generate_offline_stub(self, response_schema: Type[T], prompt: str) -> T:
+    def _generate_offline_stub(self, response_schema: type[T], prompt: str) -> T:
         """Generate deterministic, schema-valid stub objects when running in offline mode."""
         schema_name = response_schema.__name__
         process_id = self._extract_labeled_value(prompt, "process_id") or self._extract_labeled_value(prompt, "Process Title")
@@ -576,7 +571,7 @@ class GeminiClient:
         return response_schema.model_validate(field_defaults)
 
     def _generate_offline_tool_call(
-        self, prompt: str, tools: List[Dict[str, Any]]
+        self, prompt: str, tools: list[dict[str, Any]]
     ) -> ToolCallContract:
         """Generate a deterministic stub function call matching one of the declared tools."""
         prompt_lower = prompt.lower()

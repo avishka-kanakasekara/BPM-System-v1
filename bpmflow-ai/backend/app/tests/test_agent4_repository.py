@@ -19,7 +19,6 @@ from app.agents.agent4_orchestrator import (
 )
 from app.agents.agent4_orchestrator.repository import InMemoryProcessRepository
 from app.models.audit import AuditLog
-from app.models.process import Process
 
 pytestmark = pytest.mark.asyncio
 

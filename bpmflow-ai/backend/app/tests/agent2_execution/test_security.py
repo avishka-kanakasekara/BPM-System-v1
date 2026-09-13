@@ -12,12 +12,12 @@ Tests all security invariants from CLAUDE.md:
 """
 
 from datetime import timedelta
+
 import pytest
 from fastapi import HTTPException
 
 from app.agents.agent2_execution.security import auth, authorization, sanitizer
 from app.agents.agent2_execution.security.tool_guard import ToolGuard
-
 
 # ---------------------------------------------------------------------------
 # 1. Authorization Permission Matrix Tests
@@ -188,10 +188,11 @@ async def test_tool_guard_malformed_parameters_blocked():
 @pytest.mark.asyncio
 async def test_adversarial_approve_payment_end_to_end():
     """Adversarial Case 1: End-to-end approve_payment request blocked through Agent2.handle()."""
+    import uuid
+
     from app.agents.agent2_execution.agent.agent import Agent2
     from app.agents.agent2_execution.communication.schemas import AgentMessage
     from app.agents.agent2_execution.llm.gemini_client import GeminiClient
-    import uuid
 
     agent = Agent2(gemini_client=GeminiClient(is_offline=True))
     proc_id = str(uuid.uuid4())

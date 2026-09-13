@@ -1,6 +1,6 @@
 """SQLAlchemy model for public.users (linked to Supabase auth.users)."""
 
-from sqlalchemy import Column, Text, DateTime
+from sqlalchemy import Column, DateTime, Text
 from sqlalchemy.dialects.postgresql import UUID
 
 from app.models.base import Base

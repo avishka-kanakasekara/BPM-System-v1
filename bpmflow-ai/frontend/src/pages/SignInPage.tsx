@@ -1,19 +1,26 @@
 import { FormEvent, useState } from 'react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import RoleModelNotice, { ROLES, type AppRole } from '../components/auth/RoleModelNotice'
 import { Alert, PageHeader, Panel, controlClassName } from '../components/ui/primitives'
 
 export default function SignInPage() {
   const { session, signIn, loading } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  const searchParams = new URLSearchParams(location.search)
+  const nextParam = searchParams.get('next')
+  const fromState = (location.state as { from?: string } | null)?.from
   const from =
-    (location.state as { from?: string } | null)?.from &&
-    !(location.state as { from?: string }).from?.startsWith('/sign-')
-      ? (location.state as { from: string }).from
-      : '/'
+    nextParam && !nextParam.startsWith('/sign-')
+      ? nextParam
+      : fromState && !fromState.startsWith('/sign-')
+        ? fromState
+        : '/'
+  const sessionExpired = searchParams.get('reason') === 'session_expired'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [role, setRole] = useState<AppRole>('requester')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -24,7 +31,7 @@ export default function SignInPage() {
     setSubmitting(true)
     setError(null)
     try {
-      await signIn(email.trim(), password)
+      await signIn(email.trim(), password, role)
       navigate(from, { replace: true })
     } catch (err) {
       const msg = (err as Error).message || 'Sign-in failed'
@@ -32,8 +39,10 @@ export default function SignInPage() {
         setError('Invalid email or password. Sign up first, or confirm your email if required.')
       } else if (/email not confirmed/i.test(msg)) {
         setError(
-          'Email not confirmed. Check your inbox, or ask an administrator to confirm your account.',
+          'Email not confirmed. In local development this should auto-confirm — retry sign-in, or sign up again.',
         )
+      } else if (/email address .* is invalid|email_address_invalid/i.test(msg)) {
+        setError('That email address was rejected. Use a normal email (e.g. your Gmail address).')
       } else {
         setError(msg)
       }
@@ -48,9 +57,32 @@ export default function SignInPage() {
         title="Sign in"
         description="Access your BPMFlow AI workspace to manage processes with AI assistance and human oversight."
       />
+      {sessionExpired ? (
+        <Alert tone="warning">Your session expired. Sign in again to continue.</Alert>
+      ) : null}
       {error ? <Alert tone="error">{error}</Alert> : null}
+      <RoleModelNotice />
       <Panel>
         <form className="space-y-4" onSubmit={onSubmit} noValidate>
+          <label className="block text-sm">
+            <span className="mb-1.5 block font-medium text-base-content">Role</span>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as AppRole)}
+              className={controlClassName}
+              aria-describedby="signin-role-help"
+            >
+              {ROLES.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+            <span id="signin-role-help" className="mt-1.5 block text-xs leading-relaxed text-base-content/60">
+              Select the access role for this account. In local development it is applied when you
+              sign in.
+            </span>
+          </label>
           <label className="block text-sm">
             <span className="mb-1.5 block font-medium text-base-content">Email</span>
             <input

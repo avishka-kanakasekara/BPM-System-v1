@@ -1,100 +1,100 @@
 # Agent 3: Workforce & Resource Allocation
 
 from .constants import (
-    ResourceType,
+    AGENT_3_SENDER,
+    AGENT_4_RECEIVER,
+    FAILURE_RETRYABLE,
+    MAX_EVIDENCE_AGE_DAYS,
+    SCHEMA_VERSION,
+    SCORING_WEIGHTS,
     ExclusionReason,
-    RecommendationStatus,
+    FailureErrorCode,
     GapAlternativeType,
     GapType,
     MessageType,
-    SCORING_WEIGHTS,
-    MAX_EVIDENCE_AGE_DAYS,
-    SCHEMA_VERSION,
-    AGENT_3_SENDER,
-    AGENT_4_RECEIVER,
-    FailureErrorCode,
-    FAILURE_RETRYABLE,
+    RecommendationStatus,
     ResourceLookupError,
+    ResourceType,
 )
-from .schemas import (
-    AgentMessageMetadata,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-    AllocationRequest,
-    HumanResourceEvidence,
-    BudgetResourceEvidence,
-    ExclusionReasonEntry,
-    ExcludedResource,
-    ScoreBreakdown,
-    RankedHumanCandidate,
-    RankedCandidate,
-    BudgetValidationResult,
-    BudgetValidationChecks,
-    RequirementResult,
-    ResourceGap,
-    ResourceAlternative,
-    AllocationRecommendation,
-    utc_now,
-    validate_timezone_aware,
-)
-from .interfaces import ResourceRepository, InMemoryResourceRepository
-from .retrieval import CandidateRetriever
 from .eligibility import EligibilityEvaluator
-from .ranking import HumanResourceRanker
-from .gaps import GapDetector
-from .explainer_template import TemplateExplainer, ExplanationContext
-from .llm_explainer import (
-    ExplanationGenerator,
-    TemplateExplainerAdapter,
-    OpenAIExplanationGenerator,
-    ResilientFallbackExplainer,
-    LLMOutputValidator,
-    SanitizedExplanationInput,
-    sanitize_explanation_context,
-    build_user_prompt,
-    LLMExplanationError,
-)
-from .runtime_config import (
-    Agent3LLMConfig,
-    get_agent3_llm_config,
-    get_shared_openai_client,
-    close_agent3_llm_runtime,
-    reset_agent3_llm_runtime,
-    set_openai_client_factory,
-)
-from .service import ResourceAllocationService
-from .strategies import ResourceStrategy, HumanResourceStrategy, BudgetResourceStrategy
+from .explainer_template import ExplanationContext, TemplateExplainer
 from .failures import (
     FailureSpec,
-    detect_invalid_request,
     build_failed_recommendation,
-    build_resource_lookup_failure,
     build_internal_error_failure,
+    build_resource_lookup_failure,
+    detect_invalid_request,
     is_resource_lookup_error,
 )
 from .fixtures import (
-    create_human_evidence,
     create_budget_evidence,
-    create_human_requirement,
     create_budget_requirement,
-    get_tenant_a_id,
-    get_tenant_b_id,
+    create_human_evidence,
+    create_human_requirement,
     get_requester_id,
     get_resource_id_1,
     get_resource_id_2,
     get_resource_id_3,
+    get_tenant_a_id,
+    get_tenant_b_id,
 )
+from .gaps import GapDetector
+from .interfaces import InMemoryResourceRepository, ResourceRepository
+from .llm_explainer import (
+    ExplanationGenerator,
+    LLMExplanationError,
+    LLMOutputValidator,
+    OpenAIExplanationGenerator,
+    ResilientFallbackExplainer,
+    SanitizedExplanationInput,
+    TemplateExplainerAdapter,
+    build_user_prompt,
+    sanitize_explanation_context,
+)
+from .ranking import HumanResourceRanker
 from .repositories import (
-    RecommendationWriteRepository,
-    PersistenceError,
-    PersistenceValidationError,
-    PersistenceConflictError,
-    PersistenceLookupError,
-    PersistenceTransactionError,
+    AGENT3_ALLOWED_RECOMMENDATION_STATUSES,
     MIGRATION_0004_FILENAME,
     WRITE_PATH_TABLES,
-    AGENT3_ALLOWED_RECOMMENDATION_STATUSES,
+    PersistenceConflictError,
+    PersistenceError,
+    PersistenceLookupError,
+    PersistenceTransactionError,
+    PersistenceValidationError,
+    RecommendationWriteRepository,
 )
+from .retrieval import CandidateRetriever
+from .runtime_config import (
+    Agent3LLMConfig,
+    close_agent3_llm_runtime,
+    get_agent3_llm_config,
+    get_shared_openai_client,
+    reset_agent3_llm_runtime,
+    set_openai_client_factory,
+)
+from .schemas import (
+    AgentMessageMetadata,
+    AllocationRecommendation,
+    AllocationRequest,
+    BudgetResourceEvidence,
+    BudgetResourceRequirement,
+    BudgetValidationChecks,
+    BudgetValidationResult,
+    ExcludedResource,
+    ExclusionReasonEntry,
+    HumanResourceEvidence,
+    HumanResourceRequirement,
+    RankedCandidate,
+    RankedHumanCandidate,
+    RequirementResult,
+    ResourceAlternative,
+    ResourceGap,
+    ScoreBreakdown,
+    utc_now,
+    validate_timezone_aware,
+)
+from .service import ResourceAllocationService
+from .strategies import BudgetResourceStrategy, HumanResourceStrategy, ResourceStrategy
 
 __all__ = [
     # Constants

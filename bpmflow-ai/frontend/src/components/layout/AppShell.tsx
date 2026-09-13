@@ -2,15 +2,24 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../../auth/AuthContext'
 
-type NavItem = { to: string; label: string; end?: boolean }
+type NavItem = { to: string; label: string; end?: boolean; roles?: Array<'requester' | 'approver' | 'admin'> }
 
 const PRIMARY_NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/processes', label: 'Processes' },
-  { to: '/tasks', label: 'My Tasks' },
-  { to: '/approvals', label: 'Approvals' },
-  { to: '/exceptions', label: 'Exceptions' },
+  { to: '/tasks', label: 'My Tasks', roles: ['requester', 'admin'] },
+  { to: '/approvals', label: 'Approvals', roles: ['approver', 'admin'] },
+  { to: '/policies', label: 'Company Policies', roles: ['admin'] },
+  { to: '/agent3/allocations/new', label: 'Resources', roles: ['requester', 'approver', 'admin'] },
   { to: '/audit', label: 'Audit Trail' },
+]
+
+const AGENT2_NAV: NavItem[] = [
+  { to: '/agent2', label: 'Execution dashboard', end: true },
+  { to: '/agent2/tools', label: 'Tools & actions' },
+  { to: '/agent2/receipts', label: 'Execution history' },
+  { to: '/agent2/kpis', label: 'KPI analysis' },
+  { to: '/agent2/recommendations', label: 'Optimizations' },
 ]
 
 const SECONDARY_NAV: NavItem[] = [{ to: '/settings', label: 'Settings' }]
@@ -25,16 +34,18 @@ const PAGE_TITLES: Array<{ match: RegExp; title: string }> = [
   { match: /^\/tasks/, title: 'My Tasks' },
   { match: /^\/approvals\/[^/]+/, title: 'Approval detail' },
   { match: /^\/approvals/, title: 'Approvals' },
-  { match: /^\/exceptions\/[^/]+/, title: 'Exception detail' },
-  { match: /^\/exceptions/, title: 'Exceptions' },
   { match: /^\/audit/, title: 'Audit Trail' },
+  { match: /^\/policies/, title: 'Company Policies' },
   { match: /^\/settings/, title: 'Settings' },
   { match: /^\/sign-in/, title: 'Sign in' },
   { match: /^\/sign-up/, title: 'Sign up' },
   { match: /^\/discover/, title: 'Process Discovery' },
+  { match: /^\/agent2\/tools/, title: 'Agent 2 tools' },
+  { match: /^\/agent2\/executions/, title: 'Execution detail' },
   { match: /^\/agent2\/kpis/, title: 'Process KPIs' },
-  { match: /^\/agent2\/receipts/, title: 'Execution receipts' },
+  { match: /^\/agent2\/receipts/, title: 'Execution history' },
   { match: /^\/agent2\/recommendations/, title: 'Optimizations' },
+  { match: /^\/agent2\/?$/, title: 'Agent 2 dashboard' },
   { match: /^\/agent3\/allocations/, title: 'Resource Planning' },
   { match: /^\/agent3\/recommendations/, title: 'Resource Recommendations' },
 ]
@@ -88,6 +99,10 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
 
 function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const { user, session, signOut } = useAuth()
+  const role = (user?.role || '').toLowerCase()
+  const primaryItems = PRIMARY_NAV.filter(
+    (item) => !item.roles || (role && item.roles.includes(role as 'requester' | 'approver' | 'admin')),
+  )
 
   return (
     <div className="flex h-full flex-col bg-base-100">
@@ -97,7 +112,7 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
 
       <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-4" aria-label="Primary">
         <div className="space-y-0.5">
-          {PRIMARY_NAV.map((item) => (
+          {primaryItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -108,6 +123,25 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
               {item.label}
             </NavLink>
           ))}
+        </div>
+
+        <div>
+          <p className="mx-3 mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/45">
+            Agent 2
+          </p>
+          <div className="space-y-0.5">
+            {AGENT2_NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={navClassName}
+                onClick={onNavigate}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
         </div>
 
         <div>

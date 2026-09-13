@@ -9,18 +9,26 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.agents.agent4_orchestrator.advancement_engine import ProcessAdvancementEngine
 from app.agents.agent4_orchestrator.exceptions import (
     DatabasePersistenceError,
     ProcessNotFoundError,
 )
+from app.agents.agent4_orchestrator.execution_payload import enrich_execute_parameters
 from app.agents.agent4_orchestrator.repository import ProcessRepository
 from app.agents.agent4_orchestrator.schemas import RiskEvaluationContext, WorkflowResult
 from app.agents.agent4_orchestrator.state_machine import InvalidTransitionError
 from app.agents.agent4_orchestrator.workflow import Agent4Workflow
-from app.api.v1.deps import get_agent4_workflow, get_process_repository
+from app.api.v1.deps import (
+    get_agent4_workflow,
+    get_process_advancement_engine,
+    get_process_repository,
+)
 from app.core.security import get_current_user
 from app.schemas.auth import CurrentUser
 from app.schemas.process import (
+    AdvanceProcessRequest,
+    AdvanceProcessResponse,
     ExecuteWorkflowRequest,
     InvoiceMatchingCompleteRequest,
     ProcessCreate,
@@ -35,10 +43,6 @@ router = APIRouter(prefix="/processes", tags=["processes"])
 NOT_FOUND_DETAIL = "Process not found"
 DATABASE_DETAIL = "Database unavailable"
 INTERNAL_DETAIL = "Internal server error"
-
-_PROCUREMENT_TYPES = frozenset(
-    {"PROCUREMENT", "PURCHASE", "PO", "PURCHASE_ORDER", "BUY"}
-)
 
 
 def _not_found() -> HTTPException:
@@ -56,55 +60,20 @@ def _enrich_execute_parameters(
     process: ProcessResponse | None,
     parameters: dict | None,
 ) -> dict:
-    """Ensure Agent 2 gets actionable tool parameters from the UI.
-
-    Empty execute payloads historically caused Gemini to pick weak tools
-    (e.g. update_task) that advance the stage without creating purchase
-    evidence — breaking invoice matching. For procurement-style processes
-    default to create_po_draft with concrete vendor/amount.
-    """
-    params = dict(parameters or {})
-    if params.get("tool_name"):
-        if process is not None:
-            params.setdefault("process_id", str(process.id))
-        return params
-
-    process_type = (process.process_type if process else "PROCUREMENT").upper()
-    meta = (process.metadata_json if process else None) or {}
-    is_procurement = process_type in _PROCUREMENT_TYPES or process_type.endswith(
-        "PROCUREMENT"
+    """Ensure Agent 2 gets actionable tool parameters from discovery metadata."""
+    from app.agents.agent4_orchestrator.execution_payload import (
+        build_process_execution_metadata,
     )
-    if not is_procurement and process_type not in {"GENERAL", "GENERIC", ""}:
-        return params
 
-    amount = meta.get("amount") or meta.get("required_amount") or meta.get("budget_amount")
-    purchase = meta.get("purchase_order") if isinstance(meta.get("purchase_order"), dict) else {}
-    amount = amount or purchase.get("amount") or 2500
-    vendor = (
-        params.get("vendor_id")
-        or meta.get("vendor_id")
-        or meta.get("vendor")
-        or purchase.get("vendor")
-        or purchase.get("vendor_id")
-        or "VENDOR-ACME"
+    meta = build_process_execution_metadata(process) if process is not None else {}
+    return enrich_execute_parameters(
+        process_id=str(process.id) if process is not None else None,
+        process_type=process.process_type if process is not None else None,
+        process_name=process.name if process is not None else None,
+        metadata_json=meta,
+        parameters=parameters,
+        strict=True,
     )
-    try:
-        amount_f = float(amount)
-    except (TypeError, ValueError):
-        amount_f = 2500.0
-    if amount_f <= 0:
-        amount_f = 2500.0
-
-    params.setdefault("tool_name", "create_po_draft")
-    params.setdefault("vendor_id", str(vendor))
-    params.setdefault("amount", amount_f)
-    params.setdefault(
-        "items_summary",
-        f"{(process.name if process else 'Procurement')} line items",
-    )
-    if process is not None:
-        params.setdefault("process_id", str(process.id))
-    return params
 
 
 @router.get("", response_model=list[ProcessResponse])
@@ -199,6 +168,84 @@ def _invalid_transition() -> HTTPException:
     )
 
 
+@router.post("/{process_id}/advance", response_model=AdvanceProcessResponse)
+async def advance_process(
+    process_id: UUID,
+    payload: AdvanceProcessRequest,
+    engine: ProcessAdvancementEngine = Depends(get_process_advancement_engine),
+    repository: ProcessRepository = Depends(get_process_repository),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> AdvanceProcessResponse:
+    """Autonomously advance the process through agent-owned stages.
+
+    Chains DISCOVERING → RESOURCE_PLANNING → RISK_REVIEW → (human gate) and,
+    after approval, WORKFLOW_EXECUTION → INVOICE_MATCHING. The only mandatory
+    human stops are AWAITING_HUMAN_APPROVAL and invoice evidence input.
+    """
+    from app.core.config import settings
+
+    tenant_id = current_user.tenant_id
+    if payload.resource_planning and payload.resource_planning.tenant_id:
+        if tenant_id is None:
+            tenant_id = payload.resource_planning.tenant_id
+        elif (
+            settings.is_production
+            and tenant_id != payload.resource_planning.tenant_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tenant context must come from the authenticated session",
+            )
+    if tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant context is required for process advancement",
+        )
+
+    if payload.reconcile_stale:
+        await engine.reconcile(
+            process_id=process_id,
+            tenant_id=tenant_id,
+            user_id=current_user.id,
+        )
+
+    invoice_payload = None
+    if payload.invoice is not None:
+        invoice_payload = payload.invoice.model_dump(exclude_none=True)
+
+    resource_planning = None
+    if payload.resource_planning is not None:
+        rp = payload.resource_planning
+        resource_planning = {
+            "human_requirements": rp.human_requirements,
+            "budget_requirements": rp.budget_requirements,
+        }
+
+    try:
+        result = await engine.advance(
+            process_id,
+            tenant_id=tenant_id,
+            user_id=current_user.id,
+            correlation_id=payload.correlation_id,
+            idempotency_key=payload.idempotency_key,
+            max_steps=payload.max_steps,
+            invoice_payload=invoice_payload,
+            resource_planning=resource_planning,
+        )
+        process = await repository.get_process(process_id)
+    except ProcessNotFoundError as exc:
+        raise _not_found() from exc
+    except InvalidTransitionError as exc:
+        raise _invalid_transition() from exc
+    except DatabasePersistenceError as exc:
+        raise _database_error() from exc
+
+    return AdvanceProcessResponse(
+        process=process,
+        advancement=result.model_dump(mode="json"),
+    )
+
+
 @router.post("/{process_id}/plan-resources", response_model=WorkflowResult)
 async def plan_resources(
     process_id: UUID,
@@ -267,12 +314,13 @@ async def risk_review(
             if payload.purchase_amount is not None
             else None
         ),
+        currency=payload.currency,
         required_evidence=payload.required_evidence,
         provided_evidence=payload.provided_evidence,
         confidence=(
             Decimal(str(payload.confidence)) if payload.confidence is not None else None
         ),
-        requester_id=payload.requester_id,
+        requester_id=payload.requester_id or current_user.id,
         approver_id=payload.approver_id,
         unauthorized_action=payload.unauthorized_action,
         budget_validation_failed=payload.budget_validation_failed,
@@ -283,6 +331,7 @@ async def risk_review(
             context,
             task_id=payload.task_id,
             requested_by=current_user.id,
+            tenant_id=current_user.tenant_id,
         )
     except ProcessNotFoundError as exc:
         raise _not_found() from exc

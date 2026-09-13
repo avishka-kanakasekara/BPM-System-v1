@@ -9,7 +9,6 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 # Shared backend .env (bpmflow-ai/backend/.env) — one file for all agents.
 ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
@@ -33,7 +32,11 @@ class Settings(BaseSettings):
     GEMINI_MODEL_PRO: str = "gemini-3.6-flash"
     GEMINI_OFFLINE: bool = False
 
-    # ── SMTP — email sending ────────────────────────────────────────────────
+    # ── Email — Resend (preferred) or SMTP ──────────────────────────────────
+    EMAIL_PROVIDER: str = "smtp"  # resend | smtp
+    EMAIL_API_KEY: str = ""
+    EMAIL_FROM: str = ""
+    EMAIL_REPLY_TO: str = ""
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USERNAME: str = ""

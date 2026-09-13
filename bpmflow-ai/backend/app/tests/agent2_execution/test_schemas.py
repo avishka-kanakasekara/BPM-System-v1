@@ -33,7 +33,6 @@ from app.agents.agent2_execution.llm.schemas import (
     ToolResultContract,
 )
 
-
 # ---------------------------------------------------------------------------
 # Test Fixtures & Valid Instances
 # ---------------------------------------------------------------------------

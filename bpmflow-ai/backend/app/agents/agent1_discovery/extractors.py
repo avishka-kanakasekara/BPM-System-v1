@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable, Sequence
 from functools import lru_cache
-from typing import Iterable
 
 from app.agents.agent1_discovery.schemas import (
     DocumentClassification,
@@ -18,8 +18,9 @@ from app.agents.agent1_discovery.schemas import (
     PageText,
     Relation,
     RelationExtractionResult,
+    StageExecutionMeta,
 )
-from app.llm.client import call_llm
+from app.llm.client import LLMUnavailableError, call_llm
 from app.llm.prompts.agent1_relation_extraction import (
     AGENT1_RELATION_EXTRACTION_SYSTEM,
     wrap_evidence,
@@ -99,7 +100,7 @@ _AMOUNT_RE = re.compile(
 _CURRENCY_SYMBOL_AMOUNT_RE = re.compile(r"\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)")
 _CURRENCY_RE = re.compile(r"\b(USD|EUR|GBP|LKR)\b", re.IGNORECASE)
 _COST_CENTRE_RE = re.compile(
-    r"(?:cost\s*cent(?:re|er)\s*[:\-]?\s*)?(CC[-\s]?\d{2,})",
+    r"cost\s*cent(?:re|er)\s*[:\-]?\s*([A-Z0-9][A-Z0-9_-]{1,24})",
     re.IGNORECASE,
 )
 _POLICY_THRESHOLD_RE = re.compile(
@@ -298,12 +299,47 @@ def extract_entities(extracted: ExtractedDocument, doc_type: str) -> list[Entity
                     merged,
                     seen,
                     entity_type="activity",
-                    value=match.group(1),
+                    value=match.group(1).strip(),
                     source_page=page.page_num,
                     start=match.start(1),
                     end=match.end(1),
                     confidence=0.75,
                 )
+
+    # Broad activity cues for all document types (used by intelligent step selection).
+    for page in pages:
+        text = page.text or ""
+        for match in re.finditer(
+            r"(?:^|\n)\s*(?:step\s+)?\d+\s*[:.)\-]\s*([^\n]{3,160})",
+            text,
+            re.IGNORECASE,
+        ):
+            _add_entity(
+                merged,
+                seen,
+                entity_type="activity",
+                value=match.group(1).strip(),
+                source_page=page.page_num,
+                start=match.start(1),
+                end=match.end(1),
+                confidence=0.72,
+            )
+        for match in re.finditer(
+            r"(?:^|\n)\s*[-*•]\s*((?:submit|approve|create|review|receive|verify|pay|"
+            r"send|prepare|check|validate|issue|confirm|match|authorize|request)\b[^\n]{3,120})",
+            text,
+            re.IGNORECASE,
+        ):
+            _add_entity(
+                merged,
+                seen,
+                entity_type="activity",
+                value=match.group(1).strip(),
+                source_page=page.page_num,
+                start=match.start(1),
+                end=match.end(1),
+                confidence=0.68,
+            )
     return merged
 
 
@@ -330,16 +366,150 @@ def _relation_user_content(
     )
 
 
-def extract_relations(
+def _ordered_activity_names(entities: Sequence[Entity], text: str) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def add(name: str) -> None:
+        cleaned = " ".join((name or "").strip().split())
+        key = cleaned.lower()
+        if not cleaned or key in seen or len(key) < 3:
+            return
+        seen.add(key)
+        names.append(cleaned[:1].upper() + cleaned[1:] if cleaned else cleaned)
+
+    for match in re.finditer(
+        r"(?:^|\n)\s*(?:step\s+)?(\d+)\s*[:.)\-]\s*([^\n]+)",
+        text or "",
+        re.IGNORECASE,
+    ):
+        add(match.group(2))
+    if names:
+        return names
+
+    for entity in entities:
+        if entity.entity_type in {"activity", "task", "step"}:
+            add(entity.value)
+    return names
+
+
+def _fallback_extract_relations(
     extracted: ExtractedDocument,
     entities: list[Entity],
     doc_type: str,
 ) -> list[Relation]:
-    """LLM relation extraction. Document text is never copied into the system prompt."""
-    user_content = _relation_user_content(extracted, entities, doc_type)
-    result = call_llm(
-        AGENT1_RELATION_EXTRACTION_SYSTEM,
-        user_content,
-        RelationExtractionResult,
+    """Deterministic relation extraction when the LLM is offline or unavailable."""
+    text = _joined_text(extracted)
+    activities = _ordered_activity_names(entities, text)
+    relations: list[Relation] = []
+
+    requesters = [entity.value for entity in entities if entity.entity_type == "requester"]
+    requester = requesters[0] if requesters else "Requester"
+    if activities:
+        relations.append(
+            Relation(
+                subject=requester,
+                predicate="actor-performs-task",
+                object=activities[0],
+                source_reference="rules:requester_first_step",
+                confidence=0.68,
+            )
+        )
+
+    for left, right in zip(activities, activities[1:]):
+        relations.append(
+            Relation(
+                subject=left,
+                predicate="task-precedes-task",
+                object=right,
+                source_reference="rules:numbered_step_order",
+                confidence=0.72,
+            )
+        )
+
+    thresholds = [entity.value for entity in entities if entity.entity_type == "policy_threshold"]
+    controlled = next(
+        (name for name in activities if "approv" in name.lower()),
+        activities[1] if len(activities) > 1 else None,
     )
-    return result.relations
+    if thresholds and controlled:
+        relations.append(
+            Relation(
+                subject=f"Policy threshold ({thresholds[0]})",
+                predicate="rule-controls-task",
+                object=controlled,
+                source_reference="rules:policy_threshold_entity",
+                confidence=0.66,
+            )
+        )
+    elif "threshold" in text.lower() and controlled:
+        relations.append(
+            Relation(
+                subject="Policy threshold",
+                predicate="rule-controls-task",
+                object=controlled,
+                source_reference="rules:policy_threshold_text",
+                confidence=0.64,
+            )
+        )
+
+    if not relations and doc_type:
+        relations.append(
+            Relation(
+                subject=requester,
+                predicate="actor-performs-task",
+                object="Submit purchase request",
+                source_reference="rules:minimal_procurement_default",
+                confidence=0.55,
+            )
+        )
+    return relations
+
+
+def extract_relations(
+    extracted: ExtractedDocument,
+    entities: list[Entity],
+    doc_type: str,
+) -> tuple[list[Relation], StageExecutionMeta]:
+    """LLM relation extraction with deterministic offline fallback."""
+    user_content = _relation_user_content(extracted, entities, doc_type)
+    try:
+        result = call_llm(
+            AGENT1_RELATION_EXTRACTION_SYSTEM,
+            user_content,
+            RelationExtractionResult,
+        )
+        confidence = (
+            sum(relation.confidence for relation in result.relations) / len(result.relations)
+            if result.relations
+            else 0.0
+        )
+        return result.relations, StageExecutionMeta(
+            degraded=False,
+            confidence=round(confidence, 4),
+            method="llm",
+        )
+    except LLMUnavailableError:
+        relations = _fallback_extract_relations(extracted, entities, doc_type)
+        confidence = (
+            sum(relation.confidence for relation in relations) / len(relations)
+            if relations
+            else 0.55
+        )
+        return relations, StageExecutionMeta(
+            degraded=True,
+            confidence=round(confidence, 4),
+            method="rules",
+        )
+    except Exception:
+        relations = _fallback_extract_relations(extracted, entities, doc_type)
+        confidence = (
+            sum(relation.confidence for relation in relations) / len(relations)
+            if relations
+            else 0.55
+        )
+        return relations, StageExecutionMeta(
+            degraded=True,
+            confidence=round(confidence, 4),
+            method="rules",
+        )

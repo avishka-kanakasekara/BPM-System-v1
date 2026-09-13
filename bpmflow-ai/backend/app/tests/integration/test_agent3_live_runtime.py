@@ -29,29 +29,26 @@ SAFETY:
 """
 
 import os
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from urllib.parse import urlparse
+from uuid import UUID, uuid4
+
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone, timedelta
-from uuid import UUID, uuid4
-from typing import Optional
-from urllib.parse import urlparse
-import asyncio
-from decimal import Decimal
-
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from httpx import AsyncClient, ASGITransport
 
 import app.core.database as core_database
-from app.core.security import _jwks_cache, _get_jwks_url
-from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AgentMessageMetadata,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-)
 from app.agents.agent3_resources.constants import MessageType
-
+from app.agents.agent3_resources.schemas import (
+    AgentMessageMetadata,
+    AllocationRequest,
+    BudgetResourceRequirement,
+    HumanResourceRequirement,
+)
+from app.core.security import _get_jwks_url, _jwks_cache
 
 # ============================================================================
 # Privacy-Safe Response Diagnostic Helper
@@ -395,7 +392,7 @@ def allocation_request(test_requester_id, correlation_id):
 
     Uses the demo tenant and synthetic HUMAN resource from seed data.
     """
-    task_deadline = datetime.now(timezone.utc).replace(hour=23, minute=59, second=59)
+    task_deadline = datetime.now(UTC).replace(hour=23, minute=59, second=59)
 
     return AllocationRequest(
         metadata=AgentMessageMetadata(
@@ -404,7 +401,7 @@ def allocation_request(test_requester_id, correlation_id):
             task_id=uuid4(),
             tenant_id=DEMO_TENANT_ID,
             message_type=MessageType.RESOURCE_ALLOCATION_REQUEST,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         ),
         human_requirements=HumanResourceRequirement(
             resource_type="HUMAN",
@@ -768,7 +765,7 @@ def test_allocation_request_model_dump_json_is_serializable():
             task_id=uuid4(),
             tenant_id=DEMO_TENANT_ID,
             message_type=MessageType.RESOURCE_ALLOCATION_REQUEST,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         ),
         human_requirements=HumanResourceRequirement(
             resource_type="HUMAN",
@@ -777,7 +774,7 @@ def test_allocation_request_model_dump_json_is_serializable():
             preferred_skills=[],
             required_authority="senior",
             requester_id=uuid4(),
-            task_deadline=datetime.now(timezone.utc),
+            task_deadline=datetime.now(UTC),
             estimated_effort_hours=Decimal("8.0"),
             process_stage="resource_allocation",
         ),
@@ -798,7 +795,7 @@ def test_tenant_mismatch_payload_validates_under_schema():
             task_id=uuid4(),
             tenant_id=DEMO_TENANT_ID,
             message_type=MessageType.RESOURCE_ALLOCATION_REQUEST,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         ),
     )
     dumped = req.model_dump(mode="json")
@@ -811,8 +808,8 @@ def test_tenant_mismatch_payload_validates_under_schema():
 
 def test_tenant_mismatch_via_model_copy():
     """Test tenant mismatch construction using model_copy (not dict mutation)."""
+    from datetime import datetime
     from uuid import uuid4
-    from datetime import datetime, timezone
 
     original_req = AllocationRequest(
         metadata=AgentMessageMetadata(
@@ -821,7 +818,7 @@ def test_tenant_mismatch_via_model_copy():
             task_id=uuid4(),
             tenant_id=DEMO_TENANT_ID,
             message_type=MessageType.RESOURCE_ALLOCATION_REQUEST,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         ),
     )
 
@@ -969,18 +966,21 @@ async def test_tampered_jwt_with_mocked_jwks_returns_401():
     Uses mocked dependencies and mocked JWKS (no network, no DB).
     """
     from unittest.mock import AsyncMock, patch
-    from fastapi import FastAPI
-    from httpx import AsyncClient, ASGITransport
-    from jose import jwk as jose_jwk, jwt as jose_jwt
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.hazmat.primitives import serialization
+
     from cryptography.hazmat.backends import default_backend
-    from app.api.v1.routes_agent3 import router as agent3_router
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from jose import jwk as jose_jwk
+    from jose import jwt as jose_jwt
+
     from app.agents.agent3_resources.api_dependencies import (
         get_allocation_service,
         get_persistence_service,
         get_read_repository,
     )
+    from app.api.v1.routes_agent3 import router as agent3_router
     from app.core import security as sec_mod
 
     private_key = ec.generate_private_key(ec.SECP256R1(), default_backend())
@@ -995,8 +995,8 @@ async def test_tampered_jwt_with_mocked_jwks_returns_401():
         "sub": str(uuid4()),
         "app_metadata": {"tenant_id": str(uuid4())},
         "role": "authenticated",
-        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
-        "iat": int(datetime.now(timezone.utc).timestamp()),
+        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+        "iat": int(datetime.now(UTC).timestamp()),
         "iss": "https://test.supabase.co/auth/v1",
         "aud": "authenticated",
     }
@@ -1098,7 +1098,7 @@ def test_metadata_schema_requires_all_fields():
         task_id=uuid4(),
         tenant_id=uuid4(),
         message_type=MessageType.RESOURCE_ALLOCATION_REQUEST,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
     )
 
     assert hasattr(valid_metadata, "message_id")
@@ -1124,7 +1124,7 @@ def test_metadata_rejects_requester_id():
             task_id=uuid4(),
             tenant_id=uuid4(),
             message_type=MessageType.RESOURCE_ALLOCATION_REQUEST,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             requester_id=uuid4(),
         )
 
@@ -1140,7 +1140,7 @@ def test_human_requirement_requires_requester_id():
             mandatory_skills=["python"],
             preferred_skills=[],
             required_authority="senior",
-            task_deadline=datetime.now(timezone.utc),
+            task_deadline=datetime.now(UTC),
             estimated_effort_hours=Decimal("8.0"),
             process_stage="resource_allocation",
         )
@@ -1156,7 +1156,7 @@ def test_budget_requirement_requires_requester_id():
             required_amount=Decimal("1000.00"),
             currency="USD",
             cost_centre="CC-DEMO",
-            task_deadline=datetime.now(timezone.utc),
+            task_deadline=datetime.now(UTC),
             process_stage="resource_allocation",
         )
 
@@ -1386,8 +1386,8 @@ def test_live_runtime_sql_uses_migration_0004_table_names():
     - Ensures all references match migration-0004 table names
     - Prevents regression to obsolete table names
     """
-    import re
     import inspect
+    import re
 
     # Get the source code of this test file
     source = inspect.getsource(inspect.getmodule(test_live_runtime_sql_uses_migration_0004_table_names))
@@ -1486,7 +1486,7 @@ async def test_cross_tenant_recommendation_lookup_returns_404(
 
     Uses current strict Pydantic schemas and model_dump(mode="json").
     """
-    task_deadline = datetime.now(timezone.utc).replace(hour=23, minute=59, second=59)
+    task_deadline = datetime.now(UTC).replace(hour=23, minute=59, second=59)
 
     req = AllocationRequest(
         metadata=AgentMessageMetadata(
@@ -1495,7 +1495,7 @@ async def test_cross_tenant_recommendation_lookup_returns_404(
             task_id=uuid4(),
             tenant_id=DEMO_TENANT_ID,
             message_type=MessageType.RESOURCE_ALLOCATION_REQUEST,
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         ),
         human_requirements=HumanResourceRequirement(
             resource_type="HUMAN",

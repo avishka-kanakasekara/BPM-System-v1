@@ -6,17 +6,28 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.agents.agent4_orchestrator.approval_repository import ApprovalRepository
 from app.agents.agent4_orchestrator.approvals import ApprovalService
-from app.agents.agent4_orchestrator.constants import ApprovalStatus
+from app.agents.agent4_orchestrator.constants import (
+    ApprovalStatus,
+    ExceptionSeverity,
+    ExceptionType,
+)
 from app.agents.agent4_orchestrator.exceptions import (
     ApprovalAlreadyDecidedError,
     ApprovalNotFoundError,
     DatabasePersistenceError,
+    ExecutionEnrichmentError,
 )
+from app.agents.agent4_orchestrator.execution_payload import (
+    build_process_execution_metadata,
+    require_enrich_execute_parameters,
+)
+from app.agents.agent4_orchestrator.repository import ProcessRepository
 from app.agents.agent4_orchestrator.workflow import Agent4Workflow
 from app.api.v1.deps import (
     get_agent4_workflow,
     get_approval_repository,
     get_approval_service,
+    get_process_repository,
 )
 from app.core.security import get_current_user, require_roles
 from app.schemas.approval import (
@@ -34,6 +45,7 @@ NOT_FOUND_DETAIL = "Approval not found"
 ALREADY_DECIDED_DETAIL = "Approval request has already been decided"
 DATABASE_DETAIL = "Database unavailable"
 INTERNAL_DETAIL = "Internal server error"
+ENRICHMENT_DETAIL = "Missing discovery metadata for post-approval dispatch"
 
 
 def _not_found() -> HTTPException:
@@ -82,12 +94,32 @@ async def get_approval(
     return approval_from_record(record)
 
 
+def _execution_payload_for_approval(process, execution: dict | None) -> dict:
+    """Strict enrichment — fails if discovery metadata is incomplete."""
+    raw = dict(execution or {})
+    parameters = raw.get("parameters") if isinstance(raw.get("parameters"), dict) else raw
+    metadata_json = build_process_execution_metadata(process)
+    enriched = require_enrich_execute_parameters(
+        process_id=str(process.id),
+        process_type=getattr(process, "process_type", None),
+        process_name=getattr(process, "name", None),
+        metadata_json=metadata_json,
+        parameters=parameters if isinstance(parameters, dict) else {},
+    )
+    return {
+        "task_type": raw.get("task_type") or "EXECUTE_TASK",
+        "parameters": enriched,
+        **enriched,
+    }
+
+
 @router.post("/{approval_id}/approve", response_model=ApprovalDecisionResponse)
 async def approve_approval(
     approval_id: UUID,
     payload: ApprovalDecisionRequest,
     service: ApprovalService = Depends(get_approval_service),
     workflow: Agent4Workflow = Depends(get_agent4_workflow),
+    repository: ProcessRepository = Depends(get_process_repository),
     current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ApprovalDecisionResponse:
     """Record APPROVED, then continue the workflow.
@@ -102,10 +134,31 @@ async def approve_approval(
             approver_id=current_user.id,
             comments=payload.comments,
         )
+        process = await repository.get_process(result.approval.process_id)
+        try:
+            execution_payload = _execution_payload_for_approval(process, payload.execution)
+        except ExecutionEnrichmentError as exc:
+            await workflow.capture_failure(
+                result.approval.process_id,
+                description=(
+                    "Post-approval dispatch blocked: missing enrichment fields "
+                    + ", ".join(exc.missing_fields)
+                ),
+                severity=ExceptionSeverity.HIGH,
+                exception_type=ExceptionType.SYSTEM_ERROR,
+                task_id=result.approval.task_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "message": ENRICHMENT_DETAIL,
+                    "missing_fields": exc.missing_fields,
+                },
+            ) from exc
         workflow_result = await workflow.apply_approval_outcome(
             result.approval.process_id,
             result.approval,
-            execution_payload=payload.execution,
+            execution_payload=execution_payload,
         )
     except ApprovalNotFoundError as exc:
         raise _not_found() from exc

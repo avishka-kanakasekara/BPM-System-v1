@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -32,7 +33,7 @@ from app.agents.agent3_resources.repositories.table_mapping import (
     SQL_SELECT_WORKLOAD_SNAPSHOTS,
 )
 
-UTC = timezone.utc
+UTC = UTC
 TENANT_A = get_tenant_a_id()
 TENANT_B = get_tenant_b_id()
 REQUESTER = get_requester_id()
@@ -48,19 +49,19 @@ class FakeResult:
     def __init__(self, rows: Sequence[Mapping[str, Any]]):
         self._rows = [FakeRow(row) for row in rows]
 
-    def fetchall(self) -> List[FakeRow]:
+    def fetchall(self) -> list[FakeRow]:
         return self._rows
 
 
 class FakeSession:
     """Records SQL/params and returns canned rows keyed by SQL constant."""
 
-    def __init__(self, responses: Optional[Dict[str, List[Mapping[str, Any]]]] = None):
-        self.executed: List[tuple[str, Dict[str, Any]]] = []
+    def __init__(self, responses: dict[str, list[Mapping[str, Any]]] | None = None):
+        self.executed: list[tuple[str, dict[str, Any]]] = []
         self._responses = responses or {}
         self.closed = False
 
-    async def execute(self, statement, params: Optional[Dict[str, Any]] = None):
+    async def execute(self, statement, params: dict[str, Any] | None = None):
         sql = str(statement)
         bound = dict(params or {})
         self.executed.append((sql, bound))
@@ -78,7 +79,7 @@ def _human_resource_row(
     *,
     tenant_id: UUID = TENANT_A,
     name: str = "Alice",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "id": resource_id,
         "tenant_id": tenant_id,
@@ -91,7 +92,7 @@ def _human_profile_row(
     resource_id: UUID,
     *,
     tenant_id: UUID = TENANT_A,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "tenant_id": tenant_id,
         "resource_id": resource_id,
@@ -105,7 +106,7 @@ def _availability_row(
     resource_id: UUID,
     *,
     tenant_id: UUID = TENANT_A,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "tenant_id": tenant_id,
         "resource_id": resource_id,
@@ -121,7 +122,7 @@ def _workload_row(
     snapshot_at: datetime = EVAL_TS,
     current: Decimal = Decimal("40"),
     maximum: Decimal = Decimal("80"),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "tenant_id": tenant_id,
         "resource_id": resource_id,
@@ -136,7 +137,7 @@ def _budget_resource_row(
     *,
     tenant_id: UUID = TENANT_A,
     name: str = "Ops Budget",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "id": resource_id,
         "tenant_id": tenant_id,
@@ -149,7 +150,7 @@ def _budget_profile_row(
     resource_id: UUID,
     *,
     tenant_id: UUID = TENANT_A,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "tenant_id": tenant_id,
         "resource_id": resource_id,

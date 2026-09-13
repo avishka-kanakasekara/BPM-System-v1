@@ -6,6 +6,7 @@ in `missing_or_contradictory_fields` and leave it empty.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from io import BytesIO
 from pathlib import Path
@@ -29,6 +30,7 @@ from app.agents.agent1_discovery.persistence import persist_discovery
 from app.agents.agent1_discovery.process_mining import analyze_event_log
 from app.agents.agent1_discovery.schemas import (
     Entity,
+    ExtractedDocument,
     ProcessActivity,
     ProcessDependency,
     ProcessException,
@@ -36,7 +38,11 @@ from app.agents.agent1_discovery.schemas import (
     ProcessMiningResult,
     ProcessRule,
     Relation,
+    StageExecutionMeta,
+    StepSelectionResult,
 )
+from app.agents.agent1_discovery.step_selection import select_process_steps
+from app.agents.agent4_orchestrator.risk_facts import RiskFacts, validate_risk_facts
 from app.core.logging import get_logger
 from app.schemas.agent_message import AgentMessageStatus, DiscoveryAgentMessage, EvidenceReference
 
@@ -79,10 +85,89 @@ def _lookup_duration(activity: str, waiting: dict[str, float]) -> float | None:
     return None
 
 
+def _lookup_count(activity: str, counts: dict[str, int]) -> int | None:
+    if not counts:
+        return None
+    if activity in counts:
+        return counts[activity]
+    wanted = _norm(activity)
+    for name, value in counts.items():
+        if _norm(name) == wanted:
+            return value
+    return None
+
+
+_DURATION_HINT_RE = re.compile(
+    r"(?P<activity>.+?)\s+(?:takes?|typically|usually|about|around|within)\s+"
+    r"(?P<amount>\d+(?:\.\d+)?)\s*(?P<unit>minutes?|mins?|hours?|hrs?|days?|weeks?)",
+    flags=re.IGNORECASE,
+)
+
+
+def _hours_from_amount_unit(amount: float, unit: str) -> float:
+    u = unit.lower()
+    if u.startswith("min"):
+        return round(amount / 60.0, 4)
+    if u.startswith("hour") or u.startswith("hr"):
+        return round(amount, 4)
+    if u.startswith("day"):
+        return round(amount * 24.0, 4)
+    if u.startswith("week"):
+        return round(amount * 24.0 * 7.0, 4)
+    return round(amount, 4)
+
+
+def _estimated_durations_from_text(
+    entities: list[Entity],
+    relations: list[Relation],
+) -> dict[str, tuple[float, str]]:
+    """Pull explicit duration phrases from evidence text. Never invent values."""
+    snippets: list[str] = []
+    for entity in entities:
+        if entity.value:
+            snippets.append(entity.value)
+    for relation in relations:
+        snippets.append(
+            f"{relation.subject} {relation.predicate} {relation.object}".replace("-", " ")
+        )
+        if relation.source_reference:
+            snippets.append(relation.source_reference)
+
+    found: dict[str, tuple[float, str]] = {}
+    for snippet in snippets:
+        text = " ".join(str(snippet).split())
+        if not text:
+            continue
+        for match in _DURATION_HINT_RE.finditer(text):
+            activity = match.group("activity").strip(" :-,\t")
+            amount = float(match.group("amount"))
+            unit = match.group("unit")
+            hours = _hours_from_amount_unit(amount, unit)
+            note = f"Estimated from evidence text: “{match.group(0).strip()}”"
+            key = _norm(activity)
+            if key and key not in found:
+                found[key] = (hours, note)
+    return found
+
+
+def _estimate_for_activity(
+    activity: str,
+    estimates: dict[str, tuple[float, str]],
+) -> tuple[float, str] | None:
+    wanted = _norm(activity)
+    if wanted in estimates:
+        return estimates[wanted]
+    for key, value in estimates.items():
+        if key and (key in wanted or wanted in key):
+            return value
+    return None
+
+
 def build_process_json(
     entities: list[Entity],
     relations: list[Relation],
     mining_result: ProcessMiningResult,
+    step_selection: StepSelectionResult | None = None,
 ) -> ProcessJSON:
     missing: list[str] = []
 
@@ -91,13 +176,24 @@ def build_process_json(
         for entity in entities
         if entity.entity_type in {"process", "process_name", "process_title"}
     ]
+    if step_selection and step_selection.process_name:
+        name_values.insert(0, step_selection.process_name)
     process_name, name_conflict = _unique_or_conflict(name_values)
     if name_conflict:
         missing.append("process_name (contradictory evidence)")
     elif process_name is None:
         missing.append("process_name")
 
+    # Priority for required steps:
+    # 1) Event-log most frequent variant (measured process mining)
+    # 2) Intelligent document step selection
+    # 3) Relation-derived task names
+    # 4) Activity entities extracted from text
     activity_names = list(mining_result.most_frequent_variant)
+    step_source = "event_log_variant" if activity_names else None
+    if not activity_names and step_selection and step_selection.steps:
+        activity_names = [step.name for step in step_selection.steps if step.required]
+        step_source = "intelligent_document_selection"
     if not activity_names:
         from_relations: list[str] = []
         seen: set[str] = set()
@@ -113,8 +209,24 @@ def build_process_json(
                     seen.add(key)
                     from_relations.append(name)
         activity_names = from_relations
+        if activity_names:
+            step_source = "relation_hints"
+    if not activity_names:
+        from_entities: list[str] = []
+        seen_entities: set[str] = set()
+        for entity in entities:
+            if entity.entity_type not in {"activity", "task", "step"}:
+                continue
+            key = _norm(entity.value)
+            if key and key not in seen_entities:
+                seen_entities.add(key)
+                from_entities.append(entity.value.strip())
+        activity_names = from_entities
+        if activity_names:
+            step_source = "activity_entities"
     if not activity_names:
         missing.append("activities")
+        step_source = "none"
 
     actors_by_task: dict[str, list[str]] = defaultdict(list)
     rules_by_task: dict[str, list[Relation]] = defaultdict(list)
@@ -123,11 +235,20 @@ def build_process_json(
             actors_by_task[_norm(relation.object)].append(relation.subject)
         elif relation.predicate == "rule-controls-task":
             rules_by_task[_norm(relation.object)].append(relation)
+    if step_selection:
+        for step in step_selection.steps:
+            if step.actor_hint:
+                actors_by_task[_norm(step.name)].append(step.actor_hint)
 
     systems = [entity.value for entity in entities if entity.entity_type == "system"]
     _, system_conflict = _unique_or_conflict(systems)
     if system_conflict:
         missing.append("system (contradictory evidence)")
+
+    text_estimates = _estimated_durations_from_text(entities, relations)
+    rework_set = {_norm(name) for name in mining_result.rework_activities}
+    main_path_set = {_norm(name) for name in mining_result.most_frequent_variant}
+    total_cases = mining_result.total_cases
 
     activities: list[ProcessActivity] = []
     filled_slots = 0
@@ -147,10 +268,24 @@ def build_process_json(
         missing.append(f"activities.{name}.system")
 
         duration = _lookup_duration(name, mining_result.avg_waiting_time_per_activity)
-        if duration is None:
-            missing.append(f"activities.{name}.avg_duration")
-        else:
+        duration_source: str | None = None
+        duration_note: str | None = None
+        if duration is not None:
+            duration_source = "measured"
+            duration_note = "Measured from event-log timestamps (average wait before this step)."
             filled_slots += 1
+        else:
+            estimated = _estimate_for_activity(name, text_estimates)
+            if estimated is not None:
+                duration, duration_note = estimated
+                duration_source = "estimated_text"
+                filled_slots += 1
+            else:
+                duration_source = "unavailable"
+                duration_note = (
+                    "No timestamps or explicit duration phrase found for this step."
+                )
+                missing.append(f"activities.{name}.avg_duration")
 
         controlling = rules_by_task.get(key, [])
         entry = [rel.subject for rel in controlling]
@@ -162,6 +297,12 @@ def build_process_json(
         # Exit conditions are not implied by precedes/performs relations.
         missing.append(f"activities.{name}.exit_conditions")
 
+        event_count = _lookup_count(name, mining_result.activity_event_counts)
+        case_count = _lookup_count(name, mining_result.activity_case_counts)
+        case_coverage = None
+        if case_count is not None and total_cases > 0:
+            case_coverage = round(case_count / total_cases, 4)
+
         activities.append(
             ProcessActivity(
                 name=name,
@@ -170,6 +311,13 @@ def build_process_json(
                 avg_duration=duration,
                 entry_conditions=entry,
                 exit_conditions=[],
+                duration_source=duration_source,
+                duration_note=duration_note,
+                occurrence_count=event_count,
+                case_count=case_count,
+                case_coverage=case_coverage,
+                on_main_path=(key in main_path_set) if main_path_set else True,
+                is_rework=key in rework_set,
             )
         )
 
@@ -195,7 +343,27 @@ def build_process_json(
         if relation.predicate == "task-precedes-task"
     ]
     if not dependencies and len(activity_names) > 1:
-        missing.append("dependencies")
+        # Fall back to sequential order from the selected/main path when mining has a
+        # variant or intelligent selection ordered the steps, but document relations
+        # did not spell out precedes links.
+        ordered_path = list(mining_result.most_frequent_variant)
+        if not ordered_path and step_selection and step_selection.steps:
+            ordered_path = [step.name for step in step_selection.steps if step.required]
+        if len(ordered_path) > 1:
+            for left, right in zip(ordered_path, ordered_path[1:]):
+                dependencies.append(
+                    ProcessDependency(
+                        predecessor=left,
+                        successor=right,
+                        source_reference=(
+                            "most_frequent_variant"
+                            if mining_result.most_frequent_variant
+                            else "intelligent_step_selection"
+                        ),
+                    )
+                )
+        else:
+            missing.append("dependencies")
 
     exceptions: list[ProcessException] = []
     for activity in mining_result.rework_activities:
@@ -218,14 +386,23 @@ def build_process_json(
 
     fill_rate = (filled_slots / total_slots) if total_slots else 0.0
     structure_parts = [
-        1.0 if mining_result.most_frequent_variant else 0.0,
+        1.0 if activity_names else 0.0,
         1.0 if dependencies else 0.0,
         fill_rate,
     ]
+    if step_selection and step_selection.steps:
+        structure_parts.append(
+            _mean([step.confidence for step in step_selection.steps])
+        )
     confidence = {
         "entities": _mean([entity.confidence for entity in entities]),
         "relations": _mean([relation.confidence for relation in relations]),
         "process_structure": _mean(structure_parts),
+        "step_selection": (
+            _mean([step.confidence for step in step_selection.steps])
+            if step_selection and step_selection.steps
+            else 0.0
+        ),
     }
 
     # Preserve order while dropping duplicate gap labels.
@@ -236,6 +413,49 @@ def build_process_json(
             seen_missing.add(item)
             deduped_missing.append(item)
 
+    measured = sum(1 for a in activities if a.duration_source == "measured")
+    estimated = sum(1 for a in activities if a.duration_source == "estimated_text")
+    analytics = {
+        "timing_available": bool(mining_result.timing_available),
+        "total_cases": mining_result.total_cases,
+        "total_events": mining_result.total_events,
+        "steps_with_measured_duration": measured,
+        "steps_with_estimated_duration": estimated,
+        "steps_without_duration": max(len(activities) - measured - estimated, 0),
+        "rework_step_count": len(mining_result.rework_activities),
+        "fallback_mode": (
+            "frequency_and_path"
+            if not mining_result.timing_available
+            else "measured_timing"
+        ),
+        "step_selection_source": step_source,
+        "step_selection_summary": (
+            step_selection.selection_summary if step_selection else None
+        ),
+        "selected_step_rationales": (
+            [
+                {
+                    "name": step.name,
+                    "order": step.order,
+                    "rationale": step.rationale,
+                    "source_reference": step.source_reference,
+                    "confidence": step.confidence,
+                }
+                for step in step_selection.steps
+            ]
+            if step_selection
+            else []
+        ),
+        "rejected_step_candidates": (
+            [
+                {"name": item.name, "reason": item.reason}
+                for item in step_selection.rejected_candidates
+            ]
+            if step_selection
+            else []
+        ),
+    }
+
     return ProcessJSON(
         process_name=process_name,
         activities=activities,
@@ -244,6 +464,7 @@ def build_process_json(
         exceptions=exceptions,
         missing_or_contradictory_fields=deduped_missing,
         confidence=confidence,
+        analytics=analytics,
     )
 
 
@@ -383,7 +604,8 @@ def run_discovery(
 
     Pipeline per file:
     validate_and_ingest → extract_text → classify_document → extract_entities
-    → extract_relations → analyze_event_log (CSV only). Then build_process_json.
+    → extract_relations → analyze_event_log (CSV only) → select_process_steps
+    (documents) → build_process_json.
     """
     logger.info(
         "run_discovery_start",
@@ -415,9 +637,12 @@ def run_discovery(
     all_relations: list[Relation] = []
     evidence_references: list[EvidenceReference] = []
     documents: list[dict[str, Any]] = []
+    extracted_documents: list[ExtractedDocument] = []
+    doc_types: list[str] = []
     mining_result = ProcessMiningResult()
     had_partial_failure = False
     extracted_any = False
+    stage_results: dict[str, StageExecutionMeta] = {}
 
     with TemporaryDirectory(prefix="agent1_ingest_") as staging:
         staging_path = Path(staging)
@@ -511,14 +736,21 @@ def run_discovery(
                 continue
 
             extracted_any = True
+            extracted_documents.append(extracted)
 
             logger.info(
                 "step_start",
                 extra={"step": "classify_document", "file_id": str(ingested.file_id)},
             )
             classification = classify_document(extracted)
+            doc_types.append(classification.doc_type)
             if documents:
                 documents[-1]["doc_type"] = classification.doc_type
+            stage_results[f"classify_document:{ingested.file_id}"] = StageExecutionMeta(
+                degraded=False,
+                confidence=classification.confidence,
+                method="rules",
+            )
             logger.info(
                 "step_end",
                 extra={
@@ -533,7 +765,24 @@ def run_discovery(
                 "step_start",
                 extra={"step": "extract_entities", "doc_type": classification.doc_type},
             )
-            entities = extract_entities(extracted, classification.doc_type)
+            try:
+                entities = extract_entities(extracted, classification.doc_type)
+            except Exception:
+                logger.exception(
+                    "step_failed",
+                    extra={"step": "extract_entities", "file_id": str(ingested.file_id)},
+                )
+                discovery_errors.append(f"extract_entities crashed for {buffered.filename}")
+                had_partial_failure = True
+                entities = []
+            entity_confidence = (
+                _mean([entity.confidence for entity in entities]) if entities else 0.0
+            )
+            stage_results[f"extract_entities:{ingested.file_id}"] = StageExecutionMeta(
+                degraded=False,
+                confidence=entity_confidence,
+                method="rules",
+            )
             logger.info(
                 "step_end",
                 extra={
@@ -548,7 +797,10 @@ def run_discovery(
                 extra={"step": "extract_relations", "entity_count": len(entities)},
             )
             try:
-                relations = extract_relations(extracted, entities, classification.doc_type)
+                relations, relation_meta = extract_relations(
+                    extracted, entities, classification.doc_type
+                )
+                stage_results[f"extract_relations:{ingested.file_id}"] = relation_meta
             except Exception:
                 logger.exception(
                     "step_failed",
@@ -557,6 +809,11 @@ def run_discovery(
                 discovery_errors.append(f"extract_relations crashed for {buffered.filename}")
                 had_partial_failure = True
                 relations = []
+                stage_results[f"extract_relations:{ingested.file_id}"] = StageExecutionMeta(
+                    degraded=True,
+                    confidence=0.0,
+                    method="failed",
+                )
             logger.info(
                 "step_end",
                 extra={"step": "extract_relations", "relation_count": len(relations)},
@@ -578,6 +835,11 @@ def run_discovery(
                     discovery_errors.append(f"analyze_event_log crashed for {buffered.filename}")
                     had_partial_failure = True
                 else:
+                    stage_results["analyze_event_log"] = StageExecutionMeta(
+                        degraded=False,
+                        confidence=0.95 if mining_result.most_frequent_variant else 0.5,
+                        method="pm4py",
+                    )
                     logger.info(
                         "step_end",
                         extra={
@@ -587,6 +849,52 @@ def run_discovery(
                             "exception_count": len(mining_result.flagged_exceptions),
                         },
                     )
+
+    logger.info(
+        "step_start",
+        extra={
+            "step": "select_process_steps",
+            "entity_count": len(all_entities),
+            "relation_count": len(all_relations),
+            "has_event_log_variant": bool(mining_result.most_frequent_variant),
+            "extracted_docs": len(extracted_documents),
+        },
+    )
+    step_selection: StepSelectionResult | None = None
+    if not mining_result.most_frequent_variant:
+        try:
+            step_selection, selection_meta = select_process_steps(
+                extracted_documents,
+                all_entities,
+                all_relations,
+                doc_types=doc_types,
+            )
+            stage_results["select_process_steps"] = selection_meta
+        except Exception:
+            logger.exception("step_failed", extra={"step": "select_process_steps"})
+            discovery_errors.append("select_process_steps crashed")
+            had_partial_failure = True
+            step_selection = None
+            stage_results["select_process_steps"] = StageExecutionMeta(
+                degraded=True,
+                confidence=0.0,
+                method="failed",
+            )
+    else:
+        stage_results["select_process_steps"] = StageExecutionMeta(
+            degraded=False,
+            confidence=0.95,
+            method="event_log_variant",
+        )
+    logger.info(
+        "step_end",
+        extra={
+            "step": "select_process_steps",
+            "selected_count": len(step_selection.steps) if step_selection else 0,
+            "summary": step_selection.selection_summary if step_selection else None,
+            "skipped_for_event_log": bool(mining_result.most_frequent_variant),
+        },
+    )
 
     logger.info(
         "step_start",
@@ -602,7 +910,41 @@ def run_discovery(
             "No document produced extracted text; ProcessJSON was built from empty evidence"
         )
         had_partial_failure = True
-    process = build_process_json(all_entities, all_relations, mining_result)
+    process = build_process_json(
+        all_entities,
+        all_relations,
+        mining_result,
+        step_selection=step_selection,
+    )
+    joined_text = "\n".join(
+        page.text or ""
+        for doc in extracted_documents
+        for page in (doc.pages or [])
+    )
+    pipeline_degraded = any(meta.degraded for meta in stage_results.values())
+    try:
+        risk_facts_model = RiskFacts.from_discovery(
+            all_entities,
+            doc_types=doc_types,
+            joined_text=joined_text,
+            degraded=pipeline_degraded,
+        )
+        risk_facts = validate_risk_facts(risk_facts_model.model_dump(mode="json")).model_dump(
+            mode="json"
+        )
+    except Exception:
+        logger.exception("step_failed", extra={"step": "extract_risk_facts"})
+        discovery_errors.append("extract_risk_facts crashed")
+        had_partial_failure = True
+        risk_facts = RiskFacts(degraded=True, confidence=0.0).model_dump(mode="json")
+    process.analytics = {
+        **(process.analytics or {}),
+        "risk_facts": risk_facts,
+        "discovery_stages": {
+            name: meta.model_dump(mode="json") for name, meta in stage_results.items()
+        },
+        "degraded": pipeline_degraded,
+    }
     logger.info(
         "step_end",
         extra={
@@ -612,6 +954,7 @@ def run_discovery(
             "rule_count": len(process.rules),
             "dependency_count": len(process.dependencies),
             "missing_count": len(process.missing_or_contradictory_fields),
+            "risk_purchase_amount": risk_facts.get("purchase_amount"),
         },
     )
     return _wrap_and_persist(

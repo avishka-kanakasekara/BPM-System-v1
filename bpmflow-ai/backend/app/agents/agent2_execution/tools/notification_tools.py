@@ -5,8 +5,8 @@ Provides send_email, send_reminder, and create_exception tool implementations.
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.communication.schemas import EmailRequest
@@ -25,7 +25,7 @@ from app.agents.agent2_execution.tools.schemas import (
 
 
 async def send_email(
-    session: Optional[AsyncSession], input_data: SendEmailInput
+    session: AsyncSession | None, input_data: SendEmailInput
 ) -> SendEmailOutput:
     """
     Dispatch an outbound email through EmailService.
@@ -51,12 +51,12 @@ async def send_email(
 
 
 async def send_reminder(
-    session: Optional[AsyncSession], input_data: SendReminderInput
+    session: AsyncSession | None, input_data: SendReminderInput
 ) -> SendReminderOutput:
     """
     Dispatch an SLA reminder notification through EmailService.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     service = EmailService(session=session)
     subject = f"SLA Reminder: Task {input_data.task_id} needs attention"
     body = input_data.message or (
@@ -84,12 +84,12 @@ async def send_reminder(
 
 
 async def create_exception(
-    session: Optional[AsyncSession], input_data: CreateExceptionInput
+    session: AsyncSession | None, input_data: CreateExceptionInput
 ) -> CreateExceptionOutput:
     """
     Raise an exception ticket for human supervisor intervention.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     exc_uuid = uuid.uuid4()
     fail_row = Failure(
         id=exc_uuid,

@@ -10,13 +10,13 @@ These tests verify the full integration:
 """
 
 import os
-import pytest
-from uuid import uuid4, UUID
-from unittest.mock import AsyncMock, patch, MagicMock
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
-from fastapi import FastAPI, Depends
-from httpx import AsyncClient, ASGITransport
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
 # Set minimal environment variables for config
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
@@ -24,25 +24,13 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
-from app.core.security import VerifiedPrincipal
 from app.agents.agent3_resources.api_dependencies import (
-    Agent3RequestContext,
     ProductionRequestContextProvider,
-    get_request_context,
     get_allocation_service,
     get_persistence_service,
     get_read_repository,
 )
-from app.agents.agent3_resources.application_service import (
-    PersistentResourceAllocationService,
-)
-from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AgentMessageMetadata,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-)
-
+from app.core.security import VerifiedPrincipal
 
 # ============================================================================
 # End-to-End Component Tests
@@ -63,7 +51,7 @@ class TestEndToEndComponents:
             tenant_id=tenant_id,
             roles=frozenset(["authenticated"]),
             token_role="authenticated",
-            expires_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(UTC),
         )
         
         provider = ProductionRequestContextProvider(principal)
@@ -103,12 +91,12 @@ class TestEndToEndComponents:
             tenant_id=principal_tenant_id,
             roles=frozenset(["authenticated"]),
             token_role="authenticated",
-            expires_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(UTC),
         )
         
         # Create context from principal
         provider = ProductionRequestContextProvider(principal)
-        context = await provider.get_context()
+        await provider.get_context()
         
         # Create a request with different tenant_id
         request_tenant_id = uuid4()
@@ -146,18 +134,18 @@ class TestEndToEndComponents:
         # Create a context with correlation_id
         tenant_id = uuid4()
         user_id = uuid4()
-        correlation_id = uuid4()
+        uuid4()
         
         principal = VerifiedPrincipal(
             user_id=user_id,
             tenant_id=tenant_id,
             roles=frozenset(["authenticated"]),
             token_role="authenticated",
-            expires_at=datetime.now(timezone.utc),
+            expires_at=datetime.now(UTC),
         )
         
         provider = ProductionRequestContextProvider(principal)
-        context = await provider.get_context()
+        await provider.get_context()
         
         # Correlation ID is request-specific, not from auth
         # It should be extracted from request headers in the routes
@@ -195,13 +183,13 @@ class TestIntegrationWithMockedDependencies:
                     
                     app.include_router(agent3_router)
                     
-                    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test"):
                         # Create a valid request
-                        request_data = {
+                        {
                             "metadata": {
                                 "correlation_id": str(uuid4()),
                                 "requester_id": str(uuid4()),
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "timestamp": datetime.now(UTC).isoformat(),
                             },
                             "tenant_id": str(mock_context.tenant_id),
                             "human_resources": [],
@@ -232,7 +220,7 @@ class TestIntegrationWithMockedDependencies:
                 
                 app.include_router(agent3_router)
                 
-                async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test"):
                     # This would require proper mocking of the entire chain
                     # For now, we verify the structure is in place
                     pass

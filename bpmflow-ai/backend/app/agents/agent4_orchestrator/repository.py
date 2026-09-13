@@ -5,10 +5,10 @@ Unit tests use InMemoryProcessRepository or a mocked session.
 When the Postgres pooler is unreachable, list/get/insert fall back to Supabase REST.
 """
 
-from abc import ABC, abstractmethod
 import asyncio
-from datetime import datetime, timezone
-from typing import Dict, List
+import json
+from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -21,7 +21,6 @@ from app.core.supabase_rest import (
     supabase_rest_configured,
     use_supabase_rest_fallback,
 )
-from app.models.audit import AuditLog
 from app.models.process import Process
 from app.schemas.process import ProcessResponse
 
@@ -76,7 +75,7 @@ class ProcessRepository(ABC):
     async def get_transition_history(
         self,
         process_id: UUID | None = None,
-    ) -> List[ProcessStateTransition]:
+    ) -> list[ProcessStateTransition]:
         """Return recorded transitions. Default is empty."""
         return []
 
@@ -102,7 +101,7 @@ class ProcessRepository(ABC):
         """Return a process record for API responses."""
         raise NotImplementedError
 
-    async def list_processes(self) -> List[ProcessResponse]:
+    async def list_processes(self) -> list[ProcessResponse]:
         """Return process records for API list responses."""
         raise NotImplementedError
 
@@ -111,9 +110,9 @@ class InMemoryProcessRepository(ProcessRepository):
     """In-memory stand-in used by unit tests."""
 
     def __init__(self) -> None:
-        self._stages: Dict[UUID, WorkflowStage] = {}
-        self._history: List[ProcessStateTransition] = []
-        self._records: Dict[UUID, ProcessResponse] = {}
+        self._stages: dict[UUID, WorkflowStage] = {}
+        self._history: list[ProcessStateTransition] = []
+        self._records: dict[UUID, ProcessResponse] = {}
 
     async def create_process(
         self,
@@ -143,7 +142,7 @@ class InMemoryProcessRepository(ProcessRepository):
             self._records[process_id] = record.model_copy(
                 update={
                     "current_stage": new_stage,
-                    "updated_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(UTC),
                 }
             )
 
@@ -166,7 +165,7 @@ class InMemoryProcessRepository(ProcessRepository):
     async def get_transition_history(
         self,
         process_id: UUID | None = None,
-    ) -> List[ProcessStateTransition]:
+    ) -> list[ProcessStateTransition]:
         if process_id is None:
             return list(self._history)
         return [item for item in self._history if item.process_id == process_id]
@@ -178,7 +177,7 @@ class InMemoryProcessRepository(ProcessRepository):
         description: str | None = None,
         created_by: UUID | None = None,
     ) -> ProcessResponse:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         process_id = uuid4()
         record = ProcessResponse(
             id=process_id,
@@ -203,7 +202,7 @@ class InMemoryProcessRepository(ProcessRepository):
         stage = self._stages.get(process_id, record.current_stage)
         return record.model_copy(update={"current_stage": stage})
 
-    async def list_processes(self) -> List[ProcessResponse]:
+    async def list_processes(self) -> list[ProcessResponse]:
         items = []
         for process_id, record in self._records.items():
             stage = self._stages.get(process_id, record.current_stage)
@@ -257,7 +256,7 @@ class SqlAlchemyProcessRepository(ProcessRepository):
         try:
             process = await self._get_process(process_id)
             process.current_stage = new_stage.value
-            process.updated_at = datetime.now(timezone.utc)
+            process.updated_at = datetime.now(UTC)
         except ProcessNotFoundError:
             raise
         except DatabasePersistenceError:
@@ -294,19 +293,15 @@ class SqlAlchemyProcessRepository(ProcessRepository):
             )
             return transition
         try:
+            from app.core.audit_writer import bpm_audit_orm
+
             self._session.add(
-                AuditLog(
-                    id=uuid4(),
+                bpm_audit_orm(
                     entity_type=AUDIT_ENTITY_PROCESS,
                     entity_id=process_id,
                     action=AUDIT_ACTION_UPDATED,
-                    performed_by=None,
                     old_values={"current_stage": from_stage.value},
-                    new_values={
-                        "current_stage": to_stage.value,
-                        "reason": reason,
-                    },
-                    timestamp=datetime.now(timezone.utc),
+                    new_values={"current_stage": to_stage.value, "reason": reason},
                 )
             )
         except Exception as exc:
@@ -361,7 +356,7 @@ class SqlAlchemyProcessRepository(ProcessRepository):
                 created_by,
             )
         try:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             process = Process(
                 id=uuid4(),
                 name=name,
@@ -413,7 +408,7 @@ class SqlAlchemyProcessRepository(ProcessRepository):
                 f"Failed to load process {process_id}"
             ) from exc
 
-    async def list_processes(self) -> List[ProcessResponse]:
+    async def list_processes(self) -> list[ProcessResponse]:
         if self._prefer_rest():
             return await asyncio.to_thread(_list_processes_rest)
         try:
@@ -466,9 +461,32 @@ def process_from_orm(process: Process) -> ProcessResponse:
     )
 
 
+def _merge_discovery_metadata(row: dict) -> dict | None:
+    """Unify metadata_json, process_json column, and legacy description JSON."""
+    meta: dict = {}
+    raw_meta = row.get("metadata_json")
+    if isinstance(raw_meta, dict):
+        meta.update(raw_meta)
+    process_json = row.get("process_json")
+    if isinstance(process_json, dict) and process_json:
+        meta.setdefault("process_json", process_json)
+    description = row.get("description")
+    if isinstance(description, str) and description.strip().startswith("{"):
+        try:
+            parsed = json.loads(description)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            if isinstance(parsed.get("process_json"), dict):
+                meta.setdefault("process_json", parsed["process_json"])
+            for key in ("discovery_status", "overall_confidence", "trace_id", "documents"):
+                if key in parsed and key not in meta:
+                    meta[key] = parsed[key]
+    return meta or None
+
+
 def process_from_rest(row: dict) -> ProcessResponse:
     """Map a PostgREST processes row to ProcessResponse."""
-    meta = row.get("metadata_json")
     return ProcessResponse.model_validate(
         {
             "id": row["id"],
@@ -481,16 +499,16 @@ def process_from_rest(row: dict) -> ProcessResponse:
             "created_by": row.get("created_by"),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
-            "metadata_json": meta if isinstance(meta, dict) else None,
+            "metadata_json": _merge_discovery_metadata(row),
         }
     )
 
 
-def _list_processes_rest() -> List[ProcessResponse]:
+def _list_processes_rest() -> list[ProcessResponse]:
     rows = rest_select(
         "processes",
         {
-            "select": "id,name,description,process_type,status,version,created_by,created_at,updated_at,current_stage,metadata_json",
+            "select": "id,name,description,process_type,status,version,created_by,created_at,updated_at,current_stage,metadata_json,process_json",
             "order": "created_at.desc",
         },
     )
@@ -502,7 +520,7 @@ def _get_process_rest(process_id: UUID) -> ProcessResponse:
         "processes",
         {
             "id": f"eq.{process_id}",
-            "select": "id,name,description,process_type,status,version,created_by,created_at,updated_at,current_stage,metadata_json",
+            "select": "id,name,description,process_type,status,version,created_by,created_at,updated_at,current_stage,metadata_json,process_json",
             "limit": "1",
         },
     )
@@ -540,7 +558,7 @@ def _update_process_stage_rest(process_id: UUID, new_stage: WorkflowStage) -> No
         {"id": f"eq.{process_id}"},
         {
             "current_stage": new_stage.value,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         },
     )
 
@@ -551,16 +569,12 @@ def _record_transition_rest(
     to_stage: WorkflowStage,
     reason: str,
 ) -> None:
-    rest_insert(
-        "audit_logs",
-        {
-            "entity_type": AUDIT_ENTITY_PROCESS,
-            "entity_id": str(process_id),
-            "action": AUDIT_ACTION_UPDATED,
-            "old_values": {"current_stage": from_stage.value},
-            "new_values": {
-                "current_stage": to_stage.value,
-                "reason": reason,
-            },
-        },
+    from app.core.audit_writer import write_bpm_audit_rest
+
+    write_bpm_audit_rest(
+        entity_type=AUDIT_ENTITY_PROCESS,
+        entity_id=process_id,
+        action=AUDIT_ACTION_UPDATED,
+        old_values={"current_stage": from_stage.value},
+        new_values={"current_stage": to_stage.value, "reason": reason},
     )

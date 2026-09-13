@@ -6,7 +6,7 @@ across historical execution records.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.analytics import cycle_time, event_analyzer
@@ -17,12 +17,12 @@ class AnomalyAnalysis:
     total_cases_analyzed: int
     outlier_count: int
     outlier_percentage: float
-    outlier_case_ids: List[str] = field(default_factory=list)
+    outlier_case_ids: list[str] = field(default_factory=list)
     threshold_hours: float = 0.0
 
 
 async def detect_anomalies(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
 ) -> AnomalyAnalysis:
     """
     Detect process instance duration outliers using 2-sigma statistical threshold.

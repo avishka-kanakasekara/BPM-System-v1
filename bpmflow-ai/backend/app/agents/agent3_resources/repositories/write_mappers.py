@@ -5,28 +5,23 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import UUID, uuid4
 
+from ..constants import SCHEMA_VERSION
 from ..schemas import (
-    AllocationRequest,
     AllocationRecommendation,
-    HumanResourceRequirement,
+    AllocationRequest,
     BudgetResourceRequirement,
-    RequirementResult,
-    RankedCandidate,
+    BudgetValidationChecks,
     ExcludedResource,
     ExclusionReasonEntry,
-    ResourceGap,
-    ResourceAlternative,
-    BudgetValidationChecks,
-    AgentMessageMetadata,
+    HumanResourceRequirement,
+    RankedCandidate,
     RecommendationStatus,
-    ResourceType,
-    GapAlternativeType,
-    GapType,
+    ResourceAlternative,
+    ResourceGap,
 )
-from ..constants import SCHEMA_VERSION
 from .persistence_exceptions import PersistenceValidationError
 
 
@@ -104,7 +99,7 @@ def generate_idempotency_key(request: AllocationRequest) -> str:
 def map_request_to_allocation_request(
     request: AllocationRequest,
     evaluation_timestamp: datetime,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Map AllocationRequest to allocation_requests table row."""
     validate_timezone_aware(evaluation_timestamp, "evaluation_timestamp")
     
@@ -127,7 +122,7 @@ def map_requirement_to_allocation_requirement(
     request_id: UUID,
     tenant_id: UUID,
     sequence_order: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Map requirement to allocation_requirements table row."""
     validate_timezone_aware(requirement.task_deadline, "task_deadline")
     
@@ -150,8 +145,8 @@ def map_recommendation_to_allocation_recommendation(
     request_id: UUID,
     tenant_id: UUID,
     recommendation_version: int,
-    supersedes_recommendation_id: Optional[UUID] = None,
-) -> Dict[str, Any]:
+    supersedes_recommendation_id: UUID | None = None,
+) -> dict[str, Any]:
     """Map AllocationRecommendation to allocation_recommendations table row."""
     # Validate status is allowed
     if recommendation.status not in (
@@ -245,7 +240,7 @@ def map_candidate_to_allocation_candidate(
     requirement_id: UUID,
     tenant_id: UUID,
     candidate_rank: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Map RankedCandidate to allocation_candidates table row."""
     if candidate.available_from:
         validate_timezone_aware(candidate.available_from, "available_from")
@@ -279,7 +274,7 @@ def map_exclusion_to_allocation_exclusion(
     request_id: UUID,
     requirement_id: UUID,
     tenant_id: UUID,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Map ExcludedResource to allocation_exclusions table row."""
     return {
         "id": uuid4(),
@@ -297,7 +292,7 @@ def map_exclusion_reason_to_allocation_exclusion_reason(
     exclusion_id: UUID,
     tenant_id: UUID,
     sequence_order: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Map ExclusionReasonEntry to allocation_exclusion_reasons table row."""
     return {
         "tenant_id": tenant_id,
@@ -314,8 +309,8 @@ def map_gap_to_resource_gap(
     recommendation_id: UUID,
     request_id: UUID,
     tenant_id: UUID,
-    requirement_id: Optional[UUID] = None,
-) -> Dict[str, Any]:
+    requirement_id: UUID | None = None,
+) -> dict[str, Any]:
     """Map ResourceGap to resource_gaps table row."""
     return {
         "id": uuid4(),
@@ -337,7 +332,7 @@ def map_alternative_to_resource_alternative(
     recommendation_id: UUID,
     tenant_id: UUID,
     sequence_order: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Map ResourceAlternative to resource_alternatives table row."""
     return {
         "tenant_id": tenant_id,
@@ -359,7 +354,7 @@ def map_budget_validation_to_budget_validation_result(
     requirement_id: UUID,
     tenant_id: UUID,
     resource_id: UUID,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Map BudgetValidationChecks to budget_validation_results table row."""
     return {
         "tenant_id": tenant_id,
@@ -380,13 +375,13 @@ def map_budget_validation_to_budget_validation_result(
 
 def map_evidence_link_to_recommendation_evidence_link(
     evidence_key: str,
-    evidence_reference_id: Optional[UUID],
-    resource_id: Optional[UUID],
+    evidence_reference_id: UUID | None,
+    resource_id: UUID | None,
     link_type: str,
     recommendation_id: UUID,
     tenant_id: UUID,
     sequence_order: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Map evidence reference to recommendation_evidence_links table row."""
     return {
         "tenant_id": tenant_id,
@@ -403,7 +398,7 @@ def map_evidence_link_to_recommendation_evidence_link(
 # Read-back mapping (Database → Domain)
 # ============================================================================
 
-def map_row_to_recommendation_header(row: Dict[str, Any]) -> Dict[str, Any]:
+def map_row_to_recommendation_header(row: dict[str, Any]) -> dict[str, Any]:
     """Map database row to recommendation header dictionary."""
     return {
         "id": row["id"],
@@ -425,7 +420,7 @@ def map_row_to_recommendation_header(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def map_row_to_request_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
+def map_row_to_request_metadata(row: dict[str, Any]) -> dict[str, Any]:
     """Map database row to request metadata dictionary."""
     return {
         "id": row["id"],
@@ -439,7 +434,7 @@ def map_row_to_request_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def map_row_to_candidate(row: Dict[str, Any]) -> Dict[str, Any]:
+def map_row_to_candidate(row: dict[str, Any]) -> dict[str, Any]:
     """Map database row to candidate dictionary."""
     return {
         "requirement_id": row["requirement_id"],
@@ -459,7 +454,7 @@ def map_row_to_candidate(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def map_row_to_exclusion_with_reasons(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def map_row_to_exclusion_with_reasons(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Map database rows to exclusion with reasons dictionary."""
     if not rows:
         return {}
@@ -484,7 +479,7 @@ def map_row_to_exclusion_with_reasons(rows: List[Dict[str, Any]]) -> Dict[str, A
     }
 
 
-def map_row_to_gap(row: Dict[str, Any]) -> Dict[str, Any]:
+def map_row_to_gap(row: dict[str, Any]) -> dict[str, Any]:
     """Map database row to gap dictionary."""
     return {
         "id": row["id"],
@@ -497,7 +492,7 @@ def map_row_to_gap(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def map_row_to_alternative(row: Dict[str, Any]) -> Dict[str, Any]:
+def map_row_to_alternative(row: dict[str, Any]) -> dict[str, Any]:
     """Map database row to alternative dictionary."""
     return {
         "gap_id": row["gap_id"],
@@ -510,7 +505,7 @@ def map_row_to_alternative(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def map_row_to_budget_validation(row: Dict[str, Any]) -> Dict[str, Any]:
+def map_row_to_budget_validation(row: dict[str, Any]) -> dict[str, Any]:
     """Map database row to budget validation dictionary."""
     return {
         "requirement_id": row["requirement_id"],
@@ -526,7 +521,7 @@ def map_row_to_budget_validation(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def map_row_to_evidence_link(row: Dict[str, Any]) -> Dict[str, Any]:
+def map_row_to_evidence_link(row: dict[str, Any]) -> dict[str, Any]:
     """Map database row to evidence link dictionary."""
     return {
         "resource_id": row["resource_id"],

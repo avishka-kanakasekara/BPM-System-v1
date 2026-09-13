@@ -29,11 +29,10 @@ async def ensure_database_schema() -> str:
     Returns the dialect name of the live backend, or "none".
     """
     # Import inside the function so ORM metadata is fully registered first.
+    import app.agents.agent2_execution.database.models  # noqa: F401
+    import app.models  # noqa: F401  (register canonical models)
     from app.core.database import Base as CoreBase
     from app.models.base import Base as ModelsBase
-
-    import app.models  # noqa: F401  (register canonical models)
-    import app.agents.agent2_execution.database.models  # noqa: F401
 
     try:
         engine = get_engine()

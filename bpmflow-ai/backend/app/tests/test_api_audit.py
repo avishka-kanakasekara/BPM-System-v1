@@ -1,6 +1,6 @@
 """API tests for AUDIT endpoints. No live Supabase database is required."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -19,7 +19,7 @@ from app.api.v1.deps import get_audit_repository
 from app.main import app
 from app.tests.auth_helpers import override_current_user
 
-UTC = timezone.utc
+UTC = UTC
 BASE_TIME = datetime(2026, 1, 15, 12, 0, 0, tzinfo=UTC)
 
 

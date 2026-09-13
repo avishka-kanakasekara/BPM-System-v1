@@ -1,7 +1,6 @@
 """API schemas for approval resources."""
 
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -15,16 +14,16 @@ class ApprovalResponse(BaseModel):
 
     id: UUID
     process_id: UUID
-    task_id: Optional[UUID] = None
-    requested_by: Optional[UUID] = None
-    approver_id: Optional[UUID] = None
+    task_id: UUID | None = None
+    requested_by: UUID | None = None
+    approver_id: UUID | None = None
     status: ApprovalStatus
     risk_level: RiskLevel
     reason: str = Field(min_length=1)
-    decision: Optional[ApprovalStatus] = None
-    comments: Optional[str] = None
+    decision: ApprovalStatus | None = None
+    comments: str | None = None
     created_at: datetime
-    decided_at: Optional[datetime] = None
+    decided_at: datetime | None = None
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -34,8 +33,8 @@ class ApprovalDecisionRequest(BaseModel):
     Agent 2 when the decision is APPROVED (task_type, parameters, ...).
     """
 
-    comments: Optional[str] = None
-    execution: Optional[dict] = None
+    comments: str | None = None
+    execution: dict | None = None
 
 
 class ApprovalDecisionResponse(BaseModel):
@@ -47,7 +46,7 @@ class ApprovalDecisionResponse(BaseModel):
 
     approval: ApprovalResponse
     decision: ApprovalStatus
-    workflow: Optional[dict] = None
+    workflow: dict | None = None
 
 
 def approval_from_record(record: ApprovalRequestRecord) -> ApprovalResponse:

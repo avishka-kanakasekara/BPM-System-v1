@@ -1,180 +1,110 @@
 # BPMFlow AI
 
-BPMFlow AI is a four-agent, human-supervised agentic AI platform for Business Process Management (BPM). The platform features specialized agents for Process Discovery & Document Intelligence, Workflow Execution with RPA & Process Optimization, Workforce & Resource Allocation, and Orchestrator, Coordination & Risk Analysis. The demonstration scenario covers the end-to-end procurement process from purchase request to completion.
+Four-agent, human-supervised BPM platform: discovery (Agent 1), execution (Agent 2), resource allocation (Agent 3), and orchestration/risk (Agent 4). One FastAPI monolith at `backend/app/main.py` and a React/Vite frontend at `frontend/`.
 
-## Tech Stack
+## Quick start (verified 2026-09-13)
 
-- **Frontend**: React (TypeScript) + Vite + Tailwind CSS
-- **Backend**: Python + FastAPI + Pydantic, SQLAlchemy (async) ORM
-- **Database**: Supabase (managed Postgres + Auth + Storage), pgvector enabled
-- **LLM**: Pluggable OpenAI or Gemini client
-- **Package Managers**: npm (frontend), pip + venv (backend)
+### 1. Backend
 
-## Project Structure
+```bash
+cd bpmflow-ai/backend
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env              # fill SUPABASE_* , DATABASE_URL , GEMINI_API_KEY
+```
+
+Required env (see `backend/.env.example`):
+
+| Variable | Purpose |
+|----------|---------|
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | Auth + REST persistence |
+| `DATABASE_URL` | Postgres pooler (preferred); REST fallback when pooler fails |
+| `GEMINI_API_KEY` | Live LLM; set `GEMINI_OFFLINE=true` for deterministic smoke/tests |
+| `DEMO_TENANT_ID` | Demo tenant UUID for Agent 3 (`00000000-0000-0000-0000-000000000001`) |
+
+Apply migrations (when pooler works):
+
+```bash
+python -m app.scripts.apply_pending_migrations
+python -m app.scripts.seed_demo_tenant
+python -m app.scripts.migration_status
+```
+
+Start API:
+
+```bash
+GEMINI_OFFLINE=true MOCK_LLM=true uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Health: `GET http://127.0.0.1:8000/health/live` · OpenAPI: `/docs`
+
+### 2. Frontend
+
+```bash
+cd bpmflow-ai/frontend
+npm install
+cp .env.example .env.local        # VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
+npm run dev                       # http://localhost:5173 , proxies /api → :8000
+```
+
+### 3. E2E smoke (golden path G1–G8)
+
+With the API running:
+
+```bash
+cd bpmflow-ai/backend
+GEMINI_OFFLINE=true MOCK_LLM=true python -m app.scripts.e2e_smoke
+```
+
+Cold start (migrate + seed + start server + smoke):
+
+```bash
+python -m app.scripts.e2e_smoke --cold-start
+```
+
+Exit code 0 = all gates passed. See `docs/RUNBOOK.md` for troubleshooting.
+
+## Verification commands
+
+```bash
+# Backend (exclude live Gemini quota tests)
+cd backend && pytest app/tests -q \
+  --ignore=app/tests/integration \
+  --ignore=app/tests/agent2_execution/test_gemini_live.py
+
+ruff check app
+mypy app/core/audit_writer.py app/core/middleware.py  # scoped; see pyproject.toml
+
+# Frontend
+cd frontend && npm run build && npm test
+```
+
+Latest run: **914 pytest passed**, **236 Vitest passed**, **e2e_smoke 8/8**.
+
+## Project layout
 
 ```
 bpmflow-ai/
-├── README.md                          # Project documentation
-├── .gitignore                         # Git ignore patterns
-├── docs/                              # Design documentation and API contracts
-│   ├── design-report.md
-│   └── api-contracts/
-│       └── agent-messages.md
-├── supabase/                          # Database migrations and config
-│   ├── config.toml
-│   ├── migrations/
-│   │   └── 0001_init.sql
-│   └── seed.sql
-├── backend/                           # Python FastAPI backend
-│   ├── requirements.txt
-│   ├── .env.example
-│   ├── Dockerfile
-│   └── app/
-│       ├── __init__.py
-│       ├── main.py
-│       ├── core/                      # Core configuration and utilities
-│       │   ├── __init__.py
-│       │   ├── config.py
-│       │   ├── security.py
-│       │   ├── database.py
-│       │   └── logging.py
-│       ├── api/                       # API route handlers
-│       │   ├── __init__.py
-│       │   └── v1/
-│       │       ├── __init__.py
-│       │       ├── router.py
-│       │       ├── routes_process.py
-│       │       ├── routes_agent1.py
-│       │       ├── routes_agent2.py
-│       │       ├── routes_agent3.py
-│       │       ├── routes_agent4.py
-│       │       ├── routes_auth.py
-│       │       └── routes_audit.py
-│       ├── agents/                    # Four AI agent implementations
-│       │   ├── __init__.py
-│       │   ├── agent1_discovery/
-│       │   │   ├── __init__.py
-│       │   │   ├── service.py
-│       │   │   ├── document_parser.py
-│       │   │   ├── extractors.py
-│       │   │   └── schemas.py
-│       │   ├── agent2_execution/
-│       │   │   ├── __init__.py
-│       │   │   ├── service.py
-│       │   │   ├── rpa_tools.py
-│       │   │   ├── kpi_analytics.py
-│       │   │   └── schemas.py
-│       │   ├── agent3_resources/
-│       │   │   ├── __init__.py
-│       │   │   ├── service.py
-│       │   │   ├── retrieval.py
-│       │   │   └── schemas.py
-│       │   └── agent4_orchestrator/
-│       │       ├── __init__.py
-│       │       ├── service.py
-│       │       ├── state_machine.py
-│       │       ├── risk_rules.py
-│       │       └── schemas.py
-│       ├── llm/                       # LLM client integration
-│       │   ├── __init__.py
-│       │   ├── client.py
-│       │   ├── structured_output.py
-│       │   └── prompts/
-│       │       └── __init__.py
-│       ├── ir/                        # Information retrieval (vector store)
-│       │   ├── __init__.py
-│       │   ├── embeddings.py
-│       │   ├── vector_store.py
-│       │   └── reranker.py
-│       ├── models/                    # SQLAlchemy ORM models
-│       │   ├── __init__.py
-│       │   ├── process.py
-│       │   ├── user.py
-│       │   ├── resource.py
-│       │   ├── task.py
-│       │   ├── audit.py
-│       │   └── exception.py
-│       ├── schemas/                   # Pydantic schemas
-│       │   ├── __init__.py
-│       │   ├── agent_message.py
-│       │   └── common.py
-│       └── tests/                     # Backend tests
-│           ├── __init__.py
-│           ├── test_agent1.py
-│           ├── test_agent2.py
-│           ├── test_agent3.py
-│           ├── test_agent4.py
-│           └── test_state_machine.py
-├── frontend/                          # React TypeScript frontend
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── vite.config.ts
-│   ├── tailwind.config.ts
-│   ├── postcss.config.js
-│   ├── index.html
-│   ├── .env.example
-│   ├── public/
-│   │   └── .gitkeep
-│   └── src/
-│       ├── main.tsx
-│       ├── App.tsx
-│       ├── routes/
-│       │   └── index.tsx
-│       ├── pages/                     # Page components
-│       │   ├── RequesterView/index.tsx
-│       │   ├── TaskView/index.tsx
-│       │   ├── ApprovalView/index.tsx
-│       │   ├── ExceptionView/index.tsx
-│       │   └── AuditTraceView/index.tsx
-│       ├── components/                # Reusable components
-│       │   ├── common/.gitkeep
-│       │   └── agents/.gitkeep
-│       ├── features/                  # Feature modules
-│       │   ├── process/.gitkeep
-│       │   ├── resources/.gitkeep
-│       │   ├── approvals/.gitkeep
-│       │   └── exceptions/.gitkeep
-│       ├── services/                  # API and Supabase clients
-│       │   ├── apiClient.ts
-│       │   └── supabaseClient.ts
-│       ├── hooks/.gitkeep
-│       ├── store/.gitkeep
-│       ├── types/.gitkeep
-│       ├── styles/
-│       │   └── tailwind.css
-│       └── utils/.gitkeep
-└── .github/                           # GitHub CI/CD workflows
-    └── workflows/
-        ├── backend-ci.yml
-        └── frontend-ci.yml
+├── backend/app/          # FastAPI monolith (agents 1–4, policy KB, API)
+├── frontend/src/         # React UI (discover, process cockpit, approvals, agent2/3)
+├── supabase/migrations/  # SQL migrations 0001–0014
+├── sample-documents/     # Procurement CSV + DOCX for discovery demo
+└── docs/                 # ARCHITECTURE, API, RUNBOOK, DEMO_SCRIPT, REPAIR_PLAN
 ```
 
-## Agent 1 - Setup
+## Documentation
 
-Agent 1 (Process Discovery & Document Intelligence) is intended to run from `backend/` on its own. Process, auth, and other-agent routers are not mounted yet.
+| Doc | Contents |
+|-----|----------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Runtime architecture (as implemented) |
+| [docs/API.md](docs/API.md) | HTTP surface summary |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Ops, health, migrations, smoke |
+| [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | Procurement UI click path |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production guards |
+| [docs/REPAIR_PLAN.md](docs/REPAIR_PLAN.md) | Defect register + gate status |
+| [docs/CHANGELOG_REPAIR.md](docs/CHANGELOG_REPAIR.md) | Defect resolutions |
 
-1. Copy environment defaults and edit values as needed:
+## Auth
 
-   ```bash
-   cd bpmflow-ai/backend
-   python -m venv venv
-   venv\Scripts\activate          # Windows
-   pip install -r requirements.txt
-   copy .env.example .env         # Windows; use `cp` on macOS/Linux
-   ```
-
-2. Set `DATABASE_URL` to a reachable Postgres instance (or SQLite, e.g. `sqlite:///./bpmflow.db`, for local-only work). Add `ANTHROPIC_API_KEY` when you enable LLM extraction. `MAX_UPLOAD_MB` and `ALLOWED_FILE_TYPES` control document ingestion.
-
-3. Start the API:
-
-   ```bash
-   uvicorn app.main:app --reload --port 8001
-   ```
-
-4. Check `GET http://localhost:8001/health`. Interactive docs: `http://localhost:8001/docs`.
-
-Optional: `python -m spacy download en_core_web_sm` if you want spaCy NER instead of the rule-based extractor.
-
-## Status
-
-This is an empty scaffold. Implementation has not started yet. All files are empty except for `.gitignore` and this `README.md`.
+All `/api/v1/*` routes except `POST /auth/register` require a Supabase JWT (`Authorization: Bearer …`). Development registration auto-confirms email and provisions `public.users` role (`requester` | `approver` | `admin`).

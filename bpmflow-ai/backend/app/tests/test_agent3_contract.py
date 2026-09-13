@@ -1,38 +1,38 @@
 """Tests for Agent 3 schema validation and message contract."""
 
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
 from pydantic import ValidationError
 
-from app.agents.agent3_resources.fixtures import FIXTURE_REFERENCE_TIMESTAMP
 from app.agents.agent3_resources import (
+    AGENT_3_SENDER,
+    AGENT_4_RECEIVER,
+    SCHEMA_VERSION,
     AgentMessageMetadata,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-    AllocationRequest,
     AllocationRecommendation,
-    RecommendationStatus,
-    MessageType,
-    ResourceType,
-    RequirementResult,
-    RankedHumanCandidate,
-    ScoreBreakdown,
+    AllocationRequest,
+    BudgetResourceRequirement,
     BudgetValidationResult,
-    ResourceAllocationService,
-    InMemoryResourceRepository,
     EligibilityEvaluator,
     ExclusionReason,
+    HumanResourceRequirement,
+    InMemoryResourceRepository,
+    MessageType,
+    RankedHumanCandidate,
+    RecommendationStatus,
+    RequirementResult,
+    ResourceAllocationService,
+    ResourceType,
+    ScoreBreakdown,
     create_human_evidence,
     create_human_requirement,
     utc_now,
     validate_timezone_aware,
-    SCHEMA_VERSION,
-    AGENT_3_SENDER,
-    AGENT_4_RECEIVER,
 )
+from app.agents.agent3_resources.fixtures import FIXTURE_REFERENCE_TIMESTAMP
 
 
 def _metadata(**overrides):
@@ -376,7 +376,7 @@ class TestAgent3Contract:
 
     def test_utc_now_is_timezone_aware(self):
         now = utc_now()
-        assert now.tzinfo == timezone.utc
+        assert now.tzinfo == UTC
 
     def test_correlation_id_preservation(self):
         correlation_id = uuid4()

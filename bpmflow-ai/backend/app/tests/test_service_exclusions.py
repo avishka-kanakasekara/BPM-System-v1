@@ -1,23 +1,21 @@
 """Tests for multiple exclusion reasons per resource."""
 
-import pytest
 from datetime import timedelta
 from decimal import Decimal
-from uuid import uuid4
+
+import pytest
 
 pytestmark = pytest.mark.anyio
 
 from app.agents.agent3_resources import (
+    ExclusionReason,
+    HumanResourceRequirement,
     HumanResourceStrategy,
     InMemoryResourceRepository,
-    HumanResourceRequirement,
-    MessageType,
     ResourceType,
-    ExclusionReason,
     create_human_evidence,
     get_requester_id,
     get_resource_id_1,
-    get_tenant_a_id,
     get_tenant_b_id,
 )
 

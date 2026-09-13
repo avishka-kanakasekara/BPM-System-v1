@@ -3,19 +3,16 @@
 Does not change workflow stage, evaluate risk, or create approvals.
 """
 
-from typing import Dict
-from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.messaging.envelope import build_response_envelope
 from app.schemas.agent_message import (
     AGENT_1,
     AGENT_2,
     AGENT_3,
     AGENT_4,
     AgentMessage,
-    AgentMessageMetadata,
-    utc_now,
 )
 
 from .adapters import Agent1Adapter, Agent2Adapter, Agent3Adapter
@@ -26,6 +23,7 @@ from .exceptions import (
     InvalidMessageError,
     UnsupportedAgentError,
 )
+from .message_repository import AgentMessageRepository
 
 KNOWN_AGENTS = frozenset({AGENT_1, AGENT_2, AGENT_3, AGENT_4})
 ROUTABLE_RECEIVERS = frozenset({AGENT_1, AGENT_2, AGENT_3})
@@ -34,16 +32,23 @@ ROUTABLE_RECEIVERS = frozenset({AGENT_1, AGENT_2, AGENT_3})
 class AgentCommunicationService:
     """Validates and routes Agent 4 outbound messages."""
 
-    def __init__(self, adapters: Dict[str, AgentAdapter] | None = None) -> None:
+    def __init__(
+        self,
+        adapters: dict[str, AgentAdapter] | None = None,
+        message_repository: AgentMessageRepository | None = None,
+    ) -> None:
         self._adapters = adapters or {
             AGENT_1: Agent1Adapter(),
             AGENT_2: Agent2Adapter(),
             AGENT_3: Agent3Adapter(),
         }
+        self._message_repository = message_repository
 
     async def send(self, message: AgentMessage) -> AgentMessage:
         """Send a message to the adapter for message.metadata.receiver."""
         self._validate_message(message)
+        if self._message_repository is not None:
+            await self._message_repository.persist_outbound(message)
         receiver = message.metadata.receiver
         adapter = self._adapters.get(receiver)
         if adapter is None:
@@ -58,7 +63,10 @@ class AgentCommunicationService:
                 f"Communication with {receiver} failed"
             ) from exc
 
-        return self._finalize_response(message, response)
+        finalized = build_response_envelope(message, response)
+        if self._message_repository is not None:
+            await self._message_repository.persist_inbound(message, finalized)
+        return finalized
 
     def _validate_message(self, message: AgentMessage) -> None:
         if not isinstance(message, AgentMessage):
@@ -77,32 +85,3 @@ class AgentCommunicationService:
         if receiver not in ROUTABLE_RECEIVERS:
             raise UnsupportedAgentError(receiver)
 
-    def _finalize_response(
-        self,
-        request: AgentMessage,
-        response: AgentMessage,
-    ) -> AgentMessage:
-        if not isinstance(response, AgentMessage):
-            raise CommunicationFailureError("Adapter did not return an AgentMessage")
-        request_id = request.metadata.message_id
-        response_id = response.metadata.message_id
-        if response_id == request_id:
-            response_id = uuid4()
-        return AgentMessage(
-            metadata=AgentMessageMetadata(
-                message_id=response_id,
-                schema_version=response.metadata.schema_version,
-                correlation_id=request.metadata.correlation_id,
-                process_instance_id=request.metadata.process_instance_id,
-                task_id=request.metadata.task_id,
-                tenant_id=request.metadata.tenant_id,
-                sender=request.metadata.receiver,
-                receiver=request.metadata.sender,
-                message_type=response.metadata.message_type,
-                timestamp=utc_now(),
-            ),
-            payload=response.payload,
-            status=response.status,
-            confidence=response.confidence,
-            evidence_refs=response.evidence_refs,
-        )

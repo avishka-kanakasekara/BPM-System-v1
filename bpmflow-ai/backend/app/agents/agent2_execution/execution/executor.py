@@ -7,17 +7,18 @@ Represents the ACT step plus the first half of OBSERVE in the cognitive cycle.
 """
 
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.tools.registry import registry
 
 
 async def execute_tool(
-    session: Optional[AsyncSession],
+    session: AsyncSession | None,
     tool_name: str,
-    parameters: Dict[str, Any],
-) -> Tuple[bool, Dict[str, Any], int, str]:
+    parameters: dict[str, Any],
+) -> tuple[bool, dict[str, Any], int, str]:
     """
     Execute an approved tool call via ToolRegistry.
 

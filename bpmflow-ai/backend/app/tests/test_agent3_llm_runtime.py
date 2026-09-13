@@ -1,30 +1,25 @@
 """Unit and runtime integration tests for Agent 3 optional OpenAI runtime configuration and lifecycle."""
 
-import os
-from dataclasses import dataclass
-from decimal import Decimal
-from typing import Optional
 from uuid import uuid4
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
 from app.agents.agent3_resources import (
     Agent3LLMConfig,
+    AgentMessageMetadata,
+    AllocationRequest,
+    InMemoryResourceRepository,
+    OpenAIExplanationGenerator,
+    RecommendationStatus,
+    ResilientFallbackExplainer,
+    ResourceAllocationService,
+    close_agent3_llm_runtime,
     get_agent3_llm_config,
     get_shared_openai_client,
-    close_agent3_llm_runtime,
+    get_tenant_a_id,
     reset_agent3_llm_runtime,
     set_openai_client_factory,
-    ResilientFallbackExplainer,
-    OpenAIExplanationGenerator,
-    TemplateExplainerAdapter,
-    ResourceAllocationService,
-    AllocationRequest,
-    AgentMessageMetadata,
-    RecommendationStatus,
-    get_tenant_a_id,
-    InMemoryResourceRepository,
 )
 from app.agents.agent3_resources.api_dependencies import get_allocation_service
 from app.main import app
@@ -32,7 +27,7 @@ from app.main import app
 
 # Fake client for runtime testing
 class DummyClient:
-    def __init__(self, key: Optional[str] = None):
+    def __init__(self, key: str | None = None):
         self.key = key
         self.is_closed = False
         self.call_count = 0
@@ -68,8 +63,8 @@ def reset_runtime_state(monkeypatch):
     # from backend/.env (Gemini is preferred when present).
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("GEMINI_OFFLINE", "true")
-    from app.core.config import get_settings
     import app.core.config as config_mod
+    from app.core.config import get_settings
 
     get_settings.cache_clear()
     config_mod.settings = get_settings()
@@ -270,10 +265,9 @@ class TestAgent3LLMRuntime:
     @pytest.mark.asyncio
     async def test_17_llm_exception_still_returns_persists_template_explanation(self, monkeypatch):
         """17. LLM exception still returns/persists template explanation."""
-        from datetime import timedelta
         from app.agents.agent3_resources import (
-            create_human_requirement,
             create_human_evidence,
+            create_human_requirement,
             get_requester_id,
             get_resource_id_1,
             utc_now,

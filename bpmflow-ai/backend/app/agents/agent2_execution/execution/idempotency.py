@@ -7,17 +7,21 @@ Checks execution_receipts for a prior row with that key and status=SUCCESS befor
 If found, short-circuits and returns the existing receipt instead of re-running the tool.
 """
 
-from typing import Optional
+from __future__ import annotations
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.database.models import ExecutionReceipt
 
+# In-memory SUCCESS receipts for tests when session is unavailable.
+_memory_success_receipts: dict[str, ExecutionReceipt] = {}
+
 
 def generate_idempotency_key(process_id: str, task_id: str, action: str) -> str:
     """
     Construct a deterministic idempotency key.
-    
+
     :param process_id: Process instance UUID string
     :param task_id: Task UUID string
     :param action: Action or tool name string
@@ -29,9 +33,21 @@ def generate_idempotency_key(process_id: str, task_id: str, action: str) -> str:
     return f"{p_clean}-{t_clean}-{a_clean}"
 
 
+SIDE_EFFECT_TOOLS = frozenset(
+    {
+        "send_email",
+        "send_reminder",
+        "request_quotation",
+        "create_po_draft",
+        "update_procurement_record",
+        "schedule_escalation",
+    }
+)
+
+
 async def check_existing_receipt(
-    session: Optional[AsyncSession], idempotency_key: str
-) -> Optional[ExecutionReceipt]:
+    session: AsyncSession | None, idempotency_key: str
+) -> ExecutionReceipt | None:
     """
     Check if a successful execution receipt already exists for this idempotency key.
 
@@ -39,8 +55,11 @@ async def check_existing_receipt(
     :param idempotency_key: Target idempotency key
     :return: Existing ExecutionReceipt ORM instance if SUCCESS found; None otherwise.
     """
-    if session is None or not idempotency_key:
+    if not idempotency_key:
         return None
+
+    if session is None:
+        return _memory_success_receipts.get(idempotency_key)
 
     stmt = (
         select(ExecutionReceipt)
@@ -53,3 +72,14 @@ async def check_existing_receipt(
     )
     res = await session.execute(stmt)
     return res.scalar_one_or_none()
+
+
+def register_success_receipt(receipt: ExecutionReceipt) -> None:
+    """Register a SUCCESS receipt in the in-memory idempotency store (tests)."""
+    if receipt.status == "SUCCESS" and receipt.idempotency_key:
+        _memory_success_receipts[receipt.idempotency_key] = receipt
+
+
+def clear_memory_receipts() -> None:
+    """Clear in-memory idempotency store (test isolation)."""
+    _memory_success_receipts.clear()

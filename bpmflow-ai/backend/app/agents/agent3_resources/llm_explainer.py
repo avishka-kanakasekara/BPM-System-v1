@@ -1,10 +1,9 @@
 """LLM Explanation Enhancement module for Agent 3 with deterministic fallback."""
 
-from dataclasses import dataclass, field
 import asyncio
 import re
-from typing import Any, List, Optional, Protocol
-from uuid import UUID
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 from .explainer_template import ExplanationContext, TemplateExplainer
 
@@ -30,7 +29,7 @@ class TemplateExplainerAdapter:
     Retains backward compatibility with the sync TemplateExplainer.
     """
 
-    def __init__(self, template_explainer: Optional[TemplateExplainer] = None):
+    def __init__(self, template_explainer: TemplateExplainer | None = None):
         self._explainer = template_explainer or TemplateExplainer()
 
     async def generate_explanation(self, context: ExplanationContext) -> str:
@@ -77,7 +76,7 @@ class SanitizedBudgetSummary:
     within_authorization_limit: bool
     available_balance: str  # Exact Decimal serialized as string e.g. "50000.00"
     required_amount: str    # Exact Decimal serialized as string e.g. "12000.00"
-    currency: Optional[str] = None  # Allowlisted ISO currency code (e.g. "USD", "EUR")
+    currency: str | None = None  # Allowlisted ISO currency code (e.g. "USD", "EUR")
 
 
 @dataclass
@@ -88,13 +87,13 @@ class SanitizedExclusionSummary:
 
 @dataclass
 class SanitizedExplanationInput:
-    candidates: List[SanitizedCandidateSummary] = field(default_factory=list)
-    human_excluded: List[SanitizedExclusionSummary] = field(default_factory=list)
-    budget: Optional[SanitizedBudgetSummary] = None
-    gaps: List[str] = field(default_factory=list)
-    alternatives: List[str] = field(default_factory=list)
-    limitations: List[str] = field(default_factory=list)
-    confidence_str: Optional[str] = None
+    candidates: list[SanitizedCandidateSummary] = field(default_factory=list)
+    human_excluded: list[SanitizedExclusionSummary] = field(default_factory=list)
+    budget: SanitizedBudgetSummary | None = None
+    gaps: list[str] = field(default_factory=list)
+    alternatives: list[str] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
+    confidence_str: str | None = None
     requires_human_approval: bool = True
 
 
@@ -108,8 +107,8 @@ def sanitize_explanation_context(context: ExplanationContext) -> SanitizedExplan
     - Exact Decimal numeric values are serialized strictly as strings.
     - Multi-currency preserves ISO currency codes without inventing '$'.
     """
-    candidates: List[SanitizedCandidateSummary] = []
-    excluded: List[SanitizedExclusionSummary] = []
+    candidates: list[SanitizedCandidateSummary] = []
+    excluded: list[SanitizedExclusionSummary] = []
 
     if context.human_requirement_result:
         for idx, candidate in enumerate(context.human_requirement_result.eligible_candidates):
@@ -138,7 +137,7 @@ def sanitize_explanation_context(context: ExplanationContext) -> SanitizedExplan
                     )
                 )
 
-    budget_summary: Optional[SanitizedBudgetSummary] = None
+    budget_summary: SanitizedBudgetSummary | None = None
     if context.budget_requirement_result and context.budget_requirement_result.budget_validation:
         val = context.budget_requirement_result.budget_validation
         curr = getattr(context, "currency", None)
@@ -327,11 +326,11 @@ class OpenAIExplanationGenerator:
 
     def __init__(
         self,
-        client: Optional[Any] = None,
+        client: Any | None = None,
         model: str = "gpt-4o-mini",
         timeout: float = 5.0,
         max_output_tokens: int = 500,
-        temperature: Optional[float] = None,
+        temperature: float | None = None,
     ):
         self.client = client
         self.model = model
@@ -363,7 +362,7 @@ class OpenAIExplanationGenerator:
                 self.client.responses.create(**kwargs),
                 timeout=self.timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise LLMExplanationError("LLM request timed out") from None
         except Exception:
             # Sanitize exception: never expose API keys, prompt payloads, or internal traces
@@ -418,7 +417,7 @@ class GeminiExplanationGenerator:
                 ),
                 timeout=self.timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise LLMExplanationError("LLM request timed out") from None
         except Exception:
             raise LLMExplanationError("LLM generation request failed") from None
@@ -444,9 +443,9 @@ class ResilientFallbackExplainer:
     def __init__(
         self,
         enabled: bool = False,
-        llm_generator: Optional[ExplanationGenerator] = None,
-        template_explainer: Optional[ExplanationGenerator] = None,
-        validator: Optional[LLMOutputValidator] = None,
+        llm_generator: ExplanationGenerator | None = None,
+        template_explainer: ExplanationGenerator | None = None,
+        validator: LLMOutputValidator | None = None,
     ):
         self.enabled = enabled
         self.llm_generator = llm_generator

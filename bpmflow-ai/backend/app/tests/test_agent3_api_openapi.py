@@ -4,7 +4,6 @@ These tests verify the OpenAPI schema is correctly generated.
 """
 
 import os
-from typing import Set
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,8 +14,6 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost/test")
 
-from app.api.v1.routes_agent3 import router
-
 from fastapi import FastAPI
 
 from app.agents.agent3_resources.api_dependencies import (
@@ -24,7 +21,7 @@ from app.agents.agent3_resources.api_dependencies import (
     RequestContextProtocol,
     get_request_context,
 )
-
+from app.api.v1.routes_agent3 import router
 
 # ============================================================================
 # Fake Dependencies for Testing
@@ -34,7 +31,7 @@ from app.agents.agent3_resources.api_dependencies import (
 class FakeRequestContextProvider(RequestContextProtocol):
     """Fake request context provider for testing."""
 
-    def __init__(self, tenant_id: UUID, actor_id: UUID, roles: Set[str]):
+    def __init__(self, tenant_id: UUID, actor_id: UUID, roles: set[str]):
         self.tenant_id = tenant_id
         self.actor_id = actor_id
         self.roles = roles

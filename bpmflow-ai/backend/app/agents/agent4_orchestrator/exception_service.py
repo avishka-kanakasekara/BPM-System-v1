@@ -3,7 +3,7 @@
 Does not own StateMachine rules. Process stage changes go through OrchestratorService.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from .constants import ExceptionSeverity, ExceptionStatus, ExceptionType, WorkflowStage
@@ -12,7 +12,7 @@ from .exceptions import InvalidExceptionStatusError, InvalidRetryError
 from .repository import AUDIT_ACTION_UPDATED
 from .schemas import ExceptionRecord
 from .service import OrchestratorService
-from .state_machine import InvalidTransitionError
+from .state_machine import InvalidTransitionError, TransitionContext
 
 
 class ExceptionService:
@@ -73,7 +73,7 @@ class ExceptionService:
             update={
                 "status": ExceptionStatus.RESOLVED,
                 "resolution_notes": resolution_notes,
-                "resolved_at": datetime.now(timezone.utc),
+                "resolved_at": datetime.now(UTC),
             }
         )
         saved = await self._repository.update_exception(updated)
@@ -150,6 +150,7 @@ class ExceptionService:
             current.process_id,
             WorkflowStage.DISCOVERING,
             reason=f"Retry exception {exception_id}",
+            transition_context=TransitionContext(recovery_authorized=True),
         )
         await self._repository.commit()
         return saved
@@ -167,7 +168,7 @@ class ExceptionService:
             update={
                 "status": ExceptionStatus.IGNORED,
                 "resolution_notes": notes or current.resolution_notes,
-                "resolved_at": datetime.now(timezone.utc),
+                "resolved_at": datetime.now(UTC),
             }
         )
         saved = await self._repository.update_exception(updated)

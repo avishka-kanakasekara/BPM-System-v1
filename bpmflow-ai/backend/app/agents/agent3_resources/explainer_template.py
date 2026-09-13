@@ -2,26 +2,25 @@
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import List, Optional
 
+from .constants import GapType
 from .schemas import (
     RequirementResult,
-    ResourceGap,
     ResourceAlternative,
+    ResourceGap,
 )
-from .constants import GapType
 
 
 @dataclass
 class ExplanationContext:
     """Internal, non-validated context for template explanation generation."""
-    human_requirement_result: Optional[RequirementResult] = None
-    budget_requirement_result: Optional[RequirementResult] = None
-    resource_gaps: List[ResourceGap] = field(default_factory=list)
-    alternatives: List[ResourceAlternative] = field(default_factory=list)
-    limitations: List[str] = field(default_factory=list)
-    confidence: Optional[Decimal] = None
-    currency: Optional[str] = None
+    human_requirement_result: RequirementResult | None = None
+    budget_requirement_result: RequirementResult | None = None
+    resource_gaps: list[ResourceGap] = field(default_factory=list)
+    alternatives: list[ResourceAlternative] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
+    confidence: Decimal | None = None
+    currency: str | None = None
 
 
 class TemplateExplainer:
@@ -130,7 +129,7 @@ class TemplateExplainer:
 
         return "\n".join(lines)
 
-    def _explain_budget_result(self, result: RequirementResult, currency: Optional[str] = None) -> str:
+    def _explain_budget_result(self, result: RequirementResult, currency: str | None = None) -> str:
         lines = []
         lines.append("=== Budget Validation ===")
 

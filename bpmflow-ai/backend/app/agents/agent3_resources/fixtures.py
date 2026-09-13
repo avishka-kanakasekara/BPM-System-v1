@@ -1,22 +1,21 @@
 """Synthetic test fixtures for Agent 3 Resource Allocation."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import List, Optional
 from uuid import UUID, uuid4
 
-from .schemas import (
-    HumanResourceEvidence,
-    BudgetResourceEvidence,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-)
 from .constants import ResourceType
+from .schemas import (
+    BudgetResourceEvidence,
+    BudgetResourceRequirement,
+    HumanResourceEvidence,
+    HumanResourceRequirement,
+)
 
-FIXTURE_REFERENCE_TIMESTAMP = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+FIXTURE_REFERENCE_TIMESTAMP = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
-def _resolve_reference_timestamp(reference_timestamp: Optional[datetime]) -> datetime:
+def _resolve_reference_timestamp(reference_timestamp: datetime | None) -> datetime:
     """Return a fixed reference time for deterministic synthetic data."""
     return reference_timestamp or FIXTURE_REFERENCE_TIMESTAMP
 
@@ -26,16 +25,16 @@ def create_human_evidence(
     resource_id: UUID = None,
     name: str = "Test Employee",
     is_active: bool = True,
-    roles: List[str] = None,
-    mandatory_skills: List[str] = None,
-    preferred_skills: List[str] = None,
+    roles: list[str] = None,
+    mandatory_skills: list[str] = None,
+    preferred_skills: list[str] = None,
     authority: str = None,
     current_workload: Decimal = Decimal("50"),
     max_workload: Decimal = Decimal("100"),
-    sod_conflicts: List[UUID] = None,
-    coi_flags: List[str] = None,
+    sod_conflicts: list[UUID] = None,
+    coi_flags: list[str] = None,
     evidence_age_days: int = 30,
-    reference_timestamp: Optional[datetime] = None,
+    reference_timestamp: datetime | None = None,
 ) -> HumanResourceEvidence:
     """Create a synthetic HUMAN resource evidence."""
     reference = _resolve_reference_timestamp(reference_timestamp)
@@ -75,7 +74,7 @@ def create_budget_evidence(
     cost_centre: str = "CC001",
     authorization_limit: Decimal = Decimal("50000"),
     evidence_age_days: int = 30,
-    reference_timestamp: Optional[datetime] = None,
+    reference_timestamp: datetime | None = None,
 ) -> BudgetResourceEvidence:
     """Create a synthetic BUDGET resource evidence."""
     reference = _resolve_reference_timestamp(reference_timestamp)
@@ -99,13 +98,13 @@ def create_budget_evidence(
 def create_human_requirement(
     tenant_id: UUID,
     requester_id: UUID = None,
-    required_roles: List[str] = None,
-    mandatory_skills: List[str] = None,
-    preferred_skills: List[str] = None,
+    required_roles: list[str] = None,
+    mandatory_skills: list[str] = None,
+    preferred_skills: list[str] = None,
     required_authority: str = None,
     estimated_effort: Decimal = Decimal("40"),
     deadline_days: int = 30,
-    reference_timestamp: Optional[datetime] = None,
+    reference_timestamp: datetime | None = None,
 ) -> HumanResourceRequirement:
     """Create a synthetic HUMAN resource requirement."""
     reference = _resolve_reference_timestamp(reference_timestamp)
@@ -129,7 +128,7 @@ def create_budget_requirement(
     currency: str = "USD",
     cost_centre: str = "CC001",
     deadline_days: int = 30,
-    reference_timestamp: Optional[datetime] = None,
+    reference_timestamp: datetime | None = None,
 ) -> BudgetResourceRequirement:
     """Create a synthetic BUDGET resource requirement."""
     reference = _resolve_reference_timestamp(reference_timestamp)

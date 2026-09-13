@@ -5,7 +5,9 @@ Maps tool name → (Python handler callable, input Pydantic schema, output Pydan
 Used by function_declarations.py and the Tool Execution Engine.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Type
+from collections.abc import Callable
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -14,8 +16,8 @@ class ToolDefinition(BaseModel):
 
     name: str
     description: str
-    input_schema: Type[BaseModel]
-    output_schema: Type[BaseModel]
+    input_schema: type[BaseModel]
+    output_schema: type[BaseModel]
     handler: Any  # Callable[[AsyncSession, BaseModel], Awaitable[BaseModel]]
 
     model_config = {"arbitrary_types_allowed": True}
@@ -27,14 +29,14 @@ class ToolRegistry:
     """
 
     def __init__(self):
-        self._tools: Dict[str, ToolDefinition] = {}
+        self._tools: dict[str, ToolDefinition] = {}
 
     def register(
         self,
         name: str,
         description: str,
-        input_schema: Type[BaseModel],
-        output_schema: Type[BaseModel],
+        input_schema: type[BaseModel],
+        output_schema: type[BaseModel],
         handler: Callable[..., Any],
     ) -> None:
         """Register a new tool definition."""
@@ -48,13 +50,13 @@ class ToolRegistry:
         )
         self._tools[name_clean] = tool_def
 
-    def get(self, name: str) -> Optional[ToolDefinition]:
+    def get(self, name: str) -> ToolDefinition | None:
         """Retrieve a tool definition by name."""
         if not name:
             return None
         return self._tools.get(name.strip().lower())
 
-    def list_tools(self) -> List[ToolDefinition]:
+    def list_tools(self) -> list[ToolDefinition]:
         """Return a list of all registered tool definitions."""
         return list(self._tools.values())
 

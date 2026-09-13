@@ -1,7 +1,7 @@
 """Static contract tests for Agent 3 migrations 0002 and 0003 SQL."""
 
-from pathlib import Path
 import re
+from pathlib import Path
 
 import pytest
 
@@ -50,7 +50,7 @@ class TestMigration0002Contract:
     """Static SQL contract tests for migration 0002 — no live PostgreSQL connection."""
 
     def test_0002_exists_and_0001_unchanged(self):
-        assert MIGRATION_0002.name == "0002_agent3_resource_persistence.sql"
+        assert MIGRATION_0002.name == "0004_agent3_resource_persistence.sql"
         assert MIGRATION_0001.exists()
 
     def test_required_read_path_tables_present(self, migration_0002_sql):
@@ -61,7 +61,7 @@ class TestMigration0002Contract:
         for table in READ_PATH_TABLES:
             if table == "tenants":
                 continue
-            assert f"CREATE TABLE" in migration_0002_sql
+            assert "CREATE TABLE" in migration_0002_sql
             section = migration_0002_sql.split(f"public.{table}", 1)[-1]
             assert "tenant_id" in section.split(";", 1)[0]
 

@@ -11,8 +11,17 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from app.agents.agent1_discovery.extractors import classify_document, extract_entities, extract_relations
-from app.agents.agent1_discovery.schemas import ExtractedDocument, PageText, ProcessJSON, ProcessMiningResult
+from app.agents.agent1_discovery.extractors import (
+    classify_document,
+    extract_entities,
+    extract_relations,
+)
+from app.agents.agent1_discovery.schemas import (
+    ExtractedDocument,
+    PageText,
+    ProcessJSON,
+    ProcessMiningResult,
+)
 from app.agents.agent1_discovery.service import build_process_json
 from app.core.config import settings
 
@@ -84,7 +93,7 @@ def run_eval(gold_path: Path | None = None) -> dict[str, float]:
         extracted = _doc_from_text(document["text"])
         classification = classify_document(extracted)
         entities = extract_entities(extracted, classification.doc_type)
-        relations = extract_relations(extracted, entities, classification.doc_type)
+        relations, _relation_meta = extract_relations(extracted, entities, classification.doc_type)
         process = build_process_json(entities, relations, ProcessMiningResult())
 
         try:

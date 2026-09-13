@@ -1,53 +1,50 @@
 """Unit tests for write-path mappers (domain ↔ database)."""
 
 import json
-import pytest
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
+import pytest
+
+from app.agents.agent3_resources.repositories.persistence_exceptions import (
+    PersistenceValidationError,
+)
 from app.agents.agent3_resources.repositories.write_mappers import (
-    map_request_to_allocation_request,
-    map_requirement_to_allocation_requirement,
-    map_recommendation_to_allocation_recommendation,
-    map_candidate_to_allocation_candidate,
-    map_exclusion_to_allocation_exclusion,
-    map_exclusion_reason_to_allocation_exclusion_reason,
-    map_gap_to_resource_gap,
+    _to_jsonb,
+    generate_idempotency_key,
     map_alternative_to_resource_alternative,
     map_budget_validation_to_budget_validation_result,
-    map_evidence_link_to_recommendation_evidence_link,
-    map_row_to_recommendation_header,
-    map_row_to_request_metadata,
+    map_candidate_to_allocation_candidate,
+    map_exclusion_reason_to_allocation_exclusion_reason,
+    map_exclusion_to_allocation_exclusion,
+    map_gap_to_resource_gap,
+    map_recommendation_to_allocation_recommendation,
+    map_request_to_allocation_request,
+    map_requirement_to_allocation_requirement,
     map_row_to_candidate,
     map_row_to_exclusion_with_reasons,
-    map_row_to_gap,
-    map_row_to_alternative,
-    map_row_to_budget_validation,
-    map_row_to_evidence_link,
+    map_row_to_recommendation_header,
     validate_timezone_aware,
-    generate_idempotency_key,
-    _to_jsonb,
 )
-from app.agents.agent3_resources.repositories.persistence_exceptions import PersistenceValidationError
 from app.agents.agent3_resources.schemas import (
-    AllocationRequest,
-    AllocationRecommendation,
-    HumanResourceRequirement,
-    BudgetResourceRequirement,
-    RankedCandidate,
-    ScoreBreakdown,
-    ExcludedResource,
-    ExclusionReasonEntry,
-    ResourceGap,
-    ResourceAlternative,
-    BudgetValidationChecks,
     AgentMessageMetadata,
-    RecommendationStatus,
-    ResourceType,
+    AllocationRecommendation,
+    AllocationRequest,
+    BudgetResourceRequirement,
+    BudgetValidationChecks,
+    ExcludedResource,
+    ExclusionReason,
+    ExclusionReasonEntry,
     GapAlternativeType,
     GapType,
-    ExclusionReason,
+    HumanResourceRequirement,
+    RankedCandidate,
+    RecommendationStatus,
+    ResourceAlternative,
+    ResourceGap,
+    ResourceType,
+    ScoreBreakdown,
 )
 
 
@@ -56,7 +53,7 @@ class TestTimezoneValidation:
 
     def test_validate_timezone_aware_utc(self) -> None:
         """Test that timezone-aware UTC datetime passes validation."""
-        dt = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        dt = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         result = validate_timezone_aware(dt, "test_field")
         assert result == dt
 
@@ -137,7 +134,7 @@ class TestRequestMapping:
         """Test mapping AllocationRequest to database row."""
         correlation_id = uuid4()
         tenant_id = uuid4()
-        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        evaluation_timestamp = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         
         metadata = AgentMessageMetadata(
             correlation_id=correlation_id,
@@ -171,7 +168,7 @@ class TestRequirementMapping:
         requirement = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=uuid4(),
-            task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -194,7 +191,7 @@ class TestRequirementMapping:
             required_amount=Decimal("5000"),
             currency="USD",
             requester_id=uuid4(),
-            task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
             process_stage="resource_allocation",
         )
         
@@ -318,7 +315,7 @@ class TestCandidateMapping:
             score_breakdown=score_breakdown,
             current_workload_percentage=Decimal("30"),
             projected_workload_percentage=Decimal("40"),
-            available_from=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            available_from=datetime(2026, 1, 1, tzinfo=UTC),
             available_until=None,
             evidence_refs={},
         )
@@ -494,7 +491,7 @@ class TestReadBackMapping:
             "retryable": None,
             "limitations": [],
             "response_schema_version": "1.0.0",
-            "created_at": datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+            "created_at": datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
         }
         
         header = map_row_to_recommendation_header(row)
@@ -517,7 +514,7 @@ class TestReadBackMapping:
             "authority_match": Decimal("1.0"),
             "current_workload_pct": Decimal("30"),
             "projected_workload_pct": Decimal("40"),
-            "available_from": datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+            "available_from": datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
             "available_until": None,
             "candidate_name": "Test Developer",
         }
@@ -621,7 +618,7 @@ class TestJSONBConversion:
 
     def test_to_jsonb_aware_datetime_conversion(self) -> None:
         """Test that timezone-aware datetime converts to ISO format."""
-        dt = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        dt = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
         result = _to_jsonb({"timestamp": dt})
         assert "2026-01-01T12:00:00" in result
         assert isinstance(result, str)
@@ -684,13 +681,13 @@ class TestMapperJSONBParameters:
             human_requirements=HumanResourceRequirement(
                 resource_type=ResourceType.HUMAN,
                 requester_id=uuid4(),
-                task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+                task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
                 estimated_effort_hours=Decimal("10"),
                 process_stage="resource_allocation",
             ),
             budget_requirements=None,
         )
-        result = map_request_to_allocation_request(request, datetime(2026, 1, 1, tzinfo=timezone.utc))
+        result = map_request_to_allocation_request(request, datetime(2026, 1, 1, tzinfo=UTC))
         assert isinstance(result["request_payload"], str)
         # Verify it's valid JSON
         parsed = json.loads(result["request_payload"])
@@ -701,7 +698,7 @@ class TestMapperJSONBParameters:
         requirement = HumanResourceRequirement(
             resource_type=ResourceType.HUMAN,
             requester_id=uuid4(),
-            task_deadline=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            task_deadline=datetime(2026, 6, 1, tzinfo=UTC),
             estimated_effort_hours=Decimal("10"),
             process_stage="resource_allocation",
         )
@@ -778,7 +775,11 @@ class TestRequirementResultResourceType:
 
     def test_budget_requirement_result_with_resource_type(self) -> None:
         """Test that BUDGET RequirementResult validates with resource_type."""
-        from app.agents.agent3_resources.schemas import RequirementResult, ResourceType, BudgetValidationChecks
+        from app.agents.agent3_resources.schemas import (
+            BudgetValidationChecks,
+            RequirementResult,
+            ResourceType,
+        )
 
         result = RequirementResult(
             resource_type=ResourceType.BUDGET,
@@ -800,8 +801,9 @@ class TestRequirementResultResourceType:
 
     def test_requirement_result_without_resource_type_raises(self) -> None:
         """Test that RequirementResult without resource_type raises validation error."""
-        from app.agents.agent3_resources.schemas import RequirementResult
         import pytest
+
+        from app.agents.agent3_resources.schemas import RequirementResult
 
         with pytest.raises(Exception):  # Pydantic validation error
             RequirementResult(

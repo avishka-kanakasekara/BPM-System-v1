@@ -4,7 +4,7 @@ Agent 2 — KPI Analytics Tool (Real DB Query)
 Provides calculate_kpi querying Agent 2 DB tables to calculate cycle time, completion rate, throughput, and bottleneck task.
 """
 
-from typing import Optional
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.agent2_execution.analytics import kpi_engine
@@ -12,7 +12,7 @@ from app.agents.agent2_execution.tools.schemas import CalculateKPIInput, Calcula
 
 
 async def calculate_kpi(
-    session: Optional[AsyncSession], input_data: CalculateKPIInput
+    session: AsyncSession | None, input_data: CalculateKPIInput
 ) -> CalculateKPIOutput:
     """Calculate aggregated KPI analytics metrics from historical DB records."""
     metrics = await kpi_engine.get_kpis(session, process_id=None)

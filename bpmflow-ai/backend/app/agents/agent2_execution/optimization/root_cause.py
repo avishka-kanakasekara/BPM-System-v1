@@ -5,7 +5,7 @@ Generates grounded root-cause diagnosis statements for detected process bottlene
 using structured Gemini LLM reasoning.
 """
 
-from typing import Optional
+
 from app.agents.agent2_execution.llm.gemini_client import GeminiClient
 from app.agents.agent2_execution.optimization.bottleneck_detector import BottleneckAnalysis
 from app.agents.agent2_execution.optimization.rework_detector import ReworkAnalysis
@@ -14,7 +14,7 @@ from app.agents.agent2_execution.optimization.rework_detector import ReworkAnaly
 async def analyze_root_cause(
     bottleneck: BottleneckAnalysis,
     rework: ReworkAnalysis,
-    gemini_client: Optional[GeminiClient] = None,
+    gemini_client: GeminiClient | None = None,
 ) -> str:
     """
     Produce a structured root-cause analysis narrative.

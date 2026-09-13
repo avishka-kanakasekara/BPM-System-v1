@@ -4,14 +4,18 @@ Stage rules come only from StateMachine. Persistence is delegated to a
 ProcessRepository (in-memory for tests, SQLAlchemy for PostgreSQL).
 """
 
-from typing import List
 from uuid import UUID
 
 from .constants import WorkflowStage
 from .exceptions import DatabasePersistenceError, ProcessNotFoundError
 from .repository import InMemoryProcessRepository, ProcessRepository
 from .schemas import ProcessStateTransition
-from .state_machine import InvalidTransitionError, StateMachine
+from .state_machine import (
+    InvalidTransitionError,
+    StateMachine,
+    TransitionContext,
+    TransitionPreconditionError,
+)
 
 
 class OrchestratorService:
@@ -54,16 +58,18 @@ class OrchestratorService:
         process_id: UUID,
         next_stage: WorkflowStage,
         reason: str,
+        transition_context: TransitionContext | None = None,
     ) -> ProcessStateTransition:
         """Validate and apply a stage change.
 
         Raises:
             ProcessNotFoundError: if process_id is unknown.
             InvalidTransitionError: if StateMachine rejects the move.
+            TransitionPreconditionError: if preconditions fail.
             DatabasePersistenceError: if persistence fails after a valid move.
         """
         current_stage = await self._load_stage(process_id)
-        self._state_machine.transition(current_stage, next_stage)
+        self._state_machine.transition(current_stage, next_stage, transition_context)
 
         try:
             await self._repository.update_process_stage(process_id, next_stage)
@@ -74,7 +80,7 @@ class OrchestratorService:
                 reason,
             )
             await self._repository.commit()
-        except (ProcessNotFoundError, InvalidTransitionError):
+        except (ProcessNotFoundError, InvalidTransitionError, TransitionPreconditionError):
             await self._safe_rollback()
             raise
         except DatabasePersistenceError:
@@ -88,7 +94,7 @@ class OrchestratorService:
 
         return result
 
-    async def get_allowed_next_stages(self, process_id: UUID) -> List[WorkflowStage]:
+    async def get_allowed_next_stages(self, process_id: UUID) -> list[WorkflowStage]:
         """Return stages the process may move to from its current stage."""
         current_stage = await self._load_stage(process_id)
         return self._state_machine.get_allowed_next_stages(current_stage)
@@ -96,7 +102,7 @@ class OrchestratorService:
     async def get_transition_history(
         self,
         process_id: UUID | None = None,
-    ) -> List[ProcessStateTransition]:
+    ) -> list[ProcessStateTransition]:
         """Return recorded transitions, optionally filtered by process_id."""
         return await self._repository.get_transition_history(process_id)
 

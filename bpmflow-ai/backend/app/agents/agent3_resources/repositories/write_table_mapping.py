@@ -1,6 +1,6 @@
 """Write-path table names and SQL for Agent 3 recommendation persistence."""
 
-MIGRATION_0004_FILENAME = "0004_agent3_write_path_persistence.sql"
+MIGRATION_0004_FILENAME = "0006_agent3_write_path_persistence.sql"
 
 WRITE_PATH_TABLES = (
     "allocation_requests",

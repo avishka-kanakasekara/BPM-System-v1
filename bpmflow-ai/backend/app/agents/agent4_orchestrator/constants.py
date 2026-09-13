@@ -72,6 +72,10 @@ class RiskType(str, Enum):
     SEGREGATION_OF_DUTIES = "SEGREGATION_OF_DUTIES"
     UNAUTHORIZED_ACTION = "UNAUTHORIZED_ACTION"
     BUDGET_VALIDATION_FAILURE = "BUDGET_VALIDATION_FAILURE"
+    APPROVAL_THRESHOLD = "APPROVAL_THRESHOLD"
+    SLA_RISK = "SLA_RISK"
+    POLICY_UNCERTAINTY = "POLICY_UNCERTAINTY"
+    POLICY_CONFLICT = "POLICY_CONFLICT"
 
 
 class RiskRecommendation(str, Enum):
@@ -82,6 +86,7 @@ class RiskRecommendation(str, Enum):
     HUMAN_VERIFICATION = "HUMAN_VERIFICATION"
     REASSIGN_APPROVER = "REASSIGN_APPROVER"
     BLOCK_ACTION = "BLOCK_ACTION"
+    CLARIFY_POLICY = "CLARIFY_POLICY"
 
 
 # Higher number = more severe. Used only to compute overall_risk_level.
@@ -92,7 +97,18 @@ RISK_LEVEL_RANK = {
     RiskLevel.CRITICAL: 4,
 }
 
-# Demo/development defaults. Not production procurement policy.
-# Override per evaluation via RiskEvaluationContext.
+# Legacy development default used ONLY when no PolicyRiskSnapshot is attached.
+# Production risk review attaches tenant policy evidence and must not rely on this
+# as the company's business rule.
 HIGH_VALUE_PURCHASE_THRESHOLD = Decimal("10000.00")
 LOW_CONFIDENCE_THRESHOLD = Decimal("0.70")
+
+# Audit action labels for policy/risk events
+AUDIT_POLICY_RETRIEVED = "POLICY_RETRIEVED"
+AUDIT_RISK_ANALYSIS_STARTED = "RISK_ANALYSIS_STARTED"
+AUDIT_RISK_IDENTIFIED = "RISK_IDENTIFIED"
+AUDIT_POLICY_CONFLICT = "POLICY_CONFLICT"
+AUDIT_POLICY_UNCERTAINTY = "POLICY_UNCERTAINTY"
+AUDIT_APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+AUDIT_EXECUTION_AUTHORIZED = "EXECUTION_AUTHORIZED"
+AUDIT_EXECUTION_BLOCKED = "EXECUTION_BLOCKED"

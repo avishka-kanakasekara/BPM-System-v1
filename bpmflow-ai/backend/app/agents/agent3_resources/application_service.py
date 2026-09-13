@@ -4,26 +4,23 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
-from typing_extensions import Literal
+from pydantic import BaseModel, model_validator
 
+from .advisory import assert_advisory_recommendation
+from .repositories.persistence_exceptions import (
+    PersistenceConflictError,
+    PersistenceTransactionError,
+    PersistenceValidationError,
+)
 from .schemas import (
-    AllocationRequest,
     AllocationRecommendation,
+    AllocationRequest,
     utc_now,
     validate_timezone_aware,
 )
-from .constants import RecommendationStatus
-from .repositories.persistence_exceptions import (
-    PersistenceError,
-    PersistenceValidationError,
-    PersistenceConflictError,
-    PersistenceTransactionError,
-)
-
 
 # ============================================================================
 # Protocols for Dependency Injection
@@ -37,7 +34,7 @@ class AllocationServiceProtocol(ABC):
     async def process_allocation_request(
         self,
         request: AllocationRequest,
-        evaluation_timestamp: Optional[datetime] = None,
+        evaluation_timestamp: datetime | None = None,
     ) -> AllocationRecommendation:
         """Process an allocation request and return a recommendation."""
         pass
@@ -75,7 +72,7 @@ class PersistedAllocationResult(BaseModel):
     recommendation: AllocationRecommendation
 
     @model_validator(mode="after")
-    def validate_contract(self) -> "PersistedAllocationResult":
+    def validate_contract(self) -> PersistedAllocationResult:
         """Validate the result contract invariants."""
         # Ensure persisted is always True (enforced by Literal, but double-check)
         if self.persisted is not True:
@@ -118,7 +115,7 @@ class PersistedAllocationResult(BaseModel):
         recommendation_id: UUID,
         recommendation_status: str,
         recommendation: AllocationRecommendation,
-        persisted_at: Optional[datetime] = None,
+        persisted_at: datetime | None = None,
     ) -> PersistedAllocationResult:
         """Factory method to create a persisted result."""
         if persisted_at is None:
@@ -164,7 +161,7 @@ class PersistentResourceAllocationService:
         self,
         request: AllocationRequest,
         *,
-        evaluation_timestamp: Optional[datetime] = None,
+        evaluation_timestamp: datetime | None = None,
     ) -> PersistedAllocationResult:
         """Process an allocation request and persist the result.
 
@@ -215,6 +212,8 @@ class PersistentResourceAllocationService:
             raise PersistenceValidationError(
                 "Recommendation tenant_id does not match request tenant_id"
             )
+
+        assert_advisory_recommendation(recommendation)
 
         # Persist the exact request and recommendation
         try:

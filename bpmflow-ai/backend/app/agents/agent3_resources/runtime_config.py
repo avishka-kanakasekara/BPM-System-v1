@@ -1,10 +1,10 @@
 """Agent 3-local runtime configuration and OpenAI client lifecycle management."""
 
-from dataclasses import dataclass
 import inspect
 import logging
 import os
-from typing import Optional, Any
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +19,8 @@ class Agent3LLMConfig:
     model: str = "gpt-4o-mini"
     timeout_seconds: float = 5.0
     max_output_tokens: int = 500
-    temperature: Optional[float] = None
-    api_key: Optional[str] = None
+    temperature: float | None = None
+    api_key: str | None = None
 
     def __repr__(self) -> str:
         return (
@@ -30,7 +30,7 @@ class Agent3LLMConfig:
         )
 
 
-def _parse_bool(val: Optional[str], default: bool = False) -> bool:
+def _parse_bool(val: str | None, default: bool = False) -> bool:
     if val is None or val.strip() == "":
         return default
     s = val.strip().lower()
@@ -78,7 +78,7 @@ def get_agent3_llm_config() -> Agent3LLMConfig:
             raise ValueError("Invalid AGENT3_LLM_MAX_OUTPUT_TOKENS value")
 
     temp_str = os.getenv("AGENT3_LLM_TEMPERATURE")
-    temperature: Optional[float] = None
+    temperature: float | None = None
     if temp_str and temp_str.strip():
         try:
             temperature = float(temp_str.strip())
@@ -101,18 +101,18 @@ def get_agent3_llm_config() -> Agent3LLMConfig:
 
 
 # Shared LLM runtime client lifecycle state
-_shared_openai_client: Optional[Any] = None
-_client_factory: Optional[Any] = None  # Hook for test injection
+_shared_openai_client: Any | None = None
+_client_factory: Any | None = None  # Hook for test injection
 _client_close_count: int = 0
 
 
-def set_openai_client_factory(factory: Optional[Any]) -> None:
+def set_openai_client_factory(factory: Any | None) -> None:
     """Set custom client factory for testing."""
     global _client_factory
     _client_factory = factory
 
 
-def get_shared_openai_client(config: Optional[Agent3LLMConfig] = None) -> Optional[Any]:
+def get_shared_openai_client(config: Agent3LLMConfig | None = None) -> Any | None:
     """Get or create the single shared AsyncOpenAI client per application lifespan.
 
     Returns None if feature is disabled, or if API key is missing/invalid.

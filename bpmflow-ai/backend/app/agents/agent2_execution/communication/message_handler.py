@@ -6,7 +6,7 @@ and dispatches execution to Agent2.handle().
 """
 
 import logging
-from typing import Optional
+
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,8 +20,8 @@ logger = logging.getLogger("agent_2.communication.message_handler")
 async def process_inbound_message(
     message: AgentMessage,
     auth_token: str,
-    session: Optional[AsyncSession] = None,
-    agent_instance: Optional[Agent2] = None,
+    session: AsyncSession | None = None,
+    agent_instance: Agent2 | None = None,
 ) -> AgentMessage:
     """
     Process an inbound message from Agent 4 (or external orchestrator).

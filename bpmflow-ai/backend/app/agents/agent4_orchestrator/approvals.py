@@ -6,8 +6,8 @@ Does not auto-approve, execute workflows, or change stages after a human decisio
 
 from uuid import UUID
 
-from .constants import ApprovalStatus, RiskLevel, RiskRecommendation, WorkflowStage
 from .approval_repository import ApprovalRepository
+from .constants import ApprovalStatus, RiskLevel, RiskRecommendation, WorkflowStage
 from .exceptions import DatabasePersistenceError
 from .schemas import (
     ApprovalDecisionResult,
@@ -16,7 +16,7 @@ from .schemas import (
     RiskAssessment,
 )
 from .service import OrchestratorService
-from .state_machine import InvalidTransitionError
+from .state_machine import InvalidTransitionError, TransitionContext
 
 
 class ApprovalService:
@@ -31,11 +31,15 @@ class ApprovalService:
         self._repository = repository
 
     def requires_human_approval(self, assessment: RiskAssessment) -> bool:
-        """True when at least one finding recommends HUMAN_APPROVAL."""
-        return any(
-            finding.recommendation is RiskRecommendation.HUMAN_APPROVAL
-            for finding in assessment.findings
-        )
+        """True when findings require a human gate before execution continues."""
+        gate = {
+            RiskRecommendation.HUMAN_APPROVAL,
+            RiskRecommendation.REQUEST_EVIDENCE,
+            RiskRecommendation.HUMAN_VERIFICATION,
+            RiskRecommendation.REASSIGN_APPROVER,
+            RiskRecommendation.CLARIFY_POLICY,
+        }
+        return any(finding.recommendation in gate for finding in assessment.findings)
 
     async def apply_risk_assessment(
         self,
@@ -77,6 +81,7 @@ class ApprovalService:
                 process_id,
                 WorkflowStage.AWAITING_HUMAN_APPROVAL,
                 reason=reason,
+                transition_context=TransitionContext(human_approval_required=True),
             )
             await self._repository.commit()
         except InvalidTransitionError:
@@ -142,10 +147,17 @@ class ApprovalService:
         )
 
     def _approval_reason(self, assessment: RiskAssessment) -> str:
+        gate = {
+            RiskRecommendation.HUMAN_APPROVAL,
+            RiskRecommendation.REQUEST_EVIDENCE,
+            RiskRecommendation.HUMAN_VERIFICATION,
+            RiskRecommendation.REASSIGN_APPROVER,
+            RiskRecommendation.CLARIFY_POLICY,
+        }
         relevant = [
             finding
             for finding in assessment.findings
-            if finding.recommendation is RiskRecommendation.HUMAN_APPROVAL
+            if finding.recommendation in gate
         ]
         parts = [
             f"{finding.risk_type.value}: {finding.description}"
@@ -156,13 +168,19 @@ class ApprovalService:
     def _stored_risk_level(self, assessment: RiskAssessment) -> RiskLevel:
         if assessment.overall_risk_level is not None:
             return assessment.overall_risk_level
+        gate = {
+            RiskRecommendation.HUMAN_APPROVAL,
+            RiskRecommendation.REQUEST_EVIDENCE,
+            RiskRecommendation.HUMAN_VERIFICATION,
+            RiskRecommendation.REASSIGN_APPROVER,
+            RiskRecommendation.CLARIFY_POLICY,
+        }
         relevant = [
             finding
             for finding in assessment.findings
-            if finding.recommendation is RiskRecommendation.HUMAN_APPROVAL
+            if finding.recommendation in gate
         ]
-        return relevant[0].risk_level
-
+        return relevant[0].risk_level if relevant else RiskLevel.MEDIUM
     async def _safe_rollback(self) -> None:
         try:
             await self._repository.rollback()
