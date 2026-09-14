@@ -153,6 +153,39 @@ def live_payload() -> dict[str, Any]:
     return {"status": "alive", "env": settings.ENV}
 
 
+def demo_readiness_payload() -> dict[str, Any]:
+    """Configuration snapshot for local/demo setup. Never includes secrets."""
+    from app.core.migrations import MIGRATION_FILES, list_on_disk_migrations
+    from app.tool_registry.implementations import ALLOWED_IMPLEMENTATION_KEYS
+
+    on_disk = list_on_disk_migrations()
+    return {
+        "env": settings.ENV,
+        "debug": bool(settings.DEBUG),
+        "mock_llm": bool(settings.MOCK_LLM),
+        "gemini_offline": bool(settings.GEMINI_OFFLINE),
+        "email_dry_run": bool(settings.EMAIL_DRY_RUN),
+        "persistence_mode": settings.PERSISTENCE_MODE,
+        "supabase_url_configured": bool((settings.SUPABASE_URL or "").strip()),
+        "jwt_secret_configured": bool((settings.SUPABASE_JWT_SECRET or "").strip()),
+        "database_url_configured": bool((settings.DATABASE_URL or "").strip()),
+        "gemini_configured": bool((settings.GEMINI_API_KEY or "").strip())
+        and not (settings.GEMINI_API_KEY or "").startswith("your_"),
+        "allowed_file_types": settings.allowed_file_types_list,
+        "max_upload_mb": settings.MAX_UPLOAD_MB,
+        "tool_registry_allowlist_size": len(ALLOWED_IMPLEMENTATION_KEYS),
+        "migrations_on_disk": on_disk,
+        "python_runner_migrations": list(MIGRATION_FILES),
+        "migration_0024_on_disk": any(name.startswith("0024") for name in on_disk),
+        "note": (
+            "Apply SQL 0013–0024 in Supabase Dashboard → SQL Editor. "
+            "The Python runner only auto-applies 0001–0012. "
+            "Live RLS hardening is incomplete until 0024 is applied. "
+            "This payload never returns API keys, JWT secrets, or passwords."
+        ),
+    }
+
+
 async def ready_payload() -> dict[str, Any]:
     report = await run_dependency_probes()
     status = "ready" if report["ready"] else "not_ready"

@@ -4,19 +4,23 @@
 
 ```bash
 cd bpmflow-ai/backend
+# Windows: venv\Scripts\activate
 source venv/bin/activate
-GEMINI_OFFLINE=true MOCK_LLM=true uvicorn app.main:app --host 127.0.0.1 --port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Stop gracefully: `Ctrl+C` (drains in-flight requests, releases scheduler leases).
+Development-only LLM shortcuts: `MOCK_LLM=true` and `GEMINI_OFFLINE=true` (forbidden when `ENV=production`).
 
-Frontend: `cd frontend && npm run dev`
+Stop: `Ctrl+C` (drain + scheduler lease release).
+
+Frontend: `cd frontend && npm run dev` → **http://localhost:5174**
 
 ## Health checks
 
 ```bash
-curl -s http://127.0.0.1:8000/health/live | jq .
-curl -s http://127.0.0.1:8000/health/deps | jq .
+curl -s http://127.0.0.1:8000/health/live
+curl -s http://127.0.0.1:8000/health/demo
+curl -s http://127.0.0.1:8000/health/deps
 ```
 
 | Probe | OK when |
@@ -24,89 +28,46 @@ curl -s http://127.0.0.1:8000/health/deps | jq .
 | `postgres` | Pooler reachable |
 | `supabase_rest` | REST ping 200 |
 | `jwks` | Keys fetched or HS256 secret configured |
-| `gemini` | Configured, or skipped in offline/mock mode |
-
-`ready=false` with `supabase_rest=ok` is **acceptable** in REST-degraded dev.
+| `gemini` | Configured, or skipped in offline/mock **development** |
+| `/health/demo` | Lists migrations on disk including **0024**; never returns secrets |
 
 ## Migrations
 
 ```bash
-python -m app.scripts.migration_status
-python -m app.scripts.apply_pending_migrations   # needs working DATABASE_URL
-python -m app.scripts.seed_demo_tenant
+python -m app.scripts.migration_status          # 0001–0012 runner set
+python -m app.scripts.apply_pending_migrations  # 0001–0012 only
 ```
+
+Apply **0013–0024** in Supabase SQL Editor. **0024 is required for live RLS.**
 
 When pooler fails (`tenant/user … not found`): the **database password in `.env` is wrong or stale**, not a code bug.
 
 ```bash
-python -m app.scripts.configure_database_url   # tests current URI, prints fix steps
+python -m app.scripts.configure_database_url
 ```
 
-**Fix pooler (5 minutes):**
+Use the Session pooler URI from the dashboard (placeholder project ref only):
 
-1. [Supabase Dashboard](https://supabase.com/dashboard) → your project → **Project Settings → Database**
-2. Click **Reset database password** and save the new password
-3. **Connect** → **ORMs** → copy the **Session pooler** URI (port **5432**, user `postgres.<project-ref>`)
-4. Test and write to `.env`:
+`postgresql://postgres.YOUR_PROJECT:PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres?sslmode=require`
+
+## Seeds (explicit)
 
 ```bash
-DATABASE_URL='postgresql://postgres.qgntndundyjutzkuledp:NEW_PASSWORD@aws-0-REGION.pooler.supabase.com:5432/postgres?sslmode=require' \
-  python -m app.scripts.configure_database_url --write --url "$DATABASE_URL"
-python -m app.scripts.apply_pending_migrations
+python -m app.scripts.seed_demo_tenant           # Agent 3 synthetic tenant ...0001
+python -m app.scripts.seed_company_directory     # in-memory Demo Company ...d001; refused in production
 ```
 
-If `db.<ref>.supabase.co` DNS fails on your Mac, use the **pooler URI only** or enable Supabase **IPv4 add-on**.
+Admin HTTP: `POST /api/v1/company/seed-demo`, `POST /api/v1/vendors/seed-demo`.
 
-Paste pending SQL in SQL Editor when pooler is still broken:
+## Smoke / tests
 
-- `0008_company_policy_knowledge.sql` — policy retrieval
-- `0014_process_advancement.sql` — durable advance idempotency
+Prefer `python -m pytest app/tests` (see [TESTING.md](TESTING.md)). Optional: `python -m app.scripts.e2e_smoke`.
 
-Verify: `python -m app.scripts.check_supabase` (should show both tables **present**).
+## Common UI issues
 
-## E2E smoke
-
-```bash
-# Server already running:
-GEMINI_OFFLINE=true MOCK_LLM=true python -m app.scripts.e2e_smoke
-
-# Full cold start:
-python -m app.scripts.e2e_smoke --cold-start
-```
-
-Auth resolution order:
-
-1. `E2E_BEARER_TOKEN` / `E2E_APPROVER_TOKEN`
-2. `SUPABASE_JWT_SECRET` + `E2E_USER_ID`
-3. Dev register + password grant (`E2E_EMAIL`, `E2E_PASSWORD`, …)
-
-## CI commands
-
-```bash
-pytest app/tests -q \
-  --ignore=app/tests/integration \
-  --ignore=app/tests/agent2_execution/test_gemini_live.py
-
-ruff check app
-cd ../frontend && npm run build && npm test
-```
-
-Mark live Gemini: `@pytest.mark.live_llm` — exclude from default CI.
-
-## Common failures
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `/advance` 500, `process_advancement_runs` 404 | Migration 0014 not applied | Apply SQL or accept in-memory idempotency (logged warning) |
-| Approve 422 enrichment | No discovery risk_facts on process | Re-run discover with sample DOCX |
-| Process stuck at WORKFLOW_EXECUTION | Live Gemini quota | `GEMINI_OFFLINE=true` |
-| Agent 3 403 tenant | JWT missing `app_metadata.tenant_id` | Register via dev `/auth/register` or set metadata in Supabase |
-| Old server on :8000 | Stale uvicorn without `/health/live` | Kill process on 8000, restart current code |
-
-## Logs
-
-JSON structured logs to stdout. Every request gets `correlation_id` (header `X-Correlation-ID` or generated). Secrets redacted in formatter.
-
-## Production
-
-See [DEPLOYMENT.md](DEPLOYMENT.md). `ENV=production` forbids mock/offline LLM and validates CORS + email config at startup.
+| Symptom | Check |
+|---------|--------|
+| Blank UI on 5173 | Use port **5174** |
+| Approve 403 | Role must be approver/admin |
+| Activate 403 | Requester cannot activate plans |
+| Matching never COMPLETED | Invoice must already exist; expected totals in JSON are ignored |

@@ -29,7 +29,7 @@ from app.agents.agent2_execution.workflow_step.schemas import (
     WorkflowStepExecutionResult,
 )
 from app.api.v1.deps import get_workflow_plan_service, get_workflow_step_executor
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_roles
 from app.schemas.auth import CurrentUser
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
@@ -127,7 +127,7 @@ async def validate_workflow_plan(
 @router.post("/{workflow_plan_id}/activate", response_model=WorkflowPlanRecord)
 async def activate_workflow_plan(
     workflow_plan_id: UUID,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(require_roles("approver", "admin")),
     service: WorkflowPlanService = Depends(get_workflow_plan_service),
 ) -> WorkflowPlanRecord:
     tenant_id = _require_tenant(current_user)
@@ -143,7 +143,7 @@ class ExecuteWorkflowStepBody(BaseModel):
     trace_id: str | None = None
     idempotency_key: str | None = None
     parameters: dict = Field(default_factory=dict)
-    authorization_state: str = "AUTHORIZED"
+    authorization_state: str | None = None
 
 
 @router.post(
@@ -165,7 +165,7 @@ async def execute_workflow_step(
                 workflow_plan_id=workflow_plan_id,
                 workflow_step_id=workflow_step_id,
                 process_context_ref=payload.process_context_ref,
-                authorization_state=payload.authorization_state,
+                authorization_state="PENDING",
                 trace_id=payload.trace_id,
                 idempotency_key=payload.idempotency_key,
                 caller_parameters=dict(payload.parameters),

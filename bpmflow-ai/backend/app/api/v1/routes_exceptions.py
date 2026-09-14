@@ -111,6 +111,8 @@ async def resolve_exception(
         )
     except BpmExceptionNotFoundError as exc:
         raise _not_found() from exc
+    except CrossTenantExceptionError as exc:
+        raise _cross_tenant() from exc
     except (InvalidExceptionStatusError, InvalidRetryError, InvalidTransitionError) as exc:
         raise _invalid_action() from exc
     except DatabasePersistenceError as exc:
@@ -141,6 +143,8 @@ async def retry_exception(
         )
     except BpmExceptionNotFoundError as exc:
         raise _not_found() from exc
+    except CrossTenantExceptionError as exc:
+        raise _cross_tenant() from exc
     except (InvalidExceptionStatusError, InvalidRetryError, InvalidTransitionError) as exc:
         raise _invalid_action() from exc
     except DatabasePersistenceError as exc:
@@ -171,6 +175,8 @@ async def fail_exception(
         )
     except BpmExceptionNotFoundError as exc:
         raise _not_found() from exc
+    except CrossTenantExceptionError as exc:
+        raise _cross_tenant() from exc
     except (InvalidExceptionStatusError, InvalidRetryError, InvalidTransitionError) as exc:
         raise _invalid_action() from exc
     except DatabasePersistenceError as exc:

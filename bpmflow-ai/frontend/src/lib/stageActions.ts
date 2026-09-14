@@ -1,10 +1,11 @@
-import type { WorkflowStage } from '../types/api'
+import type { WorkflowStage } from './processStages'
 
 export type StageActionId =
-  | 'autopilot'
+  | 'start_discovery_stage'
+  | 'plan_resources'
+  | 'run_risk_review'
   | 'approval'
-  | 'invoice'
-  | 'continue_autopilot'
+  | 'match_persisted_invoice'
 
 export type StageActionSpec = {
   id: StageActionId
@@ -21,7 +22,7 @@ type StageActionContext = {
   humanApprovalPending: boolean
 }
 
-/** Precondition-aware action enablement for the process cockpit. */
+/** Explicit BPM actions. Not an unsupervised pipeline. */
 export function stageActions(ctx: StageActionContext): StageActionSpec[] {
   const { stage, hasDiscovery, hasTenant, busy, humanApprovalPending } = ctx
   const blocked = busy ? 'Another action is in progress' : undefined
@@ -29,8 +30,8 @@ export function stageActions(ctx: StageActionContext): StageActionSpec[] {
   if (stage === 'DRAFT') {
     return [
       {
-        id: 'autopilot',
-        label: 'Run process autopilot',
+        id: 'start_discovery_stage',
+        label: 'Start discovery stage',
         enabled: hasDiscovery && hasTenant && !busy,
         reason: !hasDiscovery
           ? 'Upload and analyze discovery evidence first'
@@ -41,11 +42,22 @@ export function stageActions(ctx: StageActionContext): StageActionSpec[] {
     ]
   }
 
-  if (stage === 'DISCOVERING' || stage === 'RESOURCE_PLANNING' || stage === 'RISK_REVIEW') {
+  if (stage === 'DISCOVERING' || stage === 'RESOURCE_PLANNING') {
     return [
       {
-        id: 'continue_autopilot',
-        label: 'Continue autopilot',
+        id: 'plan_resources',
+        label: 'Plan resources from directory',
+        enabled: hasTenant && !busy,
+        reason: !hasTenant ? 'Tenant context required' : blocked,
+      },
+    ]
+  }
+
+  if (stage === 'RISK_REVIEW') {
+    return [
+      {
+        id: 'run_risk_review',
+        label: 'Run risk review',
         enabled: hasTenant && !busy,
         reason: !hasTenant ? 'Tenant context required' : blocked,
       },
@@ -64,21 +76,14 @@ export function stageActions(ctx: StageActionContext): StageActionSpec[] {
   }
 
   if (stage === 'WORKFLOW_EXECUTION') {
-    return [
-      {
-        id: 'continue_autopilot',
-        label: 'Resume autopilot',
-        enabled: hasTenant && !busy,
-        reason: !hasTenant ? 'Tenant context required' : blocked,
-      },
-    ]
+    return []
   }
 
   if (stage === 'INVOICE_MATCHING') {
     return [
       {
-        id: 'invoice',
-        label: 'Submit invoice match',
+        id: 'match_persisted_invoice',
+        label: 'Match persisted invoice',
         enabled: !busy,
         reason: blocked,
       },

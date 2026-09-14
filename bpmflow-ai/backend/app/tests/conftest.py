@@ -24,13 +24,17 @@ def isolate_company_directory():
     from app.ir.corpus import reset_document_corpus
     from app.procurement.service import reset_procurement
 
+    from app.monitoring.store import reset_monitoring_store
+
     reset_company_directory()
     reset_procurement()
     reset_document_corpus()
+    reset_monitoring_store()
     yield
     reset_company_directory()
     reset_procurement()
     reset_document_corpus()
+    reset_monitoring_store()
 
 
 def utc_datetime(*args, **kwargs) -> datetime:

@@ -161,6 +161,7 @@ def test_production_rejects_email_dry_run(monkeypatch):
     monkeypatch.setattr(core_settings, "GEMINI_API_KEY", "real-key")
     monkeypatch.setattr(core_settings, "GEMINI_OFFLINE", False)
     monkeypatch.setattr(core_settings, "MOCK_LLM", False)
+    monkeypatch.setattr(core_settings, "DEBUG", False)
     with pytest.raises(RuntimeError, match="EMAIL_DRY_RUN"):
         core_settings.assert_production_llm_config()
 

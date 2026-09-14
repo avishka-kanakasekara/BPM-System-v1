@@ -31,10 +31,12 @@ from app.agents.agent2_execution.security.execution_authorization import (
 )
 from app.agents.agent2_execution.tools.email_provider import email_configured, email_dry_run_enabled
 from app.agents.agent2_execution.tools.metadata import list_tool_capabilities
+from app.agents.agent4_orchestrator.exceptions import ProcessNotFoundError
 from app.agents.agent4_orchestrator.repository import ProcessRepository
 from app.api.v1.deps import get_process_repository
 from app.core.config import settings as core_settings
 from app.core.security import get_current_user
+from app.core.tenancy import deny_foreign_process
 from app.schemas.auth import CurrentUser
 
 logger = logging.getLogger("agent_2.routers.execute")
@@ -266,6 +268,12 @@ async def execute_tool_endpoint(
                 "message": "Agent 2 executes exactly one WorkflowStep. __full_task_suite__ is forbidden.",
             },
         )
+
+    try:
+        process = await repository.get_process(uuid.UUID(str(payload.process_id)))
+        deny_foreign_process(process, current_user)
+    except (ValueError, ProcessNotFoundError) as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Process not found") from exc
 
     if payload.workflow_plan_id and payload.workflow_step_id:
         raise HTTPException(

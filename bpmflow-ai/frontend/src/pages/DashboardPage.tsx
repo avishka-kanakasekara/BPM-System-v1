@@ -20,25 +20,20 @@ import {
 } from '../components/ui/primitives'
 import { formatProcessStage } from '../lib/statusPresentation'
 
-const ACTIVE_STAGES = new Set([
-  'DISCOVERING',
-  'RESOURCE_PLANNING',
-  'RISK_REVIEW',
-  'AWAITING_HUMAN_APPROVAL',
-  'WORKFLOW_EXECUTION',
-  'INVOICE_MATCHING',
-])
+import { ACTIVE_PROCESS_STAGES, PROCESS_STAGE_LABELS, type WorkflowStage } from '../lib/processStages'
 
-const PIPELINE_STAGES: Array<{ key: string; label: string }> = [
-  { key: 'DISCOVERING', label: 'Discovering' },
-  { key: 'RESOURCE_PLANNING', label: 'Resource Planning' },
-  { key: 'RISK_REVIEW', label: 'Risk Review' },
-  { key: 'AWAITING_HUMAN_APPROVAL', label: 'Awaiting Approval' },
-  { key: 'WORKFLOW_EXECUTION', label: 'Workflow Execution' },
-  { key: 'INVOICE_MATCHING', label: 'Invoice Matching' },
-  { key: 'COMPLETED', label: 'Completed' },
-  { key: 'EXCEPTION', label: 'Stopped' },
-]
+const PIPELINE_STAGES: Array<{ key: WorkflowStage; label: string }> = (
+  [
+    'DISCOVERING',
+    'RESOURCE_PLANNING',
+    'RISK_REVIEW',
+    'AWAITING_HUMAN_APPROVAL',
+    'WORKFLOW_EXECUTION',
+    'INVOICE_MATCHING',
+    'COMPLETED',
+    'EXCEPTION',
+  ] as const
+).map((key) => ({ key, label: PROCESS_STAGE_LABELS[key] }))
 
 function greetingForNow(): string {
   const hour = new Date().getHours()
@@ -107,7 +102,7 @@ function formatAuditAction(action: string): string {
     REJECTED: 'Approval rejected',
     EXCEPTION_OPENED: 'Process stopped',
     EXCEPTION_CREATED: 'Process stopped',
-    EXECUTE: 'Workflow execution started',
+    EXECUTE: 'Execution recorded',
     COMPLETED: 'Process completed',
   }
   if (map[normalized]) return map[normalized]
@@ -228,9 +223,10 @@ export default function DashboardPage() {
         return
       }
 
+      const canFetchApprovals = user?.role === 'approver' || user?.role === 'admin'
       const [procs, pendingApprovals] = await Promise.all([
         listProcesses(),
-        listApprovals('PENDING'),
+        canFetchApprovals ? listApprovals('PENDING') : Promise.resolve([] as ApprovalRecord[]),
       ])
       setProcesses(procs)
       setApprovals(pendingApprovals)
@@ -248,14 +244,14 @@ export default function DashboardPage() {
     } finally {
       setLoading(false)
     }
-  }, [session])
+  }, [session, user?.role])
 
   useEffect(() => {
     void load()
   }, [load])
 
   const activeCount = useMemo(
-    () => processes.filter((p) => ACTIVE_STAGES.has(p.current_stage)).length,
+    () => processes.filter((p) => ACTIVE_PROCESS_STAGES.has(p.current_stage)).length,
     [processes],
   )
   const completedCount = useMemo(
@@ -293,19 +289,23 @@ export default function DashboardPage() {
     [processes],
   )
 
+  const canSeeApprovals = user?.role === 'approver' || user?.role === 'admin'
+
   const attentionItems = useMemo((): AttentionItem[] => {
     const items: AttentionItem[] = []
 
-    for (const a of approvals) {
-      items.push({
-        id: `approval-${a.id}`,
-        kind: 'approval',
-        title: 'Human Approval Required',
-        subtitle: processNameById.get(a.process_id) || a.reason || `Process ${a.process_id.slice(0, 8)}…`,
-        riskLevel: a.risk_level,
-        href: '/approvals',
-        cta: 'Review',
-      })
+    if (canSeeApprovals) {
+      for (const a of approvals) {
+        items.push({
+          id: `approval-${a.id}`,
+          kind: 'approval',
+          title: 'Human Approval Required',
+          subtitle: processNameById.get(a.process_id) || a.reason || `Process ${a.process_id.slice(0, 8)}…`,
+          riskLevel: a.risk_level,
+          href: '/approvals',
+          cta: 'Review',
+        })
+      }
     }
 
     for (const p of processes) {
@@ -337,7 +337,7 @@ export default function DashboardPage() {
     }
 
     return items.slice(0, 8)
-  }, [approvals, processes, processNameById])
+  }, [approvals, processes, processNameById, canSeeApprovals])
 
   const firstName =
     user?.full_name?.trim().split(/\s+/)[0] ||
@@ -393,17 +393,17 @@ export default function DashboardPage() {
               />
               <SummaryCard
                 label="Pending Approvals"
-                value={session ? approvals.length : 0}
-                description="Require your review"
+                value={session && canSeeApprovals ? approvals.length : 0}
+                description={canSeeApprovals ? 'Require your review' : 'Visible to approvers'}
                 icon={Icons.approvals}
-                to="/approvals"
+                to={canSeeApprovals ? '/approvals' : '/processes'}
               />
               <SummaryCard
-                label="Stopped Processes"
+                label="Exception processes"
                 value={session ? stoppedCount : 0}
-                description="Rejected or blocked"
+                description="Blocked in EXCEPTION"
                 icon={Icons.stopped}
-                to="/processes"
+                to="/exceptions"
               />
               <SummaryCard
                 label="Completed Processes"

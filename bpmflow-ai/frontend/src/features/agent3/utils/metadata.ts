@@ -76,22 +76,16 @@ export function generateWorkflowId(): string {
 }
 
 /**
- * Use an application-supplied workflow ID if provided, otherwise generate a demo fallback.
- *
- * @param providedId - The application-supplied workflow ID (optional)
- * @returns The format-validated ID if provided, otherwise a generated demo ID
+ * Use an application-supplied workflow ID. Do not invent process or task IDs.
  */
 export function useProvidedWorkflowId(providedId: string | null): string {
-  if (providedId) {
-    if (!isValidUUID(providedId)) {
-      throw new Error(`Invalid workflow ID: ${providedId}`);
-    }
-    return providedId;
+  if (!providedId) {
+    throw new Error('Process or task ID must be supplied by the workflow; synthetic IDs are not generated')
   }
-  
-  // Demo fallback - explicitly marked
-  console.warn('Using randomly generated workflow ID (demo fallback only)');
-  return generateWorkflowId();
+  if (!isValidUUID(providedId)) {
+    throw new Error(`Invalid workflow ID: ${providedId}`)
+  }
+  return providedId
 }
 
 // ============================================================================
@@ -132,7 +126,7 @@ export function createMessageMetadata(params: MessageMetadataParams) {
     throw new Error(`Invalid correlation ID: ${correlationId}`);
   }
 
-  // Use workflow IDs with demo fallback
+  // Workflow IDs must come from Agent 4 / the process — never invented here.
   const finalProcessInstanceId = useProvidedWorkflowId(processInstanceId);
   const finalTaskId = useProvidedWorkflowId(taskId);
 

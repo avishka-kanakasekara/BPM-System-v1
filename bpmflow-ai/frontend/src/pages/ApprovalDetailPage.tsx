@@ -129,11 +129,11 @@ export default function ApprovalDetailPage() {
         } else if (stage === 'WORKFLOW_EXECUTION') {
           setNotice(
             wfMsg ||
-              'Approved. Agent 2 execution did not finish — open the process and click Continue autopilot to retry the full tool suite.',
+              'Approved. The process is in workflow execution. Authorized WorkflowSteps can be executed one at a time (step UI in a later phase).',
           )
         } else if (stage === 'INVOICE_MATCHING' || stage === 'COMPLETED') {
           setNotice(
-            'Approved. Agent 2 completed the full execution suite automatically. Continue on the process page to submit invoice evidence.',
+            'Approved. Continue on the process page. Invoice matching uses persisted invoices, not typed expected totals.',
           )
         } else {
           setNotice(

@@ -160,12 +160,36 @@ class WorkflowPlanService:
                 "SYSTEM_ACTION steps cannot be completed by the human approval path",
                 error_code="STEP_NOT_EXECUTABLE",
             )
-        return await self._repo.update_step_status(
+        updated = await self._repo.update_step_status(
             workflow_plan_id,
             workflow_step_id,
             WorkflowStepStatus.COMPLETED,
             tenant_id=tenant_id,
         )
+        try:
+            from datetime import UTC, datetime
+
+            from app.monitoring.recorder import record_step_execution
+
+            now = datetime.now(UTC)
+            record_step_execution(
+                process_id=plan.process_id,
+                tenant_id=tenant_id,
+                workflow_plan_id=plan.id,
+                workflow_step_id=step.id,
+                name=step.name,
+                step_type=step.step_type.value,
+                status=WorkflowStepStatus.COMPLETED.value,
+                started_at=now,
+                ended_at=now,
+                step_key=step.step_key,
+                depends_on_step_keys=list(step.depends_on_step_keys or []),
+                approval_required=bool(step.approval_required) or step.step_type is WorkflowStepType.APPROVAL,
+                actor="human",
+            )
+        except Exception:
+            pass
+        return updated
 
     async def list_plans_for_process(
         self, *, tenant_id: UUID, process_id: UUID

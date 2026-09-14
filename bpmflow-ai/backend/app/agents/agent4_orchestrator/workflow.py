@@ -953,7 +953,6 @@ class Agent4Workflow:
             CrossTenantProcurementError,
             PurchaseOrderNotFoundError,
         )
-        from app.procurement.schemas import CreateInvoiceInput, LineItemInput
         from app.procurement.service import get_procurement
 
         stage = await self._orchestrator.get_current_stage(process_id)
@@ -1001,40 +1000,15 @@ class Agent4Workflow:
             )
 
         invoices = procurement.list_invoices(tenant_id=resolved_tenant, process_id=process_id)
-        invoice = invoices[0] if invoices else None
-        if invoice is None and invoice_number and (amount is not None or currency):
-            items = []
-            for po_item in po.items:
-                items.append(
-                    LineItemInput(
-                        description=po_item.description,
-                        quantity=po_item.quantity,
-                        unit_price=po_item.unit_price,
-                        purchase_order_item_id=po_item.item_id,
-                    )
-                )
-            try:
-                invoice = procurement.create_invoice(
-                    CreateInvoiceInput(
-                        tenant_id=resolved_tenant,
-                        process_id=process_id,
-                        purchase_order_id=po.purchase_order_id,
-                        vendor_ref=vendor or str(po.vendor_id),
-                        invoice_number=invoice_number,
-                        currency=(currency or po.currency),
-                        total=Decimal(str(amount)) if amount is not None else po.total,
-                        items=items if amount is None or Decimal(str(amount)) == po.total else [],
-                    )
-                )
-            except (PurchaseOrderNotFoundError, CrossTenantProcurementError) as exc:
-                return WorkflowResult(
-                    process_id=process_id,
-                    current_stage=stage,
-                    success=False,
-                    message=str(exc),
-                    error_code=exc.error_code,
-                    error_message=str(exc),
-                )
+        invoice = None
+        if invoice_number:
+            wanted = invoice_number.strip()
+            for row in invoices:
+                if str(getattr(row, "invoice_number", "")).strip() == wanted:
+                    invoice = row
+                    break
+        elif invoices:
+            invoice = invoices[0]
         if invoice is None:
             return WorkflowResult(
                 process_id=process_id,

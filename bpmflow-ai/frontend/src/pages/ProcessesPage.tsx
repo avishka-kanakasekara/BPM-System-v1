@@ -12,18 +12,11 @@ import {
   Panel,
   ProcessStageBadge,
 } from '../components/ui/primitives'
+import { PROCESS_STAGE_LABELS, WORKFLOW_STAGES } from '../lib/processStages'
 
 const STAGE_FILTERS: Array<{ value: string; label: string }> = [
   { value: '', label: 'All stages' },
-  { value: 'DRAFT', label: 'Draft' },
-  { value: 'DISCOVERING', label: 'Discovering' },
-  { value: 'RESOURCE_PLANNING', label: 'Resource Planning' },
-  { value: 'RISK_REVIEW', label: 'Risk Review' },
-  { value: 'AWAITING_HUMAN_APPROVAL', label: 'Awaiting Human Approval' },
-  { value: 'WORKFLOW_EXECUTION', label: 'Workflow Execution' },
-  { value: 'INVOICE_MATCHING', label: 'Invoice Matching' },
-  { value: 'COMPLETED', label: 'Completed' },
-  { value: 'EXCEPTION', label: 'Stopped' },
+  ...WORKFLOW_STAGES.map((value) => ({ value, label: PROCESS_STAGE_LABELS[value] })),
 ]
 
 const KNOWN_TYPES = ['PROCUREMENT', 'INVOICE', 'GENERAL'] as const

@@ -1,5 +1,7 @@
 # Repair Changelog
 
+> Historical defect register for Phases 1–10. Current handover docs: [README](../README.md), [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md).
+
 Defect resolutions across Phases 1–10. Format: **ID** — root cause → fix.
 
 ## Phase 10 (2026-09-13)

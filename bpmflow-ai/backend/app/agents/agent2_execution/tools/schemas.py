@@ -224,6 +224,8 @@ class GetTaskHistoryOutput(BaseModel):
 class CalculateKPIInput(BaseModel):
     process_type: str = Field(default="procurement", description="Process type category")
     days_back: int = Field(default=30, ge=1, description="Lookback window in days")
+    tenant_id: str | None = Field(default=None, description="Tenant scope for KPI calculation")
+    process_id: str | None = Field(default=None, description="Optional process instance filter")
 
 
 class CalculateKPIOutput(BaseModel):

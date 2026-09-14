@@ -41,7 +41,7 @@ export default function RoleModelNotice({ highlightRegistration = false }: RoleM
       ) : (
         <p className="mt-1.5 leading-relaxed">
           Choose the role for this account before signing in. Local development will sync that
-          role onto your profile.
+          role onto your profile. Hidden menus are not a security control; the API enforces access.
         </p>
       )}
       <ul className="mt-3 space-y-2">

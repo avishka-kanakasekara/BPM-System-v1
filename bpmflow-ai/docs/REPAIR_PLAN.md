@@ -1,5 +1,7 @@
 # BPMFlow AI — Phase 0 Forensic Audit & Repair Plan
 
+> **Historical document (audit date 2026-09-12).** Defect counts, “914 pytest”, VENDOR-ACME notes, and “RLS pending” statements describe that snapshot. **Current contract:** [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), [STATE_MACHINE.md](STATE_MACHINE.md). Phases 8A–12 supersede this register.
+
 **Audit date:** 2026-09-12  
 **Auditor role:** Principal engineer (Phase 0 — read/run only, no fixes applied)  
 **Target contract:** Master Brief gates G1–G10

@@ -6,6 +6,7 @@ from app.models.document import DiscoveredDocument, DocumentChunk
 from app.models.process import Process, ProcessExceptionRow, ProcessTask
 from app.models.workflow import WorkflowPlan, WorkflowStep, WorkflowStepDependency
 from app.models.tool_registry import ToolRegistryEntry
+from app.models.tobe_recommendation import TobeRecommendation
 
 __all__ = [
     "AgentMessageRecord",
@@ -20,6 +21,7 @@ __all__ = [
     "WorkflowStep",
     "WorkflowStepDependency",
     "ToolRegistryEntry",
+    "TobeRecommendation",
 ]
 
 try:

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.agents.agent2_execution.tools import registry as agent2_registry
+from app.agents.agent2_execution.tools.registry import registry as agent2_registry
+from app.agents.agent2_execution import tools as _agent2_tools  # noqa: F401
 from app.agents.agent2_execution.tools.schemas import (
     CalculateKPIInput,
     CalculateKPIOutput,

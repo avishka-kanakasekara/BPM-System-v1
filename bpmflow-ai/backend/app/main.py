@@ -8,7 +8,7 @@ from app.api.v1.router import api_router
 from app.core import shutdown as shutdown_state
 from app.core.config import settings
 from app.core.database import close_db, init_db
-from app.core.health import live_payload, ready_payload, run_dependency_probes
+from app.core.health import demo_readiness_payload, live_payload, ready_payload, run_dependency_probes
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import CorrelationMiddleware, RateLimitMiddleware, RequestGuardMiddleware
 
@@ -120,6 +120,12 @@ async def health_deps(response: Response):
     if not report["ready"]:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return {"status": overall, "env": settings.ENV, **report}
+
+
+@app.get("/health/demo")
+async def health_demo():
+    """Local/demo readiness. No secrets. Does not seed data or apply migrations."""
+    return demo_readiness_payload()
 
 
 app.include_router(api_router, prefix="/api/v1")

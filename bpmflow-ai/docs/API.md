@@ -1,97 +1,174 @@
 # BPMFlow AI — HTTP API
 
-Base URL: `http://127.0.0.1:8000` (dev). OpenAPI: `/docs` · `/openapi.json`.
+Base URL (dev): `http://127.0.0.1:8000`. OpenAPI: `/docs`, `/openapi.json`.
 
-**Auth:** `Authorization: Bearer <supabase_access_token>` on all `/api/v1/*` except `POST /auth/register` (dev only).
+**Auth:** `Authorization: Bearer <supabase_access_token>` on `/api/v1/*` except `POST /api/v1/auth/register` (development). This list is taken from the routers under `backend/app/`; it does not invent endpoints.
 
-## Health
+## Health (unauthenticated)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health/live` | Process alive |
-| GET | `/health/ready` | Persistence + auth config ready |
-| GET | `/health/deps` | Full probe matrix (postgres, rest, jwks, gemini, redis) |
+| Method | Path |
+|--------|------|
+| GET | `/health/live` |
+| GET | `/health/ready` |
+| GET | `/health` and `/health/deps` |
+| GET | `/health/demo` |
+| GET | `/` |
 
-## Auth
+## Auth — `/api/v1/auth`
 
-| Method | Path | Roles | Description |
-|--------|------|-------|-------------|
-| GET | `/api/v1/auth/me` | any | Current user profile |
-| GET | `/api/v1/auth/approver-check` | approver, admin | RBAC probe |
-| POST | `/api/v1/auth/register` | — | Dev: create confirmed user + profile |
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/me` | Current user |
+| GET | `/approver-check` | approver, admin |
+| POST | `/register` | Dev registration |
+| POST | `/confirm-email` | Email confirm helper |
 
-## Agent 1 — Discovery
+## Agent 1 — `/api/v1/agent1`
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/agent1/discover` | Multipart file upload; optional `process_id` |
-| GET | `/api/v1/agent1/processes` | Recent discovered processes |
-| GET | `/api/v1/agent1/processes/{id}` | Process detail + `process_json` |
+| Method | Path |
+|--------|------|
+| POST | `/discover` |
+| GET | `/processes` |
+| GET | `/processes/{process_id}` |
+| POST | `/documents` |
+| GET | `/documents/{document_id}` |
+| POST | `/search` |
+| GET | `/evidence/{chunk_id}` |
 
-## Processes & orchestration (Agent 4)
+## Processes & orchestration — `/api/v1/processes`
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET/POST | `/api/v1/processes` | List / create |
-| GET | `/api/v1/processes/{id}` | Process record + stage |
-| POST | `/api/v1/processes/{id}/start` | Trigger discovery stage |
-| POST | `/api/v1/processes/{id}/advance` | **Golden path driver** — autonomous stage chain |
-| POST | `/api/v1/processes/{id}/plan-resources` | Agent 3 allocation |
-| POST | `/api/v1/processes/{id}/risk-review` | Risk evaluation |
-| POST | `/api/v1/processes/{id}/execute` | Manual Agent 2 dispatch |
-| POST | `/api/v1/processes/{id}/complete-invoice-matching` | Invoice evidence → COMPLETED |
+| Method | Path |
+|--------|------|
+| GET, POST | `/` |
+| GET | `/{process_id}` |
+| POST | `/{process_id}/start` |
+| POST | `/{process_id}/advance` |
+| POST | `/{process_id}/plan-resources` |
+| POST | `/{process_id}/risk-review` |
+| POST | `/{process_id}/execute` |
+| POST | `/{process_id}/complete-invoice-matching` |
+| POST | `/{process_id}/workflow/plan` |
+| GET | `/{process_id}/workflow` |
+| GET | `/{process_id}/quotations` |
+| GET | `/{process_id}/purchase-order` |
+| GET | `/{process_id}/invoices` |
+| GET | `/{process_id}/exceptions` |
+| GET | `/{process_id}/monitoring` |
+| GET | `/{process_id}/timeline` |
+| GET | `/{process_id}/kpis` |
+| POST | `/{process_id}/kpis/calculate` |
+| GET | `/{process_id}/bottlenecks` |
+| GET | `/{process_id}/exception-analytics` |
+| GET | `/{process_id}/recommendations` |
+| POST | `/{process_id}/recommendations/generate` |
 
-### Advance payload (key fields)
+`advance` chains **Agent 4** stages only. It still stops for human approval and invoice evidence. Caller `expected_*` amounts are not the invoice-match source of truth.
 
-```json
-{
-  "idempotency_key": "unique-string",
-  "max_steps": 8,
-  "resource_planning": {
-    "task_id": "uuid",
-    "tenant_id": "00000000-0000-0000-0000-000000000001",
-    "human_requirements": { "skills": ["python"] },
-    "budget_requirements": { "amount": "5000", "currency": "USD" }
-  },
-  "invoice": {
-    "invoice_number": "INV-001",
-    "amount": 2500.0,
-    "expected_invoice_number": "INV-001",
-    "expected_amount": 2500.0
-  }
-}
-```
+## Workflow plans — `/api/v1/workflows`
 
-## Approvals
+| Method | Path | Notes |
+|--------|------|--------|
+| POST | `/` | Create plan |
+| GET | `/{workflow_plan_id}` | |
+| GET | `/{workflow_plan_id}/steps` | |
+| POST | `/{workflow_plan_id}/steps` | |
+| POST | `/{workflow_plan_id}/validate` | |
+| POST | `/{workflow_plan_id}/activate` | **approver or admin** |
+| POST | `/{workflow_plan_id}/steps/{workflow_step_id}/execute` | Agent 2 one-step |
 
-| Method | Path | Roles | Description |
-|--------|------|-------|-------------|
-| GET | `/api/v1/approvals` | any | List approval requests |
-| GET | `/api/v1/approvals/{id}` | any | Single approval |
-| POST | `/api/v1/approvals/{id}/approve` | approver, admin | Approve + dispatch Agent 2 |
-| POST | `/api/v1/approvals/{id}/reject` | approver, admin | Reject |
+## Agent 2 — `/api/v1/agent2`
 
-Approve requires discovery metadata (vendor, amount, currency, cost centre) on the process — returns 422 if missing.
+| Method | Path |
+|--------|------|
+| GET | `/health` |
+| GET | `/tools` |
+| GET | `/dashboard` |
+| GET | `/receipts` |
+| GET | `/receipts/{receipt_id}` |
+| POST | `/receipts/{receipt_id}/retry` |
+| POST | `/execute` |
+| GET | `/kpis` |
+| GET | `/recommendations` |
+| POST | `/recommendations/{recommendation_id}/approve` |
+| POST | `/recommendations/{recommendation_id}/reject` |
+| GET | `/exceptions` |
+| GET | `/audit-logs` |
 
-## Agent 2
+`POST /execute` with `__full_task_suite__` returns 403.
 
-Prefix: `/api/v1/agent2/` — receipts, tools, execute, dashboard, KPIs, recommendations, exceptions, audit-logs.
+## Agent 3 — `/api/v1/agent3`
 
-## Agent 3
+| Method | Path |
+|--------|------|
+| POST | `/allocations` |
+| GET | `/recommendations/{recommendation_id}` |
+| GET | `/recommendations/by-correlation/{correlation_id}` |
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/agent3/allocations` | Rank candidates (tenant JWT required) |
-| GET | `/api/v1/agent3/recommendations/{id}` | Stored recommendation |
-| GET | `/api/v1/agent3/recommendations/by-correlation/{correlation_id}` | Lookup by correlation |
+## Approvals — `/api/v1/approvals`
 
-## Policies & audit
+| Method | Path | Roles |
+|--------|------|--------|
+| GET | `/` | authenticated |
+| GET | `/{approval_id}` | authenticated |
+| POST | `/{approval_id}/approve` | approver, admin |
+| POST | `/{approval_id}/reject` | approver, admin |
 
-| Method | Path | Roles | Description |
-|--------|------|-------|-------------|
-| GET/POST | `/api/v1/policies` | admin | Policy knowledge CRUD + upload |
-| GET | `/api/v1/audit` | any | Audit log query (`entity_id`, `entity_type`) |
+## Exceptions — `/api/v1/exceptions`
 
-## Error shape
+| Method | Path | Roles |
+|--------|------|--------|
+| GET | `/` | authenticated |
+| GET | `/{exception_id}` | authenticated |
+| POST | `/{exception_id}/resolve` | approver, admin |
+| POST | `/{exception_id}/retry` | approver, admin |
+| POST | `/{exception_id}/fail` | approver, admin |
 
-FastAPI default: `{"detail": "..."}` or validation errors array. Approval enrichment: `422` with `missing_fields`.
+## Procurement
+
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/api/v1/vendors` | |
+| GET | `/api/v1/vendors/{vendor_id}` | |
+| POST | `/api/v1/vendors` | admin |
+| POST | `/api/v1/vendors/seed-demo` | admin; not production |
+| GET | `/api/v1/invoices/{invoice_id}` | |
+| POST | `/api/v1/invoices` | admin; persist only, not MATCHED |
+
+PO creation is **not** a public vendor route; it happens through authorized Agent 2 `CREATE_PURCHASE_ORDER`.
+
+## Tools — `/api/v1/tools`
+
+| Method | Path | Roles |
+|--------|------|--------|
+| GET | `/` | tenant user |
+| POST | `/resolve` | tenant user |
+| GET | `/{tool_id}` | tenant user |
+| POST | `/` | admin |
+| POST | `/{tool_id}/enable` | admin |
+| POST | `/{tool_id}/disable` | admin |
+
+## Company directory — `/api/v1/company`
+
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/employees`, `/employees/{id}` | |
+| POST | `/employees` | admin |
+| GET | `/departments`, `/roles`, `/approvers`, `/sod` | |
+| POST | `/seed-demo` | admin; not production |
+
+## Policies — `/api/v1/policies`
+
+Admin policy knowledge CRUD, search, activate/archive versions.
+
+## Audit — `/api/v1/audit`
+
+`GET /` — tenant-filtered when JWT tenant is present.
+
+## TO-BE recommendations (process-scoped)
+
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/api/v1/recommendations/{recommendation_id}` | |
+| POST | `/api/v1/recommendations/{recommendation_id}/review` | approver/admin |
+
+Generate via `POST /api/v1/processes/{id}/recommendations/generate`.

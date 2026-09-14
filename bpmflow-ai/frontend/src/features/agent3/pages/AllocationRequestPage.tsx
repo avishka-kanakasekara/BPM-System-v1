@@ -6,7 +6,7 @@ import { getAgent3Session } from '../auth/agent3Session';
 import { FormErrorSummary } from '../components/FormErrorSummary';
 import { Agent3SectionNavigation } from '../components/Agent3SectionNavigation';
 import { getProvidedWorkflowContext, recommendationPath } from '../navigation/recommendationNavigation';
-import { createMessageMetadata, generateCorrelationId, generateWorkflowId } from '../utils/metadata';
+import { createMessageMetadata, generateCorrelationId } from '../utils/metadata';
 import { emptyBudgetDraft, emptyHumanDraft, type AllocationMode, type BudgetDraft, type FieldErrors, type HumanDraft, validateBudgetDraft, validateHumanDraft } from '../validation/allocationValidation';
 
 const inputClass = 'mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900 shadow-sm focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:bg-slate-100';
@@ -48,11 +48,8 @@ function BudgetFields({ value, onChange, errors, disabled }: { value: BudgetDraf
 
 export default function AllocationRequestPage() {
   const location = useLocation(); const navigate = useNavigate();
-  // Navigation state is browser-controlled. UUID validation establishes format only;
-  // final production trust requires backend-provided or backend-verified workflow context.
   const workflow = useRef(getProvidedWorkflowContext(location.state));
   const correlationId = useRef(generateCorrelationId());
-  const demoWorkflow = useRef({ processInstanceId: generateWorkflowId(), taskId: generateWorkflowId() });
   const pendingRef = useRef(false); const errorSummaryRef = useRef<HTMLDivElement>(null);
   const [sessionState, setSessionState] = useState<{ requesterId: string; tenantId: string } | null>(null);
   const [sessionStatus, setSessionStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -65,13 +62,13 @@ export default function AllocationRequestPage() {
 
   const invalid = (next: FieldErrors) => { setErrors(next); requestAnimationFrame(() => errorSummaryRef.current?.focus()); };
   async function submit(event: FormEvent) {
-    event.preventDefault(); if (!sessionState || pendingRef.current) return;
+    event.preventDefault(); if (!sessionState || pendingRef.current || !workflow.current) return;
     const nextErrors: FieldErrors = {}; let humanValue = null; let budgetValue = null;
     if (mode !== 'BUDGET') { const result = validateHumanDraft(human, sessionState.requesterId); Object.assign(nextErrors, result.errors); humanValue = result.value; }
     if (mode !== 'HUMAN') { const result = validateBudgetDraft(budget, sessionState.requesterId); Object.assign(nextErrors, result.errors); budgetValue = result.value; }
     if (Object.keys(nextErrors).length) { invalid(nextErrors); return; }
     setErrors({}); setSubmitError(null); pendingRef.current = true; setSubmitting(true);
-    const ids = workflow.current ?? demoWorkflow.current;
+    const ids = workflow.current;
     try {
       const response = await submitAllocationRequest({ metadata: createMessageMetadata({ tenantId: sessionState.tenantId, correlationId: correlationId.current, processInstanceId: ids.processInstanceId, taskId: ids.taskId }), human_requirements: humanValue, budget_requirements: budgetValue });
       navigate(recommendationPath(response.recommendation_id), { state: { persistedResponse: response } });
@@ -85,8 +82,9 @@ export default function AllocationRequestPage() {
 
   if (sessionStatus === 'loading') return <main className="min-h-screen bg-slate-50 p-6"><p role="status" className="mx-auto max-w-3xl text-slate-600">Verifying authenticated session…</p></main>;
   if (sessionStatus === 'error' || !sessionState) return <main className="min-h-screen bg-slate-50 p-6"><section role="alert" className="mx-auto max-w-3xl rounded-xl border border-red-200 bg-white p-6"><h1 className="text-2xl font-bold text-slate-900">Authentication required</h1><p className="mt-2 text-slate-600">A valid managed session is required before an allocation request can be created. Sign in through the application authentication flow.</p></section></main>;
+  if (!workflow.current) return <main className="min-h-screen bg-slate-50 p-6"><section role="alert" className="mx-auto max-w-3xl rounded-xl border border-amber-200 bg-white p-6"><h1 className="text-2xl font-bold text-slate-900">Process context required</h1><p className="mt-2 text-slate-600">Agent 3 allocation must use a process instance and task supplied by the workflow. Synthetic process or task IDs are not generated in the browser.</p></section></main>;
   return <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900"><div className="mx-auto max-w-4xl space-y-6">
-    <Agent3SectionNavigation /><header><p className="text-sm font-semibold uppercase tracking-wide text-indigo-600">Agent 3</p><h1 className="mt-1 text-3xl font-bold">Create allocation request</h1><p className="mt-2 text-slate-500">Authenticated tenant context verified.</p>{!workflow.current && <p className="mt-2 inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">Standalone demo mode</p>}</header>
+    <Agent3SectionNavigation /><header><p className="text-sm font-semibold uppercase tracking-wide text-indigo-600">Agent 3</p><h1 className="mt-1 text-3xl font-bold">Create allocation request</h1><p className="mt-2 text-slate-500">Authenticated tenant context verified. Process and task IDs come from workflow navigation state. Agent 3 resolves eligible people from the Company Directory, not from hardcoded or synthetic identities.</p></header>
     <FormErrorSummary ref={errorSummaryRef} errors={errors} />
     {submitError && <section role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-800"><p>{submitError.message}</p>{(submitError.retryable || submitError.conflict) && <p className="mt-2 font-mono text-sm">Correlation ID: {correlationId.current}</p>}{submitError.retryable && <p className="mt-2 text-sm">Your correlation ID and draft have been preserved. Submit again when ready.</p>}</section>}
     <form onSubmit={submit} aria-busy={submitting} className="space-y-6">

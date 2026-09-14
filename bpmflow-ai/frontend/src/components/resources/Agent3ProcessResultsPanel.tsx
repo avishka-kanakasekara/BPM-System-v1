@@ -83,10 +83,18 @@ export default function Agent3ProcessResultsPanel({
     stage === 'DISCOVERING' || stage === 'RESOURCE_PLANNING' || stage === 'RISK_REVIEW'
 
   return (
-    <Panel title="Agent 3 · Resource Planning Results">
+    <Panel title="Resource Allocation">
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Agent 3 — Workforce &amp; Resource Allocation
+      </p>
       <p className="mb-4 text-sm text-slate-600">
-        Workforce ranking and budget validation from Agent 3. This is an advisory
-        recommendation — it does not approve or execute the process.
+        Company Directory → Agent 3 eligibility checks → eligible employee/resource → Workflow Step → Agent 4 plan /
+        approval. Agent 3 uses persisted directory identities; this UI does not invent employees or decide eligibility.
+      </p>
+      <p className="mb-4 text-sm">
+        <Link className="link" to="/directory">
+          Open Company Directory
+        </Link>
       </p>
 
       {!allocation ? (

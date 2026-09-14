@@ -65,3 +65,4 @@ class AuditLog(Base):
     allowed = Column(Boolean, nullable=True)
     reason = Column(Text, nullable=True)
     payload = Column(JsonDict, nullable=True)
+    tenant_id = Column(Uuid(as_uuid=True), ForeignKey("public.tenants.id"), nullable=True)

@@ -11,7 +11,8 @@
 
 | Variable | Production | Notes |
 |----------|------------|-------|
-| `ENV` | `production` | Enables G10 guards at startup |
+| `ENV` | `production` | Enables production guards at startup |
+| `DEBUG` | `false` | Startup fails if `true` |
 | `SUPABASE_URL` | Required | Project API URL |
 | `SUPABASE_ANON_KEY` | Required | Frontend only |
 | `SUPABASE_SERVICE_ROLE_KEY` | Required | Backend only; never expose to browser |
@@ -38,33 +39,13 @@ Copy `backend/.env.example` to `backend/.env` and fill values.
 
 ## Migration order
 
-Apply Supabase SQL migrations in numeric order:
+Apply `supabase/migrations/` **0001_init.sql** through **0024_phase12_rls_hardening.sql** in numeric order.
 
-```
-supabase/migrations/
-  0001_init.sql
-  0002_agent1_discovery.sql
-  0003_agent4_workflow.sql
-  0004_agent3_resource_persistence.sql
-  0005_agent3_synthetic_seed.sql
-  0006_agent3_write_path_persistence.sql
-  0007_agent2_execution.sql
-  0008_company_policy_knowledge.sql
-  0009_admin_role_provisioning_notes.sql
-  0010_agent2_scheduled_jobs.sql
-  0011_agent2_scheduler_claiming.sql
-  0012_schema_hardening.sql
-  0013_policy_pgvector.sql
-  0014_process_advancement.sql
-```
+**0024 contains final RLS hardening.** Until it is applied on the Supabase project, live RLS is incomplete.
 
-Check status:
+The helper `python -m app.scripts.apply_pending_migrations` auto-applies **0001–0012** only. Paste **0013–0024** in **Dashboard → SQL Editor**. This repo does not auto-migrate a remote database from API startup.
 
-```bash
-cd bpmflow-ai/backend
-python -m app.scripts.migration_status
-python -m app.scripts.apply_pending_migrations   # when DATABASE_URL is reachable
-```
+Check files on disk (no secrets): `GET /health/demo` after the API is running.
 
 ## Seeding (demo / staging)
 
@@ -125,8 +106,9 @@ On SIGTERM / uvicorn shutdown:
 
 ## Security checklist
 
-- [ ] `ENV=production`, no dev auth helpers exposed
+- [ ] `ENV=production`, `DEBUG=false`, no `MOCK_LLM`
 - [ ] CORS locked to known frontend origins
 - [ ] Rate limits enabled (defaults in config)
 - [ ] Secrets only in env / secret manager — never in logs (see `test_g10_production.py`)
 - [ ] Service role key server-side only
+- [ ] Migration **0024** applied

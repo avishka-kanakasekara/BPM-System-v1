@@ -35,4 +35,5 @@ Repositories should call `use_supabase_rest_fallback()` (which reads `Persistenc
 ## Health
 
 - `/health/deps` and `/health/ready` include `persistence_mode` and `persistence.degraded`
+- `/health/demo` reports flags and migration filenames on disk (no secrets)
 - Degraded mode is never silent: logs emit `persistence_degraded_using_rest`

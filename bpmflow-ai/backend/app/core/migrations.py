@@ -40,7 +40,14 @@ def migration_path(filename: str) -> Path:
 
 
 def list_migrations() -> list[Path]:
+    """Files the Python runner applies (0001–0012). Later SQL is applied in the dashboard."""
     return [migration_path(name) for name in MIGRATION_FILES]
+
+
+def list_on_disk_migrations() -> list[str]:
+    """Every numbered SQL file in supabase/migrations, including 0013–0024."""
+    names = sorted(path.name for path in migrations_dir().glob("*.sql"))
+    return names
 
 
 def split_sql_statements(sql: str) -> list[str]:

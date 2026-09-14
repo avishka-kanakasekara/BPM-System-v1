@@ -201,6 +201,10 @@ class Settings(BaseSettings):
     def assert_production_llm_config(self) -> None:
         if not self.is_production:
             return
+        if self.DEBUG:
+            raise RuntimeError(
+                "DEBUG cannot be enabled when ENV=production."
+            )
         if self.MOCK_LLM:
             raise RuntimeError(
                 "MOCK_LLM cannot be enabled when ENV=production. "

@@ -14,6 +14,7 @@ from app.api.v1.deps import get_audit_repository
 from app.core.security import get_current_user
 from app.schemas.audit import AuditLogResponse, audit_from_record
 from app.schemas.auth import CurrentUser
+from app.core.tenancy import authenticated_tenant_id
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -38,12 +39,14 @@ async def list_audit_logs(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> list[AuditLogResponse]:
     """Return audit trail rows, newest first, with optional filters and pagination."""
+    tenant_id = authenticated_tenant_id(current_user, required=False)
     try:
         records = await repository.list_audit_logs(
             entity_type=entity_type,
             entity_id=entity_id,
             limit=limit,
             offset=offset,
+            tenant_id=tenant_id,
         )
     except DatabasePersistenceError as exc:
         raise _database_error() from exc

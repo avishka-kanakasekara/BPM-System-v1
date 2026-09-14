@@ -11,19 +11,24 @@ import { FullRecommendation, RecommendationErrorState, RecommendationLoadingStat
 import AllocationRequestPage from '../pages/AllocationRequestPage';
 import RecommendationLookupPage from '../pages/RecommendationLookupPage';
 import type { PersistedAllocationResponse } from '../types/agent3Api';
-import { MOCK_RECOMMENDATION_ID, MOCK_REQUESTER_ID, MOCK_TENANT_ID, mockPersistedAllocationResponse, mockRecommendationSummary } from './fixtures/agent3Contracts';
+import { MOCK_PROCESS_INSTANCE_ID, MOCK_RECOMMENDATION_ID, MOCK_REQUESTER_ID, MOCK_TASK_ID, MOCK_TENANT_ID, mockPersistedAllocationResponse, mockRecommendationSummary } from './fixtures/agent3Contracts';
 
 vi.mock('../auth/agent3Session', () => ({ getAgent3Session: vi.fn() }));
 vi.mock('../api/agent3Api', () => ({ submitAllocationRequest: vi.fn(), getRecommendationById: vi.fn(), getRecommendationByCorrelationId: vi.fn() }));
 
 const session = { requesterId: MOCK_REQUESTER_ID, tenantId: MOCK_TENANT_ID, accessToken: 'fake-test-token' };
-const renderAt = (node: React.ReactNode, path = '/agent3/allocations/new') => render(<MemoryRouter initialEntries={[path]}>{node}</MemoryRouter>);
+const allocationEntry = {
+  pathname: '/agent3/allocations/new',
+  state: { processInstanceId: MOCK_PROCESS_INSTANCE_ID, taskId: MOCK_TASK_ID },
+};
+const renderAt = (node: React.ReactNode, path: string | typeof allocationEntry = '/agent3/allocations/new') =>
+  render(<MemoryRouter initialEntries={[path]}>{node}</MemoryRouter>);
 async function expectNoAxeViolations(container: HTMLElement) {
   const result = await axe.run(container);
   expect(result.violations, result.violations.map(({ id, help }) => `${id}: ${help}`).join('\n')).toEqual([]);
 }
 async function allocation() {
-  const view = renderAt(<AllocationRequestPage />);
+  const view = renderAt(<AllocationRequestPage />, allocationEntry);
   await screen.findByRole('heading', { name: 'Create allocation request' });
   return view;
 }

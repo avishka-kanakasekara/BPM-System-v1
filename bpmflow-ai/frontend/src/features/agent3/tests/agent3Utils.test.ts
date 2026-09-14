@@ -217,10 +217,9 @@ describe('Metadata Utilities', () => {
       expect(workflowId).toBe('00000000-0000-0000-0000-000000000001');
     });
 
-    it('should generate demo fallback when no supplied ID is provided', () => {
-      const workflowId = useProvidedWorkflowId(null);
-      expect(isValidUUID(workflowId)).toBe(true);
-    });
+    it('should throw when no supplied ID is provided', () => {
+      expect(() => useProvidedWorkflowId(null)).toThrow(/must be supplied/)
+    })
 
     it('should throw on invalid workflow IDs', () => {
       expect(() => useProvidedWorkflowId('invalid')).toThrow('Invalid workflow ID');
@@ -262,16 +261,13 @@ describe('Metadata Utilities', () => {
       })).toThrow('Invalid correlation ID');
     });
 
-    it('should use demo fallback for workflow IDs when null', () => {
-      const metadata = createMessageMetadata({
+    it('should throw when workflow IDs are null', () => {
+      expect(() => createMessageMetadata({
         tenantId: '00000000-0000-0000-0000-000000000001',
         correlationId: '00000000-0000-0000-0000-000000000002',
         processInstanceId: null,
         taskId: null
-      });
-
-      expect(isValidUUID(metadata.process_instance_id)).toBe(true);
-      expect(isValidUUID(metadata.task_id)).toBe(true);
-    });
+      })).toThrow(/must be supplied/)
+    })
   });
 });

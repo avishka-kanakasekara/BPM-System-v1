@@ -1,38 +1,54 @@
 """
-Agent 2 — KPI Analytics Tool (Real DB Query)
+Agent 2 — KPI Analytics Tool
 
-Provides calculate_kpi querying Agent 2 DB tables to calculate cycle time, completion rate, throughput, and bottleneck task.
+Reads the observational monitoring service. Does not change workflow state,
+plans, or recommendations. Numbers come from persisted monitoring facts only.
 """
 
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.agent2_execution.analytics import kpi_engine
 from app.agents.agent2_execution.tools.schemas import CalculateKPIInput, CalculateKPIOutput
+from app.company_directory.seed import BPMFLOW_DEMO_TENANT_ID
+
+
+def _hours(seconds: Decimal | None) -> float:
+    if seconds is None:
+        return 0.0
+    return float(seconds / Decimal("3600"))
 
 
 async def calculate_kpi(
     session: AsyncSession | None, input_data: CalculateKPIInput
 ) -> CalculateKPIOutput:
-    """Calculate aggregated KPI analytics metrics from historical DB records."""
-    metrics = await kpi_engine.get_kpis(session, process_id=None)
-    avg_cycle = metrics.get("average_cycle_time") or 0.0
-    completion = metrics.get("task_success_rate")
-    sla = metrics.get("sla_compliance_rate")
-    throughput = int(metrics.get("throughput") or 0)
-    bottleneck = metrics.get("bottleneck_task") or "Unknown"
+    """Calculate KPIs from persisted monitoring records. Never mutates workflow."""
+    del session  # observational path does not query Agent2 invented fallbacks
+    from app.monitoring.service import MonitoringService
 
-    if session is None and avg_cycle <= 0:
-        avg_cycle = 1.0
-        completion = 1.0
-        sla = 1.0
-        bottleneck = "Insufficient history"
-
+    tenant_id = BPMFLOW_DEMO_TENANT_ID
+    if input_data.tenant_id:
+        tenant_id = UUID(str(input_data.tenant_id))
+    process_id = UUID(str(input_data.process_id)) if input_data.process_id else None
+    window_end = datetime.now(UTC)
+    window_start = window_end - timedelta(days=input_data.days_back)
+    report = MonitoringService().kpis(
+        tenant_id,
+        process_id=process_id,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    bottleneck = "insufficient_evidence"
+    if report.bottleneck_steps:
+        bottleneck = report.bottleneck_steps[0].step
+    completion = 0.0 if report.completion_rate is None else float(report.completion_rate)
     return CalculateKPIOutput(
         process_type=input_data.process_type,
-        avg_cycle_time_hours=float(avg_cycle or 1.0),
-        completion_rate=float(completion if completion is not None else 1.0),
-        sla_compliance_rate=float(sla if sla is not None else 1.0),
-        throughput=throughput,
-        bottleneck_task=str(bottleneck),
+        avg_cycle_time_hours=_hours(report.average_completion_time_seconds),
+        completion_rate=completion,
+        sla_compliance_rate=0.0,
+        throughput=report.completed_processes,
+        bottleneck_task=bottleneck,
     )

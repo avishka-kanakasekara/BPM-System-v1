@@ -1,85 +1,58 @@
-# BPMFlow AI — Architecture (as implemented)
+# BPMFlow AI — architecture (as implemented)
 
-**Last verified:** 2026-09-13 via `e2e_smoke` (8/8) and pytest.
+BPMFlow AI is a **human-supervised multi-agent BPM** system. It is not fully autonomous.
 
-## Overview
+**Last documentation pass:** Phase 13 (aligned with Phases 8A–12 code).
 
-Single FastAPI process hosts four agents and shared services. The React frontend talks to `/api/v1/*` with Supabase JWTs. Persistence is **Postgres when reachable**, otherwise **Supabase REST** (explicit degraded mode — no silent `session=None` in API routes).
+## Stack
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | React 18 + Vite + TypeScript |
+| Backend | Python FastAPI monolith (`backend/app/main.py`) |
+| Database | Supabase / PostgreSQL |
+| Auth | Supabase JWT (JWKS or HS256 secret in development) |
+| IR | Tenant-scoped document corpus: BM25 + embeddings + hybrid fusion/reranking (`app/ir/`) |
 
 ```
-Browser ──JWT──► FastAPI (main.py)
-                    ├── Agent 1  document discovery
-                    ├── Agent 2  tool execution + scheduler
-                    ├── Agent 3  resource ranking (tenant-scoped)
-                    ├── Agent 4  state machine + risk + approvals
-                    ├── Policy KB  ingestion + retrieval
-                    └── Supabase REST / Postgres
+Browser (Vite :5174)
+    JWT (anon key only)
+        │
+        ▼
+FastAPI :8000
+    ├── Agent 1  discovery + document intelligence + IR ingest/search
+    ├── Agent 2  one-step WorkflowStep execution + receipts + KPIs
+    ├── Agent 3  resource ranking (company directory)
+    ├── Agent 4  state machine, plans, approvals, completion gate
+    ├── Tool Registry (allow-listed implementation keys)
+    ├── Procurement (vendor, quotation, PO, invoice, match)
+    ├── Exceptions + audit + monitoring + TO-BE recommendations
+    └── Postgres and/or Supabase REST (service role — backend only)
 ```
 
-## Entry & middleware
+## Responsibility boundaries
 
-`backend/app/main.py`:
+| Component | Owns | Does not own |
+|-----------|------|----------------|
+| **ProcessContext** | Canonical discovered facts for a process | Workflow stage |
+| **WorkflowPlan / WorkflowStep** | Ordered authorized work | Automatic execution of the whole plan |
+| **Tool Registry** | Resolve `required_action` → allow-listed implementation | Arbitrary Python imports or execution |
+| **Agent 4 StateMachine** | `current_stage` transitions | LLM decisions |
+| **Human** | Approval, exception resolve/fail, TO-BE review, plan activation (approver/admin) | Nothing required of agents without a gate |
+| **Audit logs** | Who did what on which entity | Client-supplied actor impersonation |
+| **Monitoring** | Observational KPIs / timeline | Invented durations or fake completion times |
+| **TO-BE recommendations** | Evidence-backed suggestions | Auto-activation of plans |
 
-- Lifespan: prod config assert, DB init, Agent 2 scheduler start/stop, graceful drain
-- Middleware (outer→inner): `CorrelationMiddleware` → `RateLimitMiddleware` → `RequestGuardMiddleware` → CORS
-- Health: `/health/live` (process up), `/health/ready`, `/health/deps` (per-dependency probes)
+## Persistence
 
-## Agents
+Postgres is preferred. If the pooler is down, some repositories fall back to **Supabase REST with the service role**. That key must never ship to the browser.
 
-### Agent 1 — Discovery
-
-- **Routes:** `POST /api/v1/agent1/discover`, `GET /api/v1/agent1/processes/{id}`
-- **Pipeline:** ingest → extract → classify → entities/relations (LLM or mock) → PM4Py mining → `process_json` + `risk_facts`
-- **Persistence:** updates `processes.process_json`, tasks, exceptions, `agent_messages` (discovery row)
-
-### Agent 2 — Execution
-
-- **Routes:** `/api/v1/agent2/*` (execute, receipts, tools, dashboard, scheduler)
-- **Pipeline:** cognitive plan → tool guard → receipt persistence
-- **Offline mode:** `GEMINI_OFFLINE=true` uses deterministic tool selection (required for smoke/CI)
-- **Scheduler:** polls `scheduled_jobs` via REST; claims with worker id
-
-### Agent 3 — Resources
-
-- **Routes:** `POST /api/v1/agent3/allocations`, recommendation lookups
-- **Auth:** ES256 JWT + mandatory `app_metadata.tenant_id`
-- **Data:** demo tenant seed (`00000000-0000-0000-0000-000000000001`) with humans, budgets, SoD scenarios
-
-### Agent 4 — Orchestrator
-
-- **Routes:** `/api/v1/processes/*`, `/api/v1/approvals/*`, `/api/v1/exceptions/*`
-- **State machine:** DRAFT → DISCOVERING → RESOURCE_PLANNING → RISK_REVIEW → AWAITING_HUMAN_APPROVAL → WORKFLOW_EXECUTION → INVOICE_MATCHING → COMPLETED | EXCEPTION
-- **Advancement:** `POST /processes/{id}/advance` chains autonomous steps; idempotency via `process_advancement_runs` (REST) or in-memory fallback when migration 0014 missing
-- **Messaging:** `AgentCommunicationService` persists outbound/inbound envelopes to `agent_messages` (REST)
-- **Risk:** policy retrieval when `company_policies` exists; else rule-based thresholds from discovery `risk_facts`
-
-## Shared modules (Phase 8+)
-
-| Module | Role |
-|--------|------|
-| `app/core/audit_writer.py` | Unified `audit_logs` writer |
-| `app/core/persistence/` | Mode detection (`postgres` / `rest` / unavailable) |
-| `app/messaging/envelope.py` | Inter-agent envelope factory |
-| `app/services/email.py` | Email dispatch entry |
-| `app/llm/retry.py` | Transient LLM error detection |
-| `app/core/logging.py` | JSON logs + `correlation_id` + redaction |
+Row Level Security (RLS) is defined in SQL. **Migration 0024** closes legacy `USING (true)` policies. Until 0024 is applied on the project, live RLS is incomplete. The backend still filters by JWT tenant on APIs.
 
 ## Frontend
 
-- Vite + React + Tailwind; routes in `frontend/src/App.tsx`
-- Process detail page: stage-aware actions, correlation timeline, risk findings
-- RBAC: `RequireRole` on `/approvals`, `/policies`, `/tasks`
-- Types generated from OpenAPI: `npm run generate:api-types`
+Routes in `frontend/src/App.tsx`: dashboard, discover, processes, approvals, audit, policies (admin), Agent 2, Agent 3. Types can be regenerated with `npm run generate:api-types`.
 
-## Persistence notes
+## Security posture (summary)
 
-- **REST fallback:** When pooler DNS fails, repositories use Supabase REST with service role
-- **Discovery metadata:** `process_from_rest()` merges `process_json` column + legacy `description` JSON into `metadata_json` for Agent 4 enrichment
-- **Missing migrations:** Advancement idempotency degrades to in-memory; apply `0014_process_advancement.sql` for durable runs
-
-## Security
-
-- JWT verification: JWKS (ES256/RS256) or HS256 secret (dev)
-- Tenant id from verified `app_metadata` only
-- Service role key backend-only; never in frontend
-- Production startup rejects `MOCK_LLM`, `GEMINI_OFFLINE`, open CORS
+JWT on `/api/v1/*` (except documented register). Roles `requester` / `approver` / `admin`. Tenant from `app_metadata`. Agent 2 executes **one** authorized WorkflowStep per request. Invoice matching is deterministic against persisted PO/invoice rows.

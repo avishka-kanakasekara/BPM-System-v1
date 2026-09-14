@@ -18,6 +18,7 @@ from app.api.v1.routes_auth import router as auth_router
 from app.api.v1.routes_company import router as company_router
 from app.api.v1.routes_exceptions import router as exceptions_router
 from app.api.v1.routes_policies import router as policies_router
+from app.api.v1.routes_monitoring import router as monitoring_router
 from app.api.v1.routes_process import router as process_router
 from app.api.v1.routes_procurement import invoice_router, router as procurement_router
 from app.api.v1.routes_tools import router as tools_router
@@ -44,6 +45,7 @@ api_router.include_router(
 
 # Agent 4
 api_router.include_router(process_router)
+api_router.include_router(monitoring_router)
 api_router.include_router(workflows_router)
 api_router.include_router(approvals_router)
 api_router.include_router(exceptions_router)

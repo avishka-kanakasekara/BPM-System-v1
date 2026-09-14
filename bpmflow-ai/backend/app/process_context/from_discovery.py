@@ -71,6 +71,9 @@ def context_from_discovery(
     if verified.get("vendor"):
         vendor_name = str(verified["vendor"]["value"])
     vendor_name = vendor_name or facts.get("vendor_name") or None
+    vendor_id = facts.get("vendor_id") or None
+    if vendor_id in (None, "") and vendor_name and tenant_id is not None:
+        vendor_id = _resolve_vendor_id(tenant_id, vendor_name)
     pr_id = None
     if verified.get("process_request_id"):
         pr_id = str(verified["process_request_id"]["value"])
@@ -90,7 +93,7 @@ def context_from_discovery(
         description=process.process_name,
         amount=purchase_amount,
         currency=currency,
-        vendor_id=facts.get("vendor_id") or None,
+        vendor_id=vendor_id,
         vendor_name=vendor_name,
         cost_centre=facts.get("cost_centre") or None,
         purchase_request_id=pr_id,
@@ -194,6 +197,20 @@ def context_from_discovery(
             ),
         }
     )
+
+
+def _resolve_vendor_id(tenant_id: UUID, vendor_ref: str) -> str | None:
+    """Bind extracted vendor names to the tenant vendor table. Never invent a vendor."""
+    try:
+        from app.procurement.exceptions import VendorNotFoundError
+        from app.procurement.service import get_procurement
+
+        vendor = get_procurement().resolve_vendor(tenant_id=tenant_id, vendor_ref=vendor_ref)
+        return str(vendor.vendor_id)
+    except VendorNotFoundError:
+        return None
+    except Exception:
+        return None
 
 
 def _norm_currency(value: object) -> str | None:

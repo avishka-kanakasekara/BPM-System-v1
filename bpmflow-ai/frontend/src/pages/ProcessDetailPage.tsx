@@ -1,23 +1,56 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
+  activateWorkflowPlan,
   apiErrorMessage,
-  advanceProcess,
+  completeInvoiceMatching,
+  decideApproval,
+  executeWorkflowStep,
+  failException,
   getDiscoveredProcess,
   getProcess,
+  getProcessMonitoring,
+  getProcessPurchaseOrder,
+  getProcessWorkflow,
+  getVendor,
   listApprovals,
   listAuditLogs,
   listExecutionReceipts,
+  listProcessExceptions,
+  listProcessInvoices,
+  listProcessQuotations,
+  listTobeRecommendations,
+  listWorkflowSteps,
+  planProcessWorkflow,
+  planResources,
+  resolveException,
+  retryException,
+  riskReview,
+  startProcess,
+  validateWorkflowPlan,
   type AgentMessage,
   type ApprovalRecord,
   type AuditLogRecord,
   type ExecutionReceipt,
   type ProcessDetail,
   type ProcessRecord,
-  type AdvanceProcessResponse,
   type WorkflowResult,
 } from '../services/apiClient'
-import type { InvoiceMatchingPayload, RiskFinding } from '../types/api'
+import type {
+  ExceptionRecord,
+  InvoiceRecord,
+  ProcessMonitoringReport,
+  PurchaseOrderRecord,
+  QuotationRecord,
+  RiskFinding,
+  TobeRecommendationRecord,
+  VendorRecord,
+  WorkflowPlanRecord,
+  WorkflowPlanValidationResult,
+  WorkflowStepExecutionResult,
+  WorkflowStepRecord,
+} from '../types/api'
+import { PROCESS_STAGE_DESCRIPTIONS, type WorkflowStage } from '../lib/processStages'
 import { useAuth } from '../auth/AuthContext'
 import { buildCorrelationTimeline } from '../lib/correlationTimeline'
 import { stageActions } from '../lib/stageActions'
@@ -25,95 +58,30 @@ import ProcessDiscoveryPanel from '../components/discovery/ProcessDiscoveryPanel
 import Agent3ProcessResultsPanel from '../components/resources/Agent3ProcessResultsPanel'
 import {
   Alert,
+  ApprovalStatusBadge,
   EmptyState,
+  ExceptionStatusBadge,
   PageHeader,
   Panel,
   ProcessStageBadge,
   RiskBadge,
+  Skeleton,
 } from '../components/ui/primitives'
 import { formatProcessStage } from '../lib/statusPresentation'
-
-const JOURNEY: Array<{ key: string; short: string; label: string }> = [
-  { key: 'DRAFT', short: 'Draft', label: 'Draft' },
-  { key: 'DISCOVERING', short: 'Discovering', label: 'Discovering' },
-  { key: 'RESOURCE_PLANNING', short: 'Resources', label: 'Resource Planning' },
-  { key: 'RISK_REVIEW', short: 'Risk', label: 'Risk Review' },
-  { key: 'AWAITING_HUMAN_APPROVAL', short: 'Approval', label: 'Human Approval' },
-  { key: 'WORKFLOW_EXECUTION', short: 'Execution', label: 'Workflow Execution' },
-  { key: 'INVOICE_MATCHING', short: 'Invoice', label: 'Invoice Matching' },
-  { key: 'COMPLETED', short: 'Completed', label: 'Completed' },
-]
-
-const STAGE_COPY: Record<string, { title: string; body: string }> = {
-  DRAFT: {
-    title: 'Start by learning how this process works',
-    body: 'Upload a file that shows the real steps (for example a CSV event log, PDF, or Word doc). We will turn that into a simple step-by-step picture of the process. Nothing is approved or purchased yet.',
-  },
-  DISCOVERING: {
-    title: 'We found your process steps',
-    body: 'Review the discovered steps below. When they look right, continue to resource planning to choose people and budget.',
-  },
-  RESOURCE_PLANNING: {
-    title: 'Resource Planning',
-    body: 'Run Agent 3 to rank people and validate budget. Full results appear in the Resource Planning Results panel below — recommendations are advisory, not approvals.',
-  },
-  RISK_REVIEW: {
-    title: 'Risk Assessment',
-    body: 'Risk factors are being assessed before execution. AI assessment does not authorize the work.',
-  },
-  AWAITING_HUMAN_APPROVAL: {
-    title: 'Human Approval Required',
-    body: 'AI risk assessment indicates that human authorization is required before execution.',
-  },
-  WORKFLOW_EXECUTION: {
-    title: 'Workflow Execution',
-    body: 'Authorized workflow execution is in progress. Actions are controlled and authorized.',
-  },
-  INVOICE_MATCHING: {
-    title: 'Invoice Matching',
-    body: 'Execution is complete. The process is now finalizing invoice matching.',
-  },
-  COMPLETED: {
-    title: 'Process Completed',
-    body: 'This process has completed successfully.',
-  },
-  EXCEPTION: {
-    title: 'Process stopped',
-    body: 'This process was stopped after a rejection or blocked control. Review the history below.',
-  },
-}
-
-function formatProcessType(type: string | null | undefined): string {
-  if (!type) return '—'
-  return type
-    .replace(/_/g, ' ')
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase())
-}
-
-function formatProcessStatus(status: string | null | undefined): string {
-  if (!status) return '—'
-  const key = status.toUpperCase()
-  if (key === 'ACTIVE' || key === 'IN_PROGRESS' || key === 'RUNNING') return 'Active'
-  if (key === 'COMPLETED' || key === 'COMPLETE') return 'Completed'
-  if (key === 'DRAFT') return 'Draft'
-  if (key === 'EXCEPTION' || key === 'FAILED') return 'Stopped'
-  if (key === 'CANCELLED' || key === 'CANCELED') return 'Cancelled'
-  return formatProcessType(status)
-}
-
-function formatDateTime(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
+import ProcessStageTimeline from '../components/process-cockpit/ProcessStageTimeline'
+import ProcessContextPanel from '../components/process-cockpit/ProcessContextPanel'
+import SupervisionLegend from '../components/process-cockpit/SupervisionLegend'
+import WorkflowPlanPanel from '../components/process-cockpit/WorkflowPlanPanel'
+import ProcessProcurementSummary from '../components/procurement/ProcessProcurementSummary'
+import InvoiceMatchResultView from '../components/procurement/InvoiceMatchResultView'
+import { parseInvoiceMatch } from '../lib/procurement'
+import {
+  asRecord,
+  canGovern,
+  displayText,
+  formatDateTime,
+  formatProcessType,
+} from '../components/process-cockpit/helpers'
 
 function detailErrorMessage(err: unknown): string {
   const status = (err as { response?: { status?: number } })?.response?.status
@@ -124,130 +92,14 @@ function detailErrorMessage(err: unknown): string {
   return apiErrorMessage(err)
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
-function pickString(obj: Record<string, unknown> | null, keys: string[]): string | null {
-  if (!obj) return null
-  for (const key of keys) {
-    const v = obj[key]
-    if (typeof v === 'string' && v.trim()) return v
-  }
-  return null
-}
-
-function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={`animate-pulse rounded-md bg-slate-200/70 ${className}`} />
-}
-
-function journeyIndex(stage: string): number {
-  return JOURNEY.findIndex((s) => s.key === stage)
-}
-
-function StageStepper({ stage }: { stage: string }) {
-  const isStopped = stage === 'EXCEPTION'
-  // ... keep rest of journey using isStopped instead of isStopped
-  const currentIdx = journeyIndex(stage)
-
-  return (
-    <Panel
-      title="Process journey"
-      actions={
-        isStopped ? (
-          <span className="text-xs font-medium text-rose-700">Stopped</span>
-        ) : null
-      }
-    >
-      {isStopped ? (
-        <Alert tone="warning">
-          This process was stopped after a rejection or blocked control. The main journey will not continue.
-        </Alert>
-      ) : null}
-
-      {/* Desktop horizontal */}
-      <ol className="hidden items-start justify-between gap-1 md:flex">
-        {JOURNEY.map((step, idx) => {
-          const done = !isStopped && currentIdx > idx
-          const current = !isStopped && currentIdx === idx
-          return (
-            <li key={step.key} className="flex min-w-0 flex-1 flex-col items-center text-center">
-              <span
-                className={[
-                  'flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold',
-                  done
-                    ? 'bg-slate-900 text-white'
-                    : current
-                      ? 'bg-sky-600 text-white ring-4 ring-sky-100'
-                      : 'bg-slate-100 text-slate-400',
-                ].join(' ')}
-                aria-current={current ? 'step' : undefined}
-              >
-                {done ? '✓' : current ? '●' : '○'}
-              </span>
-              <span
-                className={[
-                  'mt-2 text-[11px] font-medium leading-tight',
-                  current ? 'text-slate-900' : done ? 'text-slate-700' : 'text-slate-400',
-                ].join(' ')}
-              >
-                {step.short}
-              </span>
-              {idx < JOURNEY.length - 1 ? (
-                <span className="sr-only">then</span>
-              ) : null}
-            </li>
-          )
-        })}
-      </ol>
-
-      {/* Mobile vertical */}
-      <ol className="space-y-0 md:hidden">
-        {JOURNEY.map((step, idx) => {
-          const done = !isStopped && currentIdx > idx
-          const current = !isStopped && currentIdx === idx
-          return (
-            <li key={step.key} className="flex gap-3">
-              <div className="flex w-8 flex-col items-center">
-                <span
-                  className={[
-                    'flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold',
-                    done
-                      ? 'bg-slate-900 text-white'
-                      : current
-                        ? 'bg-sky-600 text-white'
-                        : 'bg-slate-100 text-slate-400',
-                  ].join(' ')}
-                >
-                  {done ? '✓' : current ? '●' : '○'}
-                </span>
-                {idx < JOURNEY.length - 1 ? (
-                  <span className="my-1 w-px flex-1 bg-slate-200" aria-hidden />
-                ) : null}
-              </div>
-              <div className={idx < JOURNEY.length - 1 ? 'pb-4 pt-1.5' : 'pt-1.5'}>
-                <p
-                  className={[
-                    'text-sm font-medium',
-                    current ? 'text-slate-900' : done ? 'text-slate-700' : 'text-slate-400',
-                  ].join(' ')}
-                >
-                  {step.label}
-                </p>
-              </div>
-            </li>
-          )
-        })}
-      </ol>
-    </Panel>
-  )
+function isNotFound(err: unknown): boolean {
+  return (err as { response?: { status?: number } })?.response?.status === 404
 }
 
 export default function ProcessDetailPage() {
   const { processId = '' } = useParams()
   const { user } = useAuth()
+  const governor = canGovern(user?.role)
 
   const [process, setProcess] = useState<ProcessRecord | null>(null)
   const [loading, setLoading] = useState(true)
@@ -262,20 +114,21 @@ export default function ProcessDetailPage() {
   const [audit, setAudit] = useState<AuditLogRecord[]>([])
   const [receipts, setReceipts] = useState<ExecutionReceipt[]>([])
   const [lastWorkflow, setLastWorkflow] = useState<WorkflowResult | null>(null)
-  const [lastAdvancement, setLastAdvancement] = useState<AdvanceProcessResponse | null>(null)
-  const [autopilotRunning, setAutopilotRunning] = useState(false)
-  const [invoiceForm, setInvoiceForm] = useState({
-    invoice_number: '',
-    amount: '',
-    currency: 'USD',
-    vendor: '',
-    po_reference: '',
-    expected_amount: '',
-    expected_po_reference: '',
-    expected_currency: 'USD',
-    expected_vendor: '',
-    notes: '',
-  })
+  const [invoices, setInvoices] = useState<InvoiceRecord[]>([])
+  const [quotations, setQuotations] = useState<QuotationRecord[]>([])
+  const [purchaseOrder, setPurchaseOrder] = useState<PurchaseOrderRecord | null>(null)
+  const [procurementVendor, setProcurementVendor] = useState<VendorRecord | null>(null)
+  const [exceptions, setExceptions] = useState<ExceptionRecord[]>([])
+  const [plan, setPlan] = useState<WorkflowPlanRecord | null>(null)
+  const [steps, setSteps] = useState<WorkflowStepRecord[]>([])
+  const [planLoading, setPlanLoading] = useState(false)
+  const [planError, setPlanError] = useState<string | null>(null)
+  const [validation, setValidation] = useState<WorkflowPlanValidationResult | null>(null)
+  const [lastExecution, setLastExecution] = useState<WorkflowStepExecutionResult | null>(null)
+  const [monitoring, setMonitoring] = useState<ProcessMonitoringReport | null>(null)
+  const [tobeRecommendations, setTobeRecommendations] = useState<TobeRecommendationRecord[]>([])
+  const [exceptionNotes, setExceptionNotes] = useState('')
+  const [approvalComments, setApprovalComments] = useState('')
 
   const refresh = useCallback(async () => {
     if (!processId) return
@@ -288,17 +141,52 @@ export default function ProcessDetailPage() {
 
       const partialErrors: string[] = []
 
-      const [approvalResult, auditResult, receiptResult, discoveryResult] = await Promise.all([
-        listApprovals()
-          .then((rows) => ({ ok: true as const, rows }))
-          .catch((err) => ({ ok: false as const, err })),
-        listAuditLogs({ entity_type: 'process', entity_id: processId, limit: 30 })
+      const [
+        approvalResult,
+        auditResult,
+        receiptResult,
+        discoveryResult,
+        invoiceResult,
+        quoteResult,
+        poResult,
+        exceptionResult,
+        planResult,
+        monitorResult,
+        tobeResult,
+      ] = await Promise.all([
+        governor
+          ? listApprovals()
+              .then((rows) => ({ ok: true as const, rows }))
+              .catch((err) => ({ ok: false as const, err }))
+          : Promise.resolve({ ok: true as const, rows: [] as ApprovalRecord[] }),
+        listAuditLogs({ entity_type: 'process', entity_id: processId, limit: 40 })
           .then((rows) => ({ ok: true as const, rows }))
           .catch((err) => ({ ok: false as const, err })),
         listExecutionReceipts({ process_id: processId, limit: 50 })
           .then((rows) => ({ ok: true as const, rows }))
           .catch((err) => ({ ok: false as const, err })),
         getDiscoveredProcess(processId)
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
+        listProcessInvoices(processId)
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
+        listProcessQuotations(processId)
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
+        getProcessPurchaseOrder(processId)
+          .then((row) => ({ ok: true as const, row }))
+          .catch((err) => ({ ok: false as const, err })),
+        listProcessExceptions(processId)
+          .then((rows) => ({ ok: true as const, rows }))
+          .catch((err) => ({ ok: false as const, err })),
+        getProcessWorkflow(processId)
+          .then((row) => ({ ok: true as const, row }))
+          .catch((err) => ({ ok: false as const, err })),
+        getProcessMonitoring(processId)
+              .then((report) => ({ ok: true as const, report }))
+              .catch((err) => ({ ok: false as const, err })),
+        listTobeRecommendations(processId)
           .then((rows) => ({ ok: true as const, rows }))
           .catch((err) => ({ ok: false as const, err })),
       ])
@@ -309,97 +197,100 @@ export default function ProcessDetailPage() {
         setApprovals([])
         partialErrors.push(`Approvals: ${detailErrorMessage(approvalResult.err)}`)
       }
-
-      if (auditResult.ok) {
-        setAudit(auditResult.rows)
-      } else {
+      if (auditResult.ok) setAudit(auditResult.rows)
+      else {
         setAudit([])
         partialErrors.push(`Audit trail: ${detailErrorMessage(auditResult.err)}`)
       }
-
-      if (receiptResult.ok) {
-        setReceipts(receiptResult.rows)
-      } else {
+      if (receiptResult.ok) setReceipts(receiptResult.rows)
+      else {
         setReceipts([])
         partialErrors.push(`Receipts: ${detailErrorMessage(receiptResult.err)}`)
       }
-
-      if (discoveryResult.ok) {
-        setDiscovery(discoveryResult.rows)
-      } else {
+      if (discoveryResult.ok) setDiscovery(discoveryResult.rows)
+      else {
         setDiscovery(null)
-        partialErrors.push(`Discovery: ${detailErrorMessage(discoveryResult.err)}`)
+        if (!isNotFound(discoveryResult.err)) {
+          partialErrors.push(`Discovery: ${detailErrorMessage(discoveryResult.err)}`)
+        }
+      }
+      if (invoiceResult.ok) setInvoices(invoiceResult.rows)
+      else setInvoices([])
+      if (quoteResult.ok) setQuotations(quoteResult.rows)
+      else setQuotations([])
+      if (poResult.ok) setPurchaseOrder(poResult.row)
+      else setPurchaseOrder(null)
+
+      const vendorId =
+        (poResult.ok ? poResult.row.vendor_id : null) ||
+        (invoiceResult.ok ? invoiceResult.rows[0]?.vendor_id : null) ||
+        (quoteResult.ok ? quoteResult.rows[0]?.vendor_id : null)
+      if (vendorId) {
+        try {
+          setProcurementVendor(await getVendor(vendorId))
+        } catch {
+          setProcurementVendor(null)
+        }
+      } else {
+        setProcurementVendor(null)
+      }
+      if (exceptionResult.ok) setExceptions(exceptionResult.rows)
+      else {
+        setExceptions([])
+        if (!isNotFound(exceptionResult.err)) {
+          partialErrors.push(`Exceptions: ${detailErrorMessage(exceptionResult.err)}`)
+        }
       }
 
-      if (partialErrors.length > 0) {
-        setSecondaryError(partialErrors.join(' · '))
+      if (planResult.ok) {
+        setPlan(planResult.row)
+        setPlanError(null)
+        const fromPlan = planResult.row.steps ?? []
+        if (fromPlan.length > 0) {
+          setSteps(fromPlan)
+        } else {
+          try {
+            setSteps(await listWorkflowSteps(planResult.row.id))
+          } catch (err) {
+            setSteps([])
+            partialErrors.push(`Workflow steps: ${detailErrorMessage(err)}`)
+          }
+        }
+      } else {
+        setPlan(null)
+        setSteps([])
+        if (!isNotFound(planResult.err)) {
+          setPlanError(detailErrorMessage(planResult.err))
+        } else {
+          setPlanError(null)
+        }
       }
+
+      if ('report' in monitorResult && monitorResult.ok) {
+        setMonitoring(monitorResult.report)
+      } else {
+        setMonitoring(null)
+      }
+      if (tobeResult.ok) setTobeRecommendations(tobeResult.rows)
+      else setTobeRecommendations([])
+
+      if (partialErrors.length > 0) setSecondaryError(partialErrors.join(' · '))
     } catch (err) {
       setError(detailErrorMessage(err))
     } finally {
       setLoading(false)
+      setPlanLoading(false)
     }
-  }, [processId])
+  }, [processId, governor])
 
   useEffect(() => {
     setLatestDiscoveryMessage(null)
+    setLastExecution(null)
+    setValidation(null)
     void refresh()
   }, [refresh])
 
-  const inFlightStages = useMemo(
-    () =>
-      new Set([
-        'DISCOVERING',
-        'RESOURCE_PLANNING',
-        'RISK_REVIEW',
-        'WORKFLOW_EXECUTION',
-      ]),
-    [],
-  )
-
-  useEffect(() => {
-    if (!processId || !process || autopilotRunning) return
-    if (!inFlightStages.has(process.current_stage)) return
-    const timer = window.setInterval(() => {
-      void refresh()
-    }, 2500)
-    return () => window.clearInterval(timer)
-  }, [processId, process?.current_stage, autopilotRunning, inFlightStages, refresh])
-
   const stage = process?.current_stage ?? ''
-  const stageMeta = STAGE_COPY[stage] ?? {
-    title: formatProcessStage(stage),
-    body: 'Review the current process state and available actions.',
-  }
-
-  // Prefill invoice expected fields from the PO created during workflow execution.
-  useEffect(() => {
-    if (stage !== 'INVOICE_MATCHING' || !process?.metadata_json) return
-    const meta = process.metadata_json
-    const purchase =
-      meta.purchase_order && typeof meta.purchase_order === 'object'
-        ? (meta.purchase_order as Record<string, unknown>)
-        : meta.last_execution && typeof meta.last_execution === 'object'
-          ? (meta.last_execution as Record<string, unknown>)
-          : null
-    if (!purchase) return
-    const poRef = String(purchase.po_reference || purchase.po_number || '')
-    const amount = purchase.amount != null ? String(purchase.amount) : ''
-    const vendor = String(purchase.vendor || purchase.vendor_id || '')
-    const currency = String(purchase.currency || 'USD')
-    setInvoiceForm((prev) => ({
-      ...prev,
-      expected_po_reference: prev.expected_po_reference || poRef,
-      expected_amount: prev.expected_amount || amount,
-      expected_vendor: prev.expected_vendor || vendor,
-      expected_currency: prev.expected_currency || currency || 'USD',
-      po_reference: prev.po_reference || poRef,
-      amount: prev.amount || amount,
-      vendor: prev.vendor || vendor,
-      currency: prev.currency || currency || 'USD',
-    }))
-  }, [stage, process?.id, process?.metadata_json])
-
   const discoveryJson = asRecord(discovery?.process_json)
   const hasDiscoveryResults = Boolean(
     latestDiscoveryMessage ||
@@ -413,44 +304,10 @@ export default function ProcessDetailPage() {
     () => approvals.find((a) => a.status === 'PENDING') ?? null,
     [approvals],
   )
-  const decidedApproval = useMemo(() => {
-    const decided = approvals.filter((a) => a.status === 'APPROVED' || a.status === 'REJECTED')
-    return decided.sort((a, b) => {
-      const at = new Date(a.decided_at || a.created_at).getTime()
-      const bt = new Date(b.decided_at || b.created_at).getTime()
-      return bt - at
-    })[0] ?? null
-  }, [approvals])
-
-
-  const riskFromWorkflow = useMemo(() => {
-    const payload = asRecord(lastWorkflow?.agent_response) || asRecord(lastWorkflow)
-    const overall =
-      pickString(payload, ['overall_risk_level', 'risk_level']) ||
-      pendingApproval?.risk_level ||
-      decidedApproval?.risk_level ||
-      null
-    const reason =
-      pickString(payload, ['reason', 'summary', 'message']) ||
-      pendingApproval?.reason ||
-      decidedApproval?.reason ||
-      null
-    return { overall, reason, humanRequired: Boolean(lastWorkflow?.human_approval_required) }
-  }, [lastWorkflow, pendingApproval, decidedApproval])
-
-  const receiptSummary = useMemo(() => {
-    const total = receipts.length
-    const successful = receipts.filter((r) => /success|ok|completed/i.test(r.status)).length
-    const failed = receipts.filter((r) => /fail|error|blocked/i.test(r.status)).length
-    const blocked = receipts.filter((r) => /block/i.test(r.status)).length
-    return { total, successful, failed, blocked }
-  }, [receipts])
 
   const riskFindings = useMemo((): RiskFinding[] => {
     const fromWorkflow = lastWorkflow?.risk_assessment?.findings
     if (fromWorkflow?.length) return fromWorkflow
-    const fromAdvance = lastAdvancement?.advancement.last_step?.risk_assessment?.findings
-    if (fromAdvance?.length) return fromAdvance
     const meta = asRecord(process?.metadata_json)
     const stored = asRecord(meta?.last_risk_assessment)
     const findings = stored?.findings
@@ -461,23 +318,29 @@ export default function ProcessDetailPage() {
       )
     }
     return []
-  }, [lastWorkflow, lastAdvancement, process?.metadata_json])
+  }, [lastWorkflow, process?.metadata_json])
+
+  const overallRisk =
+    lastWorkflow?.risk_assessment?.overall_risk_level ||
+    pendingApproval?.risk_level ||
+    displayText(asRecord(process?.process_context)?.risk) ||
+    null
 
   const correlationTimeline = useMemo(
     () =>
       buildCorrelationTimeline({
         audit,
-        autonomousActions: lastAdvancement?.advancement.autonomous_actions ?? [],
+        autonomousActions: [],
         receipts,
-        correlationId: lastAdvancement?.advancement.correlation_id,
+        correlationId: undefined,
       }),
-    [audit, receipts, lastAdvancement],
+    [audit, receipts],
   )
 
   const availableActions = useMemo(
     () =>
       stageActions({
-        stage: (stage || 'DRAFT') as Parameters<typeof stageActions>[0]['stage'],
+        stage: (stage || 'DRAFT') as WorkflowStage,
         hasDiscovery: hasDiscoveryResults,
         hasTenant: Boolean(user?.tenant_id),
         busy: busy !== null,
@@ -486,123 +349,145 @@ export default function ProcessDetailPage() {
     [stage, hasDiscoveryResults, user?.tenant_id, busy, pendingApproval],
   )
 
-  function buildResourcePlanningPayload() {
-    const tenantId = user?.tenant_id
-    if (!tenantId || !user?.id) return undefined
-    const discoveryJson = asRecord(discovery?.process_json)
-    const analytics = asRecord(discoveryJson?.analytics)
-    const riskFacts = asRecord(analytics?.risk_facts) || asRecord(discoveryJson?.risk_facts)
-    const discoveredAmount =
-      riskFacts?.purchase_amount != null && riskFacts.purchase_amount !== ''
-        ? String(riskFacts.purchase_amount)
-        : '5000.00'
-    const discoveredCurrency =
-      typeof riskFacts?.currency === 'string' && riskFacts.currency
-        ? String(riskFacts.currency)
-        : 'USD'
-    const costCentre =
-      typeof riskFacts?.cost_centre === 'string' && riskFacts.cost_centre
-        ? String(riskFacts.cost_centre)
-        : 'SYN-DEP-FIN'
-    const deadline = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-    return {
-      task_id: crypto.randomUUID(),
-      tenant_id: tenantId,
-      correlation_id: crypto.randomUUID(),
-      human_requirements: {
-        resource_type: 'HUMAN',
-        required_roles: ['developer'],
-        mandatory_skills: ['python'],
-        preferred_skills: ['fastapi'],
-        requester_id: user.id,
-        task_deadline: deadline,
-        estimated_effort_hours: '8.00',
-        process_stage: 'RESOURCE_PLANNING',
-      },
-      budget_requirements: {
-        resource_type: 'BUDGET',
-        required_amount: discoveredAmount,
-        currency: discoveredCurrency,
-        cost_centre: costCentre,
-        requester_id: user.id,
-        task_deadline: deadline,
-        process_stage: 'RESOURCE_PLANNING',
-      },
+  async function withBusy<T>(busyKey: string, work: () => Promise<T>): Promise<T | undefined> {
+    setBusy(busyKey)
+    setError(null)
+    setNotice(null)
+    try {
+      return await work()
+    } catch (err) {
+      setError(detailErrorMessage(err))
+      return undefined
+    } finally {
+      setBusy(null)
     }
   }
 
-  async function onAdvanceAutopilot(
-    invoicePayload?: InvoiceMatchingPayload,
-    busyKey: string = invoicePayload ? 'invoice' : 'advance',
-  ) {
+  async function onStartDiscoveryStage() {
+    const result = await withBusy('start', () => startProcess(processId))
+    if (!result) return
+    setProcess(result.process)
+    setNotice(result.message || 'Discovery stage started.')
+    await refresh()
+  }
+
+  async function onPlanResources() {
     const tenantId = user?.tenant_id
     if (!tenantId) {
       setError('Tenant context is missing from your session. Sign in again and retry.')
       return
     }
-    setAutopilotRunning(!invoicePayload)
-    setBusy(busyKey)
-    setError(null)
-    setNotice(null)
-    try {
-      const result = await advanceProcess(processId, {
-        idempotency_key: `ui-${processId}-${Date.now()}`,
-        max_steps: 12,
-        resource_planning: invoicePayload ? undefined : buildResourcePlanningPayload(),
-        invoice: invoicePayload,
-      })
-      setLastAdvancement(result)
-      setProcess(result.process)
-      if (result.advancement.last_step) {
-        setLastWorkflow(result.advancement.last_step)
-      }
-      const adv = result.advancement
-      const actionSummary =
-        adv.autonomous_actions.length > 0
-          ? adv.autonomous_actions.map((a) => a.action).join(' → ')
-          : adv.message
-      if (adv.human_approval_required || adv.waiting_for === 'human_approval') {
-        setNotice(
-          `Autopilot paused for human approval. Steps: ${actionSummary}. After you approve, Agent 2 runs all execution tools automatically from discovery data.`,
-        )
-      } else if (adv.waiting_for === 'invoice_input') {
-        setNotice(`Autopilot reached invoice matching. Submit invoice evidence to finish.`)
-      } else if (adv.status === 'COMPLETED') {
-        setNotice(`Process completed automatically. Steps: ${actionSummary}`)
-      } else {
-        setNotice(adv.message || actionSummary)
-      }
-      await refresh()
-    } catch (err) {
-      setError(detailErrorMessage(err))
-    } finally {
-      setBusy(null)
-      setAutopilotRunning(false)
-    }
+    const result = await withBusy('plan', () =>
+      planResources(processId, {
+        task_id: processId,
+        tenant_id: tenantId,
+        correlation_id: crypto.randomUUID(),
+      }),
+    )
+    if (!result) return
+    setLastWorkflow(result)
+    setNotice(result.message)
+    await refresh()
   }
 
-  async function onCompleteInvoice() {
-    const amount = invoiceForm.amount.trim() ? Number(invoiceForm.amount) : undefined
-    const expectedAmount = invoiceForm.expected_amount.trim()
-      ? Number(invoiceForm.expected_amount)
-      : undefined
-    await onAdvanceAutopilot({
-      invoice_number: invoiceForm.invoice_number.trim() || undefined,
-      amount: Number.isFinite(amount) ? amount : undefined,
-      currency: invoiceForm.currency.trim() || undefined,
-      vendor: invoiceForm.vendor.trim() || undefined,
-      po_reference: invoiceForm.po_reference.trim() || undefined,
-      expected_amount: Number.isFinite(expectedAmount) ? expectedAmount : undefined,
-      expected_po_reference: invoiceForm.expected_po_reference.trim() || undefined,
-      expected_currency: invoiceForm.expected_currency.trim() || undefined,
-      expected_vendor: invoiceForm.expected_vendor.trim() || undefined,
-      notes: invoiceForm.notes.trim() || undefined,
+  async function onRunRiskReview() {
+    const result = await withBusy('risk', () => riskReview(processId, {}))
+    if (!result) return
+    setLastWorkflow(result)
+    setNotice(result.message)
+    await refresh()
+  }
+
+  async function onMatchPersistedInvoice() {
+    const result = await withBusy('invoice', () => completeInvoiceMatching(processId, {}))
+    if (!result) return
+    setLastWorkflow(result)
+    setNotice(result.message)
+    await refresh()
+  }
+
+  async function onGeneratePlan() {
+    setPlanLoading(true)
+    const result = await withBusy('plan-generate', () => planProcessWorkflow(processId))
+    setPlanLoading(false)
+    if (!result) return
+    if (result.plan) {
+      setPlan(result.plan)
+      setSteps(result.plan.steps ?? result.steps ?? [])
+    } else if (result.steps) {
+      setSteps(result.steps)
+    }
+    if (result.issues?.length) {
+      setValidation({
+        valid: Boolean(result.structurally_valid),
+        issues: result.issues.map((issue) => ({
+          code: issue.code,
+          message: issue.message,
+          step_key: issue.step_key,
+        })),
+      })
+    }
+    setNotice('Workflow plan generated. Validate and activate are separate actions.')
+    await refresh()
+  }
+
+  async function onValidatePlan() {
+    if (!plan) return
+    const result = await withBusy('plan-validate', () => validateWorkflowPlan(plan.id))
+    if (!result) return
+    setValidation(result)
+    setNotice(result.valid ? 'Plan validated. Activation is a separate action.' : 'Plan has blocking issues.')
+  }
+
+  async function onActivatePlan() {
+    if (!plan) return
+    const result = await withBusy('plan-activate', () => activateWorkflowPlan(plan.id))
+    if (!result) return
+    setPlan(result)
+    setNotice('Activation authorizes the workflow plan for execution.')
+    await refresh()
+  }
+
+  async function onExecuteStep(step: WorkflowStepRecord) {
+    if (!plan) return
+    const result = await withBusy(`execute-${step.id}`, () =>
+      executeWorkflowStep(plan.id, step.id, { process_id: processId }),
+    )
+    if (!result) return
+    setLastExecution(result)
+    setNotice(`Step ${result.execution_status}. The next step was not started automatically.`)
+    await refresh()
+  }
+
+  async function onDecide(decision: 'approve' | 'reject') {
+    if (!pendingApproval) return
+    const result = await withBusy(decision, () =>
+      decideApproval(pendingApproval.id, decision, approvalComments.trim() || undefined),
+    )
+    if (!result) return
+    setNotice(decision === 'approve' ? 'Approval recorded.' : 'Rejection recorded.')
+    await refresh()
+  }
+
+  async function onExceptionAction(kind: 'resolve' | 'retry' | 'fail', exceptionId: string) {
+    const notes = exceptionNotes.trim()
+    if ((kind === 'resolve' || kind === 'fail') && !notes) {
+      setError('Resolution notes are required.')
+      return
+    }
+    const result = await withBusy(`ex-${kind}`, () => {
+      if (kind === 'resolve') return resolveException(exceptionId, notes)
+      if (kind === 'retry') return retryException(exceptionId, notes || undefined)
+      return failException(exceptionId, notes)
     })
+    if (!result) return
+    setNotice(`Exception ${kind} submitted. Recovery is not automatic.`)
+    await refresh()
   }
 
   if (loading && !process) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6" aria-busy="true">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-4 w-96 max-w-full" />
         <Skeleton className="h-28 w-full" />
@@ -635,6 +520,9 @@ export default function ProcessDetailPage() {
 
   if (!process) return null
 
+  const openExceptions = exceptions.filter((e) => e.status === 'open' || e.status === 'in_progress')
+  const canGeneratePlan = Boolean(user?.tenant_id) && stage !== 'DRAFT' && stage !== 'COMPLETED'
+
   return (
     <div className="space-y-6">
       <div>
@@ -644,27 +532,32 @@ export default function ProcessDetailPage() {
         <div className="mt-3">
           <PageHeader
             title={process.name}
-            description={process.description || undefined}
+            description={process.description || PROCESS_STAGE_DESCRIPTIONS[stage as WorkflowStage]}
             actions={
               <div className="flex flex-wrap items-center gap-2">
                 <ProcessStageBadge stage={process.current_stage} />
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => void refresh()}>
+                  Refresh
+                </button>
               </div>
             }
           />
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-600">
+          <span>
+            Process ID:{' '}
+            <span className="break-all font-mono text-xs text-slate-800">{process.id}</span>
+          </span>
           <span className="font-medium text-slate-800">{formatProcessType(process.process_type)}</span>
           <span>
-            Status: <span className="font-medium text-slate-800">{formatProcessStatus(process.status)}</span>
+            Status: <span className="font-medium text-slate-800">{process.status}</span>
           </span>
           <span>
             Stage:{' '}
-            <span className="font-medium text-slate-800">
-              {formatProcessStage(process.current_stage)}
-            </span>
+            <span className="font-medium text-slate-800">{formatProcessStage(process.current_stage)}</span>
           </span>
+          {process.created_by ? <span>Requester: {process.created_by}</span> : null}
           <span className="text-slate-500">Created {formatDateTime(process.created_at)}</span>
-          <span className="text-slate-500">Updated {formatDateTime(process.updated_at)}</span>
         </div>
       </div>
 
@@ -680,216 +573,115 @@ export default function ProcessDetailPage() {
       ) : null}
       {secondaryError ? (
         <Alert tone="warning">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span>Some sections could not be loaded: {secondaryError}</span>
-            <button type="button" className="btn btn-ghost btn-xs" onClick={() => void refresh()}>
-              Retry
-            </button>
-          </div>
+          Some sections could not be loaded: {secondaryError}{' '}
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => void refresh()}>
+            Retry
+          </button>
         </Alert>
       ) : null}
       {notice ? <Alert tone="info">{notice}</Alert> : null}
-      {autopilotRunning ? (
-        <Alert tone="info">Autopilot is running — advancing stages automatically…</Alert>
-      ) : null}
-      {lastAdvancement?.advancement.autonomous_actions?.length ? (
-        <Panel title="Autonomous actions (audit trail)">
-          <ol className="space-y-2 text-sm text-slate-700">
-            {lastAdvancement.advancement.autonomous_actions.map((action, idx) => (
-              <li key={`${action.action}-${idx}`} className="rounded-lg border border-slate-200 px-3 py-2">
-                <span className="font-medium text-slate-900">{action.action}</span>
-                <span className="text-slate-500"> @ {action.stage}</span>
-                <p className="mt-1 text-xs text-slate-500">{action.guardrail}</p>
-              </li>
-            ))}
-          </ol>
-        </Panel>
-      ) : null}
 
-      <StageStepper stage={process.current_stage} />
+      <ProcessStageTimeline stage={process.current_stage} />
+      <SupervisionLegend />
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          {/* Current step */}
-          <Panel title="Current Step">
-            <h3 className="text-base font-semibold text-slate-900">{stageMeta.title}</h3>
-            <p className="mt-1 text-sm leading-relaxed text-slate-600">{stageMeta.body}</p>
+          <Panel title="Current action">
+            <h3 className="text-base font-semibold text-slate-900">{formatProcessStage(stage)}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-slate-600">
+              {PROCESS_STAGE_DESCRIPTIONS[(stage as WorkflowStage)] ||
+                'Review the current process state and available actions.'}
+            </p>
 
             <div className="mt-5 space-y-3">
-              {stage === 'DRAFT' ? (
-                <div className="space-y-4">
-                  <ol className="space-y-2 text-sm text-slate-700">
-                    <li className="flex gap-3">
-                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-900 text-[11px] font-semibold text-white">
-                        1
-                      </span>
-                      <span>
-                        <span className="font-medium text-slate-900">Upload evidence</span>
-                        <span className="block text-slate-600">
-                          Use the upload area below. CSV process logs work well; PDF and DOCX are
-                          also supported.
-                        </span>
-                      </span>
-                    </li>
-                    <li className="flex gap-3">
-                      <span
-                        className={[
-                          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold',
-                          hasDiscoveryResults
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-slate-200 text-slate-600',
-                        ].join(' ')}
+              {stage === 'DRAFT'
+                ? availableActions
+                    .filter((a) => a.id === 'start_discovery_stage')
+                    .map((action) => (
+                      <div key={action.id} className="space-y-2">
+                        <p className="text-sm text-slate-600">
+                          Upload evidence below, then start discovery. This moves DRAFT to DISCOVERING. It does not run the process.
+                        </p>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          disabled={!action.enabled}
+                          title={action.reason}
+                          onClick={() => void onStartDiscoveryStage()}
+                        >
+                          {busy === 'start' ? 'Starting…' : 'Start discovery'}
+                        </button>
+                        {!action.enabled && action.reason ? (
+                          <p className="text-xs text-slate-500">{action.reason}</p>
+                        ) : null}
+                      </div>
+                    ))
+                : null}
+
+              {stage === 'DISCOVERING' || stage === 'RESOURCE_PLANNING'
+                ? availableActions
+                    .filter((a) => a.id === 'plan_resources')
+                    .map((action) => (
+                      <button
+                        key={action.id}
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        disabled={!action.enabled}
+                        title={action.reason}
+                        onClick={() => void onPlanResources()}
                       >
-                        2
-                      </span>
-                      <span>
-                        <span className="font-medium text-slate-900">Review the discovered steps</span>
-                        <span className="block text-slate-600">
-                          We list the activities, who does them, and anything unclear or missing.
-                        </span>
-                      </span>
-                    </li>
-                    <li className="flex gap-3">
-                      <span
-                        className={[
-                          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold',
-                          hasDiscoveryResults
-                            ? 'bg-slate-900 text-white'
-                            : 'bg-slate-200 text-slate-600',
-                        ].join(' ')}
+                        {busy === 'plan' ? 'Planning resources…' : 'Plan resources from directory'}
+                      </button>
+                    ))
+                : null}
+
+              {stage === 'RISK_REVIEW'
+                ? availableActions
+                    .filter((a) => a.id === 'run_risk_review')
+                    .map((action) => (
+                      <button
+                        key={action.id}
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        disabled={!action.enabled}
+                        onClick={() => void onRunRiskReview()}
                       >
-                        3
-                      </span>
-                      <span>
-                        <span className="font-medium text-slate-900">Run process autopilot</span>
-                        <span className="block text-slate-600">
-                          One click chains discovery → resources → risk review. Human approval is
-                          the only mandatory stop before execution.
-                        </span>
-                      </span>
-                    </li>
-                  </ol>
-
-                  {hasDiscoveryResults ? (
-                    <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3 py-3">
-                      <p className="text-sm font-medium text-emerald-950">
-                        Discovery looks ready. Run autopilot to reach human approval automatically.
-                      </p>
-                      {availableActions
-                        .filter((a) => a.id === 'autopilot')
-                        .map((action) => (
-                          <button
-                            key={action.id}
-                            type="button"
-                            className="btn btn-primary btn-sm w-full sm:w-auto"
-                            disabled={!action.enabled}
-                            title={action.reason}
-                            onClick={() => void onAdvanceAutopilot()}
-                          >
-                            {busy === 'advance' ? 'Running autopilot…' : action.label}
-                          </button>
-                        ))}
-                    </div>
-                  ) : (
-                    <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                      Upload and analyze evidence below first. The start button appears when we have
-                      discovered steps to work with.
-                    </p>
-                  )}
-                </div>
-              ) : null}
-
-              {stage === 'DISCOVERING' || stage === 'RESOURCE_PLANNING' || stage === 'RISK_REVIEW' ? (
-                availableActions
-                  .filter((a) => a.id === 'continue_autopilot')
-                  .map((action) => (
-                    <button
-                      key={action.id}
-                      type="button"
-                      className="btn btn-primary btn-sm w-full sm:w-auto"
-                      disabled={!action.enabled}
-                      title={action.reason}
-                      onClick={() => void onAdvanceAutopilot()}
-                    >
-                      {busy === 'advance' ? 'Continuing autopilot…' : action.label}
-                    </button>
-                  ))
-              ) : null}
-
-              {stage === 'AWAITING_HUMAN_APPROVAL' ? (
-                <Link to="/approvals" className="btn btn-primary btn-sm w-full sm:w-auto">
-                  Review Approval
-                </Link>
-              ) : null}
+                        {busy === 'risk' ? 'Running risk review…' : 'Run risk review'}
+                      </button>
+                    ))
+                : null}
 
               {stage === 'WORKFLOW_EXECUTION' ? (
                 <p className="text-sm text-slate-600">
-                  Execution runs automatically after human approval. If this stage persists, use
-                  Continue autopilot or refresh — a reconciliation pass will resume the chain.
+                  Execute one authorized workflow step at a time. Agent 2 does not run the full workflow automatically.
                 </p>
               ) : null}
 
-              {stage === 'INVOICE_MATCHING' ? (
-                <div className="space-y-3">
-                  <p className="text-sm text-slate-600">
-                    Enter invoice evidence. Expected purchase values are filled from the PO created
-                    during workflow execution when available. Completion requires a real match — a
-                    note alone is not enough.
-                  </p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {(
-                      [
-                        ['invoice_number', 'Invoice number'],
-                        ['amount', 'Invoice amount'],
-                        ['currency', 'Invoice currency'],
-                        ['vendor', 'Invoice vendor'],
-                        ['po_reference', 'Invoice PO reference'],
-                        ['expected_amount', 'Expected amount'],
-                        ['expected_currency', 'Expected currency'],
-                        ['expected_po_reference', 'Expected PO reference'],
-                        ['expected_vendor', 'Expected vendor'],
-                        ['notes', 'Notes'],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <label key={key} className="block text-sm sm:col-span-1">
-                        <span className="mb-1.5 block font-medium text-slate-700">{label}</span>
-                        <input
-                          value={invoiceForm[key]}
-                          onChange={(e) =>
-                            setInvoiceForm((prev) => ({ ...prev, [key]: e.target.value }))
-                          }
-                          className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-slate-400"
-                          disabled={busy !== null}
-                        />
-                      </label>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm w-full sm:w-auto"
-                    disabled={busy !== null}
-                    onClick={() => void onCompleteInvoice()}
-                  >
-                    {busy === 'invoice' ? 'Matching Invoice...' : 'Match Invoice'}
-                  </button>
-                </div>
-              ) : null}
+              {stage === 'INVOICE_MATCHING'
+                ? availableActions
+                    .filter((a) => a.id === 'match_persisted_invoice')
+                    .map((action) => (
+                      <button
+                        key={action.id}
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        disabled={!action.enabled}
+                        onClick={() => void onMatchPersistedInvoice()}
+                      >
+                        {busy === 'invoice' ? 'Matching…' : 'Match persisted invoice'}
+                      </button>
+                    ))
+                : null}
 
-
-
-              {stage === 'DISCOVERING' && !user?.tenant_id ? (
-                <p className="text-xs text-amber-800">
-                  Tenant context is required for resource planning. Ensure you are signed in.
-                </p>
+              {stage === 'COMPLETED' ? (
+                <p className="text-sm text-slate-600">This process is complete. Execution actions are closed.</p>
               ) : null}
             </div>
           </Panel>
 
-          {/* Process Discovery — primary upload + review */}
           {stage === 'DRAFT' ||
           stage === 'DISCOVERING' ||
           stage === 'RESOURCE_PLANNING' ||
-          stage === 'RISK_REVIEW' ||
           hasDiscoveryResults ? (
             <ProcessDiscoveryPanel
               processId={processId}
@@ -898,21 +690,20 @@ export default function ProcessDetailPage() {
               stage={stage}
               onDiscoveryComplete={async (message) => {
                 setLatestDiscoveryMessage(message)
-                setNotice('We finished reading your evidence. Review the discovered steps below.')
+                setNotice('Discovery finished. Review extracted facts; Agent 1 does not approve.')
                 await refresh()
               }}
               showContinueToPlanning={stage === 'DISCOVERING'}
-              onContinueToPlanning={() => void onAdvanceAutopilot()}
-              planningBusy={busy === 'advance'}
+              onContinueToPlanning={() => void onPlanResources()}
+              planningBusy={busy === 'plan'}
               planningDisabled={!user?.tenant_id}
             />
           ) : null}
 
-          {/* Agent 3 resource planning results — full recommendation visibility */}
           <Agent3ProcessResultsPanel
             processId={processId}
             stage={stage}
-            metadataJson={(process?.metadata_json || null) as Record<string, unknown> | null}
+            metadataJson={(process.metadata_json || null) as Record<string, unknown> | null}
             workflowAgentResponse={
               lastWorkflow?.agent_response &&
               typeof lastWorkflow.agent_response === 'object' &&
@@ -920,61 +711,39 @@ export default function ProcessDetailPage() {
                 ? (lastWorkflow.agent_response as Record<string, unknown>)
                 : null
             }
-            planningBusy={busy === 'advance'}
+            planningBusy={busy === 'plan'}
             planningDisabled={!user?.tenant_id}
-            onPlanResources={() => void onAdvanceAutopilot()}
+            onPlanResources={
+              stage === 'DISCOVERING' || stage === 'RESOURCE_PLANNING' ? () => void onPlanResources() : undefined
+            }
           />
 
-          {/* Risk assessment */}
           {(stage === 'RISK_REVIEW' ||
             stage === 'AWAITING_HUMAN_APPROVAL' ||
-            riskFromWorkflow.overall ||
-            pendingApproval) &&
+            overallRisk ||
+            riskFindings.length > 0) &&
           stage !== 'DRAFT' &&
           stage !== 'DISCOVERING' ? (
-            <Panel title="Risk Assessment">
+            <Panel title="Risk review">
               <p className="mb-4 text-sm text-slate-500">
-                AI risk assessment informs whether human authorization is required. It does not approve
-                the process.
+                Risk values come from Agent 4. The frontend does not override them.
               </p>
               <dl className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                    Risk Level
-                  </dt>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Risk level</dt>
                   <dd className="mt-1">
-                    {riskFromWorkflow.overall || pendingApproval?.risk_level ? (
-                      <RiskBadge
-                        level={riskFromWorkflow.overall || pendingApproval!.risk_level}
-                      />
-                    ) : (
-                      <span className="text-sm text-slate-500">Not available yet</span>
-                    )}
+                    {overallRisk ? <RiskBadge level={overallRisk} /> : <span className="text-sm text-slate-500">Not available yet</span>}
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                    Recommendation
-                  </dt>
-                  <dd className="mt-1 text-sm font-medium text-slate-800">
-                    {stage === 'AWAITING_HUMAN_APPROVAL' ||
-                    riskFromWorkflow.humanRequired ||
-                    pendingApproval
-                      ? 'Human Approval Required'
-                      : lastWorkflow?.eligible_for_execution
-                        ? 'Eligible for Execution'
-                        : 'Awaiting assessment'}
+                  <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">Human gate</dt>
+                  <dd className="mt-1 text-sm">
+                    {stage === 'AWAITING_HUMAN_APPROVAL' || lastWorkflow?.human_approval_required
+                      ? 'Human approval required'
+                      : 'Not currently waiting'}
                   </dd>
                 </div>
               </dl>
-              {(riskFromWorkflow.reason || pendingApproval?.reason) && (
-                <div className="mt-4">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Reason</p>
-                  <p className="mt-1 text-sm text-slate-700">
-                    {riskFromWorkflow.reason || pendingApproval?.reason}
-                  </p>
-                </div>
-              )}
               {riskFindings.length > 0 ? (
                 <ul className="mt-4 divide-y divide-slate-100 rounded-lg border border-slate-200">
                   {riskFindings.map((finding, idx) => (
@@ -987,235 +756,382 @@ export default function ProcessDetailPage() {
                       {finding.recommendation ? (
                         <p className="mt-1 text-xs text-slate-500">{finding.recommendation}</p>
                       ) : null}
+                      {finding.policy_version || finding.evidence_refs?.length ? (
+                        <p className="mt-1 text-xs text-slate-500">
+                          {finding.policy_version ? `Policy ${finding.policy_version}` : ''}
+                          {finding.evidence_refs?.length ? ` · Evidence ${finding.evidence_refs.join(', ')}` : ''}
+                        </p>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="mt-4 text-sm text-slate-500">
-                  Detailed risk findings will appear here after risk review completes.
-                </p>
+                <p className="mt-4 text-sm text-slate-500">No risk findings were returned.</p>
               )}
             </Panel>
           ) : null}
 
-          {/* Human approval */}
           {stage === 'AWAITING_HUMAN_APPROVAL' || pendingApproval ? (
-            <Panel title="Human Approval Required">
-              <div className="rounded-lg border border-amber-200/80 bg-amber-50/50 p-4">
-                <p className="text-sm font-medium text-amber-950">
-                  AI risk assessment indicates that human authorization is required before execution.
+            <Panel title="Human approval">
+              {governor ? (
+                <div className="space-y-4">
+                  <p className="text-sm text-slate-600">
+                    Approve or reject using the backend approval APIs. There is no request-changes action.
+                  </p>
+                  {pendingApproval ? (
+                    <>
+                      <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                        <div>
+                          <dt className="text-xs uppercase text-slate-500">Status</dt>
+                          <dd className="mt-1">
+                            <ApprovalStatusBadge status={pendingApproval.status} />
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase text-slate-500">Assigned approver</dt>
+                          <dd className="mt-1 break-all font-mono text-xs">{pendingApproval.approver_id || '—'}</dd>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <dt className="text-xs uppercase text-slate-500">What requires approval</dt>
+                          <dd className="mt-1">{pendingApproval.reason}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase text-slate-500">Requester</dt>
+                          <dd className="mt-1 break-all font-mono text-xs">{pendingApproval.requested_by || process.created_by || '—'}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase text-slate-500">Amount</dt>
+                          <dd className="mt-1">
+                            {displayText(asRecord(asRecord(process.process_context)?.purchase)?.amount) || '—'}{' '}
+                            {displayText(asRecord(asRecord(process.process_context)?.purchase)?.currency)}
+                          </dd>
+                        </div>
+                      </dl>
+                      <label className="block text-sm">
+                        <span className="text-xs uppercase tracking-wide text-slate-500">Comments (optional)</span>
+                        <textarea
+                          className="textarea textarea-bordered mt-1 w-full text-sm"
+                          rows={2}
+                          value={approvalComments}
+                          onChange={(e) => setApprovalComments(e.target.value)}
+                        />
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          disabled={busy !== null}
+                          onClick={() => void onDecide('approve')}
+                        >
+                          {busy === 'approve' ? 'Approving…' : 'Approve'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          disabled={busy !== null}
+                          onClick={() => void onDecide('reject')}
+                        >
+                          {busy === 'reject' ? 'Rejecting…' : 'Reject'}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-sm text-slate-600">No pending approval record was returned for this process.</p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm font-medium text-slate-800">Waiting for an authorized approver.</p>
+              )}
+            </Panel>
+          ) : null}
+
+          <ProcessProcurementSummary
+            processId={processId}
+            quotations={quotations}
+            purchaseOrder={purchaseOrder}
+            invoices={invoices}
+            vendor={procurementVendor}
+          />
+
+          {stage !== 'DRAFT' ? (
+            <WorkflowPlanPanel
+              processStage={stage}
+              plan={plan}
+              steps={steps}
+              validation={validation}
+              loading={planLoading && !plan}
+              error={planError}
+              canActivate={governor}
+              canGenerate={canGeneratePlan}
+              busy={busy}
+              lastExecution={lastExecution}
+              onGenerate={() => void onGeneratePlan()}
+              onValidate={() => void onValidatePlan()}
+              onActivate={() => void onActivatePlan()}
+              onExecuteStep={(step) => void onExecuteStep(step)}
+            />
+          ) : null}
+
+          {stage === 'INVOICE_MATCHING' || stage === 'COMPLETED' || invoices.length > 0 ? (
+            <Panel title="Invoice matching">
+              <p className="mb-3 text-sm text-slate-600">
+                Matching uses persisted invoices against the purchase order. Caller-supplied expected totals are not used.
+              </p>
+              {purchaseOrder ? (
+                <p className="mb-3 text-sm">
+                  <Link className="link" to={`/purchase-orders/${processId}`}>
+                    PO {purchaseOrder.po_number}
+                  </Link>
+                  {' · '}
+                  {String(purchaseOrder.total)} {purchaseOrder.currency} · {purchaseOrder.status}
                 </p>
-                {pendingApproval ? (
-                  <dl className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <dt className="text-xs uppercase tracking-wide text-amber-800/80">Risk Level</dt>
-                      <dd className="mt-1">
-                        <RiskBadge level={pendingApproval.risk_level} />
-                      </dd>
-                    </div>
-                    <div className="sm:col-span-2">
-                      <dt className="text-xs uppercase tracking-wide text-amber-800/80">Reason</dt>
-                      <dd className="mt-1 text-sm text-amber-950">{pendingApproval.reason}</dd>
-                    </div>
-                  </dl>
-                ) : null}
-                <Link to="/approvals" className="btn btn-primary btn-sm mt-4">
-                  Review Approval
+              ) : (
+                <p className="mb-3 text-sm text-slate-500">No purchase order record was returned.</p>
+              )}
+              {invoices.length === 0 ? (
+                <EmptyState
+                  title="No persisted invoices"
+                  body="No invoice records were returned for this process. Matching uses persisted invoices, not values typed in the browser."
+                />
+              ) : (
+                <ul className="space-y-3">
+                  {invoices.map((inv) => (
+                    <li key={inv.invoice_id} className="rounded-lg border border-slate-200 px-3 py-3 text-sm">
+                      <p className="font-medium">
+                        <Link className="link" to={`/invoices/${inv.invoice_id}`}>
+                          {inv.invoice_number}
+                        </Link>
+                        {' · '}
+                        {String(inv.total)} {inv.currency}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        Status {inv.status}
+                        {inv.invoice_date ? ` · ${inv.invoice_date}` : ''}
+                      </p>
+                      <div className="mt-2">
+                        <InvoiceMatchResultView result={parseInvoiceMatch(inv.match_result)} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+          ) : null}
+
+          {stage === 'EXCEPTION' || openExceptions.length > 0 ? (
+            <Panel title="Exception">
+              {exceptions.length === 0 ? (
+                <EmptyState
+                  title="No exception records"
+                  body="The process is in EXCEPTION but no exception rows were returned. Refresh or check audit."
+                />
+              ) : (
+                <ul className="space-y-4">
+                  {exceptions.map((ex) => (
+                    <li key={ex.id} className="rounded-lg border border-rose-200 px-4 py-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-slate-900">{ex.title || ex.exception_code || 'Exception'}</p>
+                          <p className="text-xs text-slate-500">
+                            {ex.exception_code || ex.type} · {formatDateTime(ex.created_at)}
+                          </p>
+                        </div>
+                        <ExceptionStatusBadge status={ex.status} />
+                        <Link className="link text-sm" to={`/exceptions/${ex.id}`}>
+                          View exception
+                        </Link>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-700">{ex.description}</p>
+                      {ex.workflow_step_id ? (
+                        <p className="mt-1 break-all font-mono text-xs text-slate-500">
+                          Step {ex.workflow_step_id}
+                          {ex.workflow_plan_id ? ` · plan ${ex.workflow_plan_id}` : ''}
+                        </p>
+                      ) : null}
+                      {ex.evidence_refs?.length ? (
+                        <p className="mt-1 text-xs text-slate-500">Evidence: {ex.evidence_refs.join(', ')}</p>
+                      ) : null}
+                      {ex.resolution_notes ? (
+                        <p className="mt-1 text-xs text-slate-600">Resolution: {ex.resolution_notes}</p>
+                      ) : null}
+                      {governor && (ex.status === 'open' || ex.status === 'in_progress') ? (
+                        <div className="mt-3 space-y-2">
+                          <textarea
+                            className="textarea textarea-bordered w-full text-sm"
+                            rows={2}
+                            placeholder="Resolution notes (required for resolve/fail)"
+                            value={exceptionNotes}
+                            onChange={(e) => setExceptionNotes(e.target.value)}
+                          />
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              disabled={busy !== null}
+                              onClick={() => void onExceptionAction('resolve', ex.id)}
+                            >
+                              Resolve
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost"
+                              disabled={busy !== null}
+                              onClick={() => void onExceptionAction('retry', ex.id)}
+                            >
+                              Retry
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline"
+                              disabled={busy !== null}
+                              onClick={() => void onExceptionAction('fail', ex.id)}
+                            >
+                              Fail
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-500">Actions are not automatic. The API remains authoritative.</p>
+                        </div>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Panel>
+          ) : null}
+
+          {stage === 'COMPLETED' ? (
+            <Panel title="Completion summary">
+              <p className="text-sm text-slate-700">{process.name} is completed. Execution actions are closed.</p>
+              <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs uppercase text-slate-500">PO</dt>
+                  <dd>{purchaseOrder?.po_number ?? '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-slate-500">Invoice</dt>
+                  <dd>{invoices[0]?.invoice_number ?? '—'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-slate-500">Workflow steps completed</dt>
+                  <dd>{steps.filter((s) => String(s.status).toUpperCase() === 'COMPLETED').length}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-slate-500">Receipts</dt>
+                  <dd>{receipts.length}</dd>
+                </div>
+              </dl>
+              {monitoring ? (
+                <div className="mt-4 space-y-2 text-sm">
+                  {monitoring.kpis.insufficient_evidence ? (
+                    <p className="text-amber-800">Insufficient evidence in the monitoring KPI report.</p>
+                  ) : null}
+                  <p className="text-xs text-slate-500">
+                    Completion rate {String(monitoring.kpis.completion_rate ?? '—')} · exceptions{' '}
+                    {monitoring.kpis.total_exceptions ?? 0} · bottlenecks {monitoring.bottlenecks?.length ?? 0}
+                  </p>
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-slate-500">No monitoring data.</p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Link className="btn btn-ghost btn-sm" to={`/processes/${processId}/monitoring`}>
+                  Open monitoring
+                </Link>
+                <Link className="btn btn-ghost btn-sm" to={`/recommendations?process=${processId}`}>
+                  TO-BE recommendations
                 </Link>
               </div>
             </Panel>
           ) : null}
 
-          {/* Human decision result */}
-          {decidedApproval && decidedApproval.status === 'APPROVED' ? (
-            <Panel title="Approved by Human">
-              <dl className="grid gap-3 text-sm sm:grid-cols-2">
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-500">Decision</dt>
-                  <dd className="mt-1 font-medium text-emerald-800">Approved</dd>
-                </div>
-                {decidedApproval.approver_id ? (
+          {stage !== 'DRAFT' && (monitoring || tobeRecommendations.length > 0) ? (
+            <Panel title="Monitoring">
+              <p className="mb-3 text-sm text-slate-600">
+                TO-BE provides recommendations for human review; it does not automatically change the workflow.
+              </p>
+              {monitoring?.kpis.insufficient_evidence ? (
+                <Alert tone="warning">Insufficient evidence. Values below are backend-returned.</Alert>
+              ) : null}
+              {monitoring ? (
+                <dl className="grid gap-3 text-sm sm:grid-cols-2">
                   <div>
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">Approver</dt>
-                    <dd className="mt-1 font-mono text-xs text-slate-700">
-                      {decidedApproval.approver_id}
+                    <dt className="text-xs uppercase text-slate-500">Exceptions</dt>
+                    <dd>{monitoring.exception_analytics?.total_exceptions ?? monitoring.kpis.total_exceptions ?? 0}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase text-slate-500">Observed bottlenecks</dt>
+                    <dd>{monitoring.bottlenecks?.length ?? 0}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase text-slate-500">Human wait</dt>
+                    <dd>
+                      {monitoring.kpis.average_human_wait_time_seconds == null
+                        ? 'Duration unavailable'
+                        : `${monitoring.kpis.average_human_wait_time_seconds} s`}
                     </dd>
                   </div>
-                ) : null}
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-500">Decided</dt>
-                  <dd className="mt-1 text-slate-700">{formatDateTime(decidedApproval.decided_at)}</dd>
-                </div>
-                {decidedApproval.comments ? (
-                  <div className="sm:col-span-2">
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">Comments</dt>
-                    <dd className="mt-1 text-slate-700">{decidedApproval.comments}</dd>
-                  </div>
-                ) : null}
-              </dl>
-              {stage === 'WORKFLOW_EXECUTION' || lastWorkflow?.eligible_for_execution ? (
-                <p className="mt-4 text-sm font-medium text-slate-800">Ready for Execution</p>
-              ) : null}
-            </Panel>
-          ) : null}
-
-          {decidedApproval && decidedApproval.status === 'REJECTED' ? (
-            <Panel title="Approval Rejected">
-              <p className="text-sm text-slate-600">
-                A human rejected this process. The backend determines the resulting stage — typically
-                Stopped.
-              </p>
-              <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-500">Decision</dt>
-                  <dd className="mt-1 font-medium text-rose-800">Rejected</dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-500">Decided</dt>
-                  <dd className="mt-1">{formatDateTime(decidedApproval.decided_at)}</dd>
-                </div>
-                {decidedApproval.comments ? (
-                  <div className="sm:col-span-2">
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">Comments</dt>
-                    <dd className="mt-1">{decidedApproval.comments}</dd>
-                  </div>
-                ) : null}
-              </dl>
-            </Panel>
-          ) : null}
-
-          {/* Execution */}
-          {(stage === 'WORKFLOW_EXECUTION' ||
-            stage === 'INVOICE_MATCHING' ||
-            stage === 'COMPLETED' ||
-            receipts.length > 0) &&
-          stage !== 'DRAFT' &&
-          stage !== 'DISCOVERING' ? (
-            <Panel title="Workflow Execution">
-              {receipts.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  No execution receipts are available for this process yet.
-                </p>
+                </dl>
               ) : (
-                <>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    <div className="rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2">
-                      <p className="text-xs text-slate-500">Actions</p>
-                      <p className="text-lg font-semibold tabular-nums text-slate-900">
-                        {receiptSummary.total}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2">
-                      <p className="text-xs text-slate-500">Successful</p>
-                      <p className="text-lg font-semibold tabular-nums text-slate-900">
-                        {receiptSummary.successful}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2">
-                      <p className="text-xs text-slate-500">Failed</p>
-                      <p className="text-lg font-semibold tabular-nums text-slate-900">
-                        {receiptSummary.failed}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2">
-                      <p className="text-xs text-slate-500">Blocked</p>
-                      <p className="text-lg font-semibold tabular-nums text-slate-900">
-                        {receiptSummary.blocked}
-                      </p>
-                    </div>
-                  </div>
-                  {receiptSummary.blocked > 0 || receiptSummary.failed > 0 ? (
-                    <div className="mt-4 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600">
-                      <p className="font-medium text-slate-800">Execution Safety</p>
-                      <p className="mt-1 text-xs">
-                        Execution is controlled and authorized. Blocked or failed actions are recorded
-                        in receipts without exposing internal security details.
-                      </p>
-                    </div>
-                  ) : null}
-                  <ul className="mt-4 divide-y divide-slate-100">
-                    {receipts.slice(0, 6).map((r) => (
-                      <li key={r.id} className="flex items-start justify-between gap-3 py-2.5 text-sm">
-                        <div className="min-w-0">
-                          <p className="truncate font-medium text-slate-800">
-                            {r.tool_name} · {r.action}
-                          </p>
-                          <p className="text-xs text-slate-500">{formatDateTime(r.created_at)}</p>
-                        </div>
-                        <span className="shrink-0 text-xs font-medium uppercase tracking-wide text-slate-500">
-                          {r.status}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </>
+                <p className="text-sm text-slate-500">No monitoring report.</p>
               )}
-            </Panel>
-          ) : null}
-
-          {stage === 'EXCEPTION' ? (
-            <Panel title="Process stopped">
-              <p className="text-sm text-slate-600">
-                This process was stopped after a rejection or blocked control. Review the audit
-                history for details. Agent 2 will not execute from this state.
-              </p>
-            </Panel>
-          ) : null}
-
-          {/* Completed */}
-          {stage === 'COMPLETED' ? (
-            <Panel>
-              <div className="py-2 text-center sm:text-left">
-                <p className="text-base font-semibold text-slate-900">✓ Process Completed</p>
-                <p className="mt-1 text-sm text-slate-600">
-                  {process.name} completed successfully.
+              {tobeRecommendations.length > 0 ? (
+                <p className="mt-3 text-sm">
+                  <Link className="link" to={`/recommendations/${tobeRecommendations[0].id}`}>
+                    {tobeRecommendations[0].title}
+                  </Link>
                 </p>
-                <p className="mt-2 text-xs text-slate-500">
-                  Updated {formatDateTime(process.updated_at)}
-                </p>
+              ) : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Link className="btn btn-ghost btn-sm" to={`/processes/${processId}/monitoring`}>
+                  Open monitoring
+                </Link>
+                <Link className="btn btn-ghost btn-sm" to={`/recommendations?process=${processId}`}>
+                  TO-BE recommendations
+                </Link>
               </div>
             </Panel>
           ) : null}
 
-          {/* Correlation-threaded timeline */}
-          <Panel title="Process Timeline">
+          {receipts.length > 0 && stage !== 'DRAFT' ? (
+            <Panel title="Execution receipts">
+              <ul className="divide-y divide-slate-100">
+                {receipts.slice(0, 8).map((r) => (
+                  <li key={r.id} className="flex items-start justify-between gap-3 py-2.5 text-sm">
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-slate-800">
+                        {r.tool_name} · {r.action}
+                      </p>
+                      <p className="break-all text-xs text-slate-500">
+                        {r.id} · {formatDateTime(r.created_at)}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-xs font-medium uppercase text-slate-500">{r.status}</span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          ) : null}
+
+          <Panel title="Activity">
             {correlationTimeline.length === 0 ? (
               <EmptyState
                 title="No timeline events yet"
-                body="Audit entries, autonomous actions, and execution receipts will appear here as the process runs."
+                body="Audit entries and execution receipts appear here. Events are not invented in the browser."
               />
             ) : (
               <ol className="space-y-0">
-                {correlationTimeline.slice(0, 20).map((event, idx) => (
+                {correlationTimeline.slice(0, 24).map((event, idx) => (
                   <li key={event.id} className="flex gap-3">
                     <div className="flex w-4 flex-col items-center">
-                      <span
-                        className={[
-                          'mt-1.5 h-2 w-2 rounded-full',
-                          event.source === 'advancement'
-                            ? 'bg-sky-500'
-                            : event.source === 'receipt'
-                              ? 'bg-emerald-500'
-                              : 'bg-slate-400',
-                        ].join(' ')}
-                      />
-                      {idx < Math.min(correlationTimeline.length, 20) - 1 ? (
+                      <span className="mt-1.5 h-2 w-2 rounded-full bg-slate-400" />
+                      {idx < Math.min(correlationTimeline.length, 24) - 1 ? (
                         <span className="my-1 w-px flex-1 bg-slate-200" aria-hidden />
                       ) : null}
                     </div>
                     <div className="min-w-0 pb-4">
                       <p className="text-sm font-medium text-slate-800">{event.title}</p>
-                      <p className="text-xs text-slate-500">
-                        {formatDateTime(event.timestamp)}
-                        {event.correlationId ? (
-                          <span className="ml-2 font-mono text-[10px] text-slate-400">
-                            {event.correlationId.slice(0, 8)}
-                          </span>
-                        ) : null}
-                      </p>
-                      {event.detail ? (
-                        <p className="mt-0.5 text-xs text-slate-600">{event.detail}</p>
-                      ) : null}
+                      <p className="text-xs text-slate-500">{formatDateTime(event.timestamp)}</p>
+                      {event.detail ? <p className="mt-0.5 text-xs text-slate-600">{event.detail}</p> : null}
                     </div>
                   </li>
                 ))}
@@ -1224,64 +1140,23 @@ export default function ProcessDetailPage() {
           </Panel>
         </div>
 
-        {/* Sidebar */}
         <aside className="space-y-6 lg:col-span-1">
-          <Panel title="Process Information">
+          <ProcessContextPanel context={process.process_context} />
+          <Panel title="Process information">
             <dl className="space-y-3 text-sm">
               <div>
                 <dt className="text-xs uppercase tracking-wide text-slate-500">Process ID</dt>
-                <dd className="mt-1 break-all font-mono text-xs text-slate-700">{process.id}</dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">Type</dt>
-                <dd className="mt-1 text-slate-800">{formatProcessType(process.process_type)}</dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">Status</dt>
-                <dd className="mt-1 text-slate-800">{formatProcessStatus(process.status)}</dd>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">Current Stage</dt>
-                <dd className="mt-1">
-                  <ProcessStageBadge stage={process.current_stage} />
-                </dd>
+                <dd className="mt-1 break-all font-mono text-xs">{process.id}</dd>
               </div>
               <div>
                 <dt className="text-xs uppercase tracking-wide text-slate-500">Version</dt>
-                <dd className="mt-1 text-slate-800">{process.version}</dd>
+                <dd className="mt-1">{process.version}</dd>
               </div>
               <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">Created</dt>
-                <dd className="mt-1 text-slate-800">{formatDateTime(process.created_at)}</dd>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Updated</dt>
+                <dd className="mt-1">{formatDateTime(process.updated_at)}</dd>
               </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wide text-slate-500">Last Updated</dt>
-                <dd className="mt-1 text-slate-800">{formatDateTime(process.updated_at)}</dd>
-              </div>
-              {process.created_by ? (
-                <div>
-                  <dt className="text-xs uppercase tracking-wide text-slate-500">Created By</dt>
-                  <dd className="mt-1 break-all font-mono text-xs text-slate-700">
-                    {process.created_by}
-                  </dd>
-                </div>
-              ) : null}
             </dl>
-          </Panel>
-
-          <Panel title="Quick links">
-            <ul className="space-y-2 text-sm">
-              <li>
-                <Link to="/approvals" className="font-medium text-slate-700 hover:text-slate-900">
-                  Approvals
-                </Link>
-              </li>
-              <li>
-                <Link to="/audit" className="font-medium text-slate-700 hover:text-slate-900">
-                  Audit Trail
-                </Link>
-              </li>
-            </ul>
           </Panel>
         </aside>
       </div>

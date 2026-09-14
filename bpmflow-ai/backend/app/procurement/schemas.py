@@ -145,8 +145,8 @@ class LineItemInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     description: str
-    quantity: Decimal
-    unit_price: Decimal
+    quantity: Decimal = Field(ge=0)
+    unit_price: Decimal = Field(ge=0)
     purchase_order_item_id: UUID | None = None
 
 
@@ -174,8 +174,8 @@ class CreatePurchaseOrderInput(BaseModel):
     process_id: UUID
     vendor_ref: str
     currency: str
-    amount: Decimal
-    tax: Decimal = Decimal("0")
+    amount: Decimal = Field(ge=0)
+    tax: Decimal = Field(default=Decimal("0"), ge=0)
     workflow_plan_id: UUID | None = None
     workflow_step_id: UUID | None = None
     budget_available: Decimal | None = None
@@ -241,9 +241,9 @@ class CreateInvoiceInput(BaseModel):
     vendor_ref: str | None = None
     invoice_number: str
     currency: str
-    total: Decimal | None = None
-    subtotal: Decimal | None = None
-    tax: Decimal = Decimal("0")
+    total: Decimal | None = Field(default=None, ge=0)
+    subtotal: Decimal | None = Field(default=None, ge=0)
+    tax: Decimal = Field(default=Decimal("0"), ge=0)
     invoice_id: UUID | None = None
     evidence_id: str | None = None
     items: list[LineItemInput] = Field(default_factory=list)

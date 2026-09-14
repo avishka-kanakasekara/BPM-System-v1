@@ -30,7 +30,7 @@ def workflow_client():
         return service
 
     app.dependency_overrides[get_workflow_plan_service] = _override
-    override_current_user(role="requester", tenant_id=BPMFLOW_DEMO_TENANT_ID)
+    override_current_user(role="approver", tenant_id=BPMFLOW_DEMO_TENANT_ID)
     client = TestClient(app)
     yield client, service
     app.dependency_overrides.clear()

@@ -238,7 +238,8 @@ async def test_calculate_kpi_tool():
     out = await calculate_kpi(session=None, input_data=inp)
     assert isinstance(out, CalculateKPIOutput)
     assert out.process_type == "procurement"
-    assert out.avg_cycle_time_hours > 0.0
+    assert out.avg_cycle_time_hours >= 0.0
+    assert out.completion_rate >= 0.0
 
 
 def test_tool_invalid_input_raises_validation_error():

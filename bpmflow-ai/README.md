@@ -1,110 +1,129 @@
 # BPMFlow AI
 
-Four-agent, human-supervised BPM platform: discovery (Agent 1), execution (Agent 2), resource allocation (Agent 3), and orchestration/risk (Agent 4). One FastAPI monolith at `backend/app/main.py` and a React/Vite frontend at `frontend/`.
+Human-supervised multi-agent **Business Process Management** platform.
 
-## Quick start (verified 2026-09-13)
+BPMFlow AI helps an organization **discover**, **model**, **allocate**, **approve**, **execute**, **monitor**, and **optimize** a business process — with humans remaining in control of approvals and TO-BE changes.
 
-### 1. Backend
+**Primary demo:** procurement / purchase-request lifecycle.
 
-```bash
-cd bpmflow-ai/backend
-python3 -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
+This is **not** a fully autonomous system. Agents propose and execute only within Agent 4’s state machine and human approval gates.
+
+## Four agents
+
+| Agent | Role |
+|-------|------|
+| **Agent 1** | Process discovery, document intelligence, hybrid IR (BM25 + vectors + fusion where implemented) |
+| **Agent 2** | Authorized one-step workflow execution (RPA tools) and KPI / execution reporting |
+| **Agent 3** | Workforce / resource allocation against the company directory |
+| **Agent 4** | Orchestration, deterministic process state, risk gate, completion / exception |
+
+## Lifecycle
+
+```
+DISCOVER → MODEL → ALLOCATE → APPROVE → EXECUTE → MONITOR → OPTIMIZE
+```
+
+Procurement example:
+
+```
+Purchase Request
+  → Agent 1 discovery (evidence)
+  → Agent 4 workflow plan (WorkflowPlan / WorkflowStep)
+  → Agent 3 resource allocation
+  → Human approval
+  → Agent 2 one-step execution (purchase order)
+  → Invoice record
+  → Deterministic invoice matching
+  → Agent 4 COMPLETED or EXCEPTION
+  → Monitoring / KPI / TO-BE recommendation (human review)
+```
+
+## Quick start (local)
+
+Verified commands (Windows PowerShell shown; Unix equivalents in [docs/SETUP.md](docs/SETUP.md)).
+
+### Backend
+
+```powershell
+cd bpmflow-ai\backend
+python -m venv venv
+.\venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env              # fill SUPABASE_* , DATABASE_URL , GEMINI_API_KEY
+copy .env.example .env
+# Fill SUPABASE_* , DATABASE_URL , GEMINI_API_KEY (see backend/.env.example)
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Required env (see `backend/.env.example`):
+- Liveness: `GET http://127.0.0.1:8000/health/live`
+- Demo config (no secrets): `GET http://127.0.0.1:8000/health/demo`
+- OpenAPI: `http://127.0.0.1:8000/docs`
 
-| Variable | Purpose |
-|----------|---------|
-| `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | Auth + REST persistence |
-| `DATABASE_URL` | Postgres pooler (preferred); REST fallback when pooler fails |
-| `GEMINI_API_KEY` | Live LLM; set `GEMINI_OFFLINE=true` for deterministic smoke/tests |
-| `DEMO_TENANT_ID` | Demo tenant UUID for Agent 3 (`00000000-0000-0000-0000-000000000001`) |
+Development LLM shortcuts (`MOCK_LLM=true`, `GEMINI_OFFLINE=true`) are **forbidden** when `ENV=production`.
 
-Apply migrations (when pooler works):
+### Frontend
 
-```bash
-python -m app.scripts.apply_pending_migrations
-python -m app.scripts.seed_demo_tenant
-python -m app.scripts.migration_status
-```
+Vite listens on **port 5174** (`frontend/vite.config.ts`) and proxies `/api` and `/health` to the API.
 
-Start API:
-
-```bash
-GEMINI_OFFLINE=true MOCK_LLM=true uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-
-Health: `GET http://127.0.0.1:8000/health/live` · OpenAPI: `/docs`
-
-### 2. Frontend
-
-```bash
-cd bpmflow-ai/frontend
+```powershell
+cd bpmflow-ai\frontend
 npm install
-cp .env.example .env.local        # VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
-npm run dev                       # http://localhost:5173 , proxies /api → :8000
+copy .env.example .env.local
+# VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY only — never the service role key
+npm run dev
 ```
 
-### 3. E2E smoke (golden path G1–G8)
+Open `http://localhost:5174`, sign in, then follow [docs/PROCUREMENT_DEMO.md](docs/PROCUREMENT_DEMO.md).
 
-With the API running:
+### Tests
 
-```bash
-cd bpmflow-ai/backend
-GEMINI_OFFLINE=true MOCK_LLM=true python -m app.scripts.e2e_smoke
+```powershell
+cd bpmflow-ai\backend
+python -m pytest app/tests
 ```
 
-Cold start (migrate + seed + start server + smoke):
+**Verified Phase 12 baseline:** 1195 passed, 38 skipped, 0 failed. That number is a snapshot, not a permanent contract.
 
-```bash
-python -m app.scripts.e2e_smoke --cold-start
-```
-
-Exit code 0 = all gates passed. See `docs/RUNBOOK.md` for troubleshooting.
-
-## Verification commands
-
-```bash
-# Backend (exclude live Gemini quota tests)
-cd backend && pytest app/tests -q \
-  --ignore=app/tests/integration \
-  --ignore=app/tests/agent2_execution/test_gemini_live.py
-
-ruff check app
-mypy app/core/audit_writer.py app/core/middleware.py  # scoped; see pyproject.toml
-
-# Frontend
-cd frontend && npm run build && npm test
-```
-
-Latest run: **914 pytest passed**, **236 Vitest passed**, **e2e_smoke 8/8**.
-
-## Project layout
-
-```
-bpmflow-ai/
-├── backend/app/          # FastAPI monolith (agents 1–4, policy KB, API)
-├── frontend/src/         # React UI (discover, process cockpit, approvals, agent2/3)
-├── supabase/migrations/  # SQL migrations 0001–0014
-├── sample-documents/     # Procurement CSV + DOCX for discovery demo
-└── docs/                 # ARCHITECTURE, API, RUNBOOK, DEMO_SCRIPT, REPAIR_PLAN
-```
+**Phase 13 regression:** 1196 passed, 38 skipped, 0 failed.
 
 ## Documentation
 
 | Doc | Contents |
 |-----|----------|
+| [docs/SETUP.md](docs/SETUP.md) | Clone, env, Supabase migrations 0001–0024, run API/UI |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Runtime architecture (as implemented) |
-| [docs/API.md](docs/API.md) | HTTP surface summary |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Ops, health, migrations, smoke |
-| [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) | Procurement UI click path |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production guards |
-| [docs/REPAIR_PLAN.md](docs/REPAIR_PLAN.md) | Defect register + gate status |
-| [docs/CHANGELOG_REPAIR.md](docs/CHANGELOG_REPAIR.md) | Defect resolutions |
+| [docs/AGENTS.md](docs/AGENTS.md) | Agent responsibilities and boundaries |
+| [docs/STATE_MACHINE.md](docs/STATE_MACHINE.md) | Process stages and allowed transitions |
+| [docs/API.md](docs/API.md) | HTTP surface from source |
+| [docs/API_EXAMPLES.md](docs/API_EXAMPLES.md) | Fictional request/response samples |
+| [docs/PROCUREMENT_DEMO.md](docs/PROCUREMENT_DEMO.md) | PR-2026-0098 / PR-2026-0105 demo |
+| [docs/DEMO_DATA.md](docs/DEMO_DATA.md) | Fictional seed data |
+| [docs/SECURITY.md](docs/SECURITY.md) | Auth, RBAC, RLS, Tool Registry |
+| [docs/RESPONSIBLE_AI.md](docs/RESPONSIBLE_AI.md) | Human-supervision model |
+| [docs/TESTING.md](docs/TESTING.md) | How to run test slices |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common failures |
+| [docs/PRODUCTION_CHECKLIST.md](docs/PRODUCTION_CHECKLIST.md) | Go-live checklist |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) | Ops: health, pooler, smoke |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production env and migration notes |
+| [docs/PERSISTENCE.md](docs/PERSISTENCE.md) | Postgres vs REST fallback |
+| [docs/REPAIR_PLAN.md](docs/REPAIR_PLAN.md) | Historical Phase 0 audit (not current contract) |
+
+## Layout
+
+```
+bpmflow-ai/
+├── backend/app/          FastAPI monolith (agents 1–4)
+├── frontend/src/         React / Vite UI
+├── supabase/migrations/  SQL 0001 … 0024 (0024 = RLS hardening)
+├── sample-documents/     Demo PDF/DOCX/CSV inputs
+└── docs/
+```
 
 ## Auth
 
-All `/api/v1/*` routes except `POST /auth/register` require a Supabase JWT (`Authorization: Bearer …`). Development registration auto-confirms email and provisions `public.users` role (`requester` | `approver` | `admin`).
+Almost all `/api/v1/*` routes require `Authorization: Bearer <Supabase JWT>`. Roles: `requester`, `approver`, `admin`. Tenant comes from verified JWT `app_metadata.tenant_id`, not from the request body.
+
+**Never** put `SUPABASE_SERVICE_ROLE_KEY` in the frontend.
+
+## Demo seeds
+
+Fictional **BPMFlow Demo Company** and vendors are loaded only when explicitly invoked (admin HTTP seed or documented scripts). They do **not** run at production startup. See [docs/DEMO_DATA.md](docs/DEMO_DATA.md).

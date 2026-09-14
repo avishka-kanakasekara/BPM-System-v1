@@ -9,9 +9,9 @@ import {
 import { Alert, Badge, EmptyState, Panel, Spinner } from '../ui/primitives'
 
 /** Matches backend ALLOWED_FILE_TYPES default (pdf,docx,csv) and MAX_UPLOAD_MB (20). */
-export const DISCOVERY_ALLOWED_EXTENSIONS = ['pdf', 'docx', 'csv'] as const
+export const DISCOVERY_ALLOWED_EXTENSIONS = ['pdf', 'docx', 'csv', 'txt'] as const
 export const DISCOVERY_MAX_UPLOAD_MB = 20
-export const DISCOVERY_ACCEPT = '.pdf,.docx,.csv'
+export const DISCOVERY_ACCEPT = '.pdf,.docx,.csv,.txt'
 
 type Props = {
   processId: string

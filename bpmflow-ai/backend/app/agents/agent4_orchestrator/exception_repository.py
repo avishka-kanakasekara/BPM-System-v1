@@ -89,6 +89,10 @@ def record_from_rest(row: dict) -> ExceptionRecord:
     except ValueError:
         severity = ExceptionSeverity.MEDIUM
     exception_type = exception_type_from_code(type_raw)
+    try:
+        status = ExceptionStatus(status_raw)
+    except ValueError:
+        status = ExceptionStatus.OPEN
     return ExceptionRecord(
         id=UUID(str(row["id"])),
         process_id=UUID(str(row["process_id"])) if row.get("process_id") else None,

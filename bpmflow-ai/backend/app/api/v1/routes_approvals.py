@@ -16,6 +16,7 @@ from app.agents.agent4_orchestrator.exceptions import (
     ApprovalNotFoundError,
     DatabasePersistenceError,
     ExecutionEnrichmentError,
+    ProcessNotFoundError,
 )
 from app.agents.agent4_orchestrator.execution_payload import (
     build_process_execution_metadata,
@@ -30,6 +31,7 @@ from app.api.v1.deps import (
     get_process_repository,
 )
 from app.core.security import get_current_user, require_roles
+from app.core.tenancy import deny_foreign_process, process_visible_to_user
 from app.schemas.approval import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
@@ -70,23 +72,43 @@ def _database_error() -> HTTPException:
 async def list_approvals(
     status: ApprovalStatus | None = Query(default=None),
     repository: ApprovalRepository = Depends(get_approval_repository),
+    process_repository: ProcessRepository = Depends(get_process_repository),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> list[ApprovalResponse]:
     try:
         records = await repository.list_approval_requests(status=status)
     except DatabasePersistenceError as exc:
         raise _database_error() from exc
-    return [approval_from_record(record) for record in records]
+    visible: list[ApprovalResponse] = []
+    for record in records:
+        try:
+            process = await process_repository.get_process(record.process_id)
+        except ProcessNotFoundError:
+            if current_user.tenant_id is None:
+                visible.append(approval_from_record(record))
+            continue
+        except DatabasePersistenceError as exc:
+            raise _database_error() from exc
+        if process_visible_to_user(process, current_user):
+            visible.append(approval_from_record(record))
+    return visible
 
 
 @router.get("/{approval_id}", response_model=ApprovalResponse)
 async def get_approval(
     approval_id: UUID,
     repository: ApprovalRepository = Depends(get_approval_repository),
+    process_repository: ProcessRepository = Depends(get_process_repository),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> ApprovalResponse:
     try:
         record = await repository.get_approval_request(approval_id)
+        try:
+            process = await process_repository.get_process(record.process_id)
+            deny_foreign_process(process, current_user)
+        except ProcessNotFoundError:
+            if current_user.tenant_id is not None:
+                raise _not_found()
     except ApprovalNotFoundError as exc:
         raise _not_found() from exc
     except DatabasePersistenceError as exc:
@@ -120,6 +142,7 @@ async def approve_approval(
     service: ApprovalService = Depends(get_approval_service),
     workflow: Agent4Workflow = Depends(get_agent4_workflow),
     repository: ProcessRepository = Depends(get_process_repository),
+    approval_repository: ApprovalRepository = Depends(get_approval_repository),
     current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ApprovalDecisionResponse:
     """Record APPROVED, then continue the workflow.
@@ -129,6 +152,13 @@ async def approve_approval(
     dispatches the authorized task to Agent 2 in-process.
     """
     try:
+        pending = await approval_repository.get_approval_request(approval_id)
+        try:
+            owned = await repository.get_process(pending.process_id)
+            deny_foreign_process(owned, current_user)
+        except ProcessNotFoundError:
+            if current_user.tenant_id is not None:
+                raise _not_found()
         result = await service.approve_request(
             approval_id,
             approver_id=current_user.id,
@@ -184,6 +214,8 @@ async def reject_approval(
     payload: ApprovalDecisionRequest,
     service: ApprovalService = Depends(get_approval_service),
     workflow: Agent4Workflow = Depends(get_agent4_workflow),
+    repository: ProcessRepository = Depends(get_process_repository),
+    approval_repository: ApprovalRepository = Depends(get_approval_repository),
     current_user: CurrentUser = Depends(require_roles("approver", "admin")),
 ) -> ApprovalDecisionResponse:
     """Record REJECTED and move the process to EXCEPTION.
@@ -191,6 +223,13 @@ async def reject_approval(
     Agent 2 is never invoked on rejection.
     """
     try:
+        pending = await approval_repository.get_approval_request(approval_id)
+        try:
+            owned = await repository.get_process(pending.process_id)
+            deny_foreign_process(owned, current_user)
+        except ProcessNotFoundError:
+            if current_user.tenant_id is not None:
+                raise _not_found()
         result = await service.reject_request(
             approval_id,
             approver_id=current_user.id,

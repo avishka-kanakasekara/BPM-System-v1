@@ -1,21 +1,11 @@
 /**
  * Presentation helpers for BPM statuses.
- * API / domain values stay unchanged — only labels and visual tones change here.
+ * Stage labels come from lib/processStages (single source of truth).
  */
 
-export type StatusTone = 'neutral' | 'good' | 'warn' | 'bad' | 'accent' | 'info'
+import { formatProcessStage as formatStageFromContract } from './processStages'
 
-const STAGE_LABELS: Record<string, string> = {
-  DRAFT: 'Draft',
-  DISCOVERING: 'Discovering',
-  RESOURCE_PLANNING: 'Resource Planning',
-  RISK_REVIEW: 'Risk Review',
-  AWAITING_HUMAN_APPROVAL: 'Awaiting Human Approval',
-  WORKFLOW_EXECUTION: 'Workflow Execution',
-  INVOICE_MATCHING: 'Invoice Matching',
-  COMPLETED: 'Completed',
-  EXCEPTION: 'Stopped',
-}
+export type StatusTone = 'neutral' | 'good' | 'warn' | 'bad' | 'accent' | 'info'
 
 const RISK_LABELS: Record<string, string> = {
   LOW: 'Low',
@@ -46,8 +36,7 @@ function titleCaseFallback(value: string): string {
 }
 
 export function formatProcessStage(stage: string | null | undefined): string {
-  if (!stage) return 'Unknown'
-  return STAGE_LABELS[stage] ?? titleCaseFallback(stage)
+  return formatStageFromContract(stage)
 }
 
 export function formatRiskLevel(level: string | null | undefined): string {

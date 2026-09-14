@@ -119,8 +119,6 @@ class WorkflowStepExecutor:
             raise NotAuthorizedError(
                 "Mutating WorkflowStep execution requires process stage WORKFLOW_EXECUTION"
             )
-        if request.authorization_state != "AUTHORIZED":
-            raise NotAuthorizedError("Workflow step is not authorized for execution")
 
         try:
             tool_record = await self._tools.resolve_for_step(tenant_id=tenant_id, workflow_step=step)
@@ -161,6 +159,9 @@ class WorkflowStepExecutor:
                 task_type=step.step_type.value,
             )
 
+        from datetime import UTC, datetime
+
+        started_at = datetime.now(UTC)
         claimed = await self._plans.claim_step_execution(
             plan.id, step.id, tenant_id=tenant_id
         )
@@ -212,6 +213,27 @@ class WorkflowStepExecutor:
         await self._plans.update_step_status(
             plan.id, step.id, next_status, tenant_id=tenant_id
         )
+        try:
+            from app.monitoring.recorder import record_step_execution
+
+            ended_at = getattr(receipt, "completed_at", None) or datetime.now(UTC)
+            record_step_execution(
+                process_id=request.process_id,
+                tenant_id=tenant_id,
+                workflow_plan_id=plan.id,
+                workflow_step_id=step.id,
+                name=step.name,
+                step_type=step.step_type.value,
+                status=next_status.value,
+                started_at=getattr(receipt, "started_at", None) or started_at,
+                ended_at=ended_at,
+                step_key=step.step_key,
+                depends_on_step_keys=list(step.depends_on_step_keys or []),
+                approval_required=bool(step.approval_required),
+                failure_count=0 if success else 1,
+            )
+        except Exception:
+            pass
         result_payload = dict(receipt.result or {})
         result_payload.update(
             {

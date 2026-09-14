@@ -233,7 +233,12 @@ class ProcurementService:
     ) -> PurchaseOrderRecord:
         purchase = context.purchase
         if purchase.vendor_id in (None, ""):
-            raise VendorNotFoundError("ProcessContext.purchase.vendor_id is missing")
+            if purchase.vendor_name:
+                vendor = self.resolve_vendor(tenant_id=tenant_id, vendor_ref=str(purchase.vendor_name))
+            else:
+                raise VendorNotFoundError("ProcessContext.purchase.vendor_id is missing")
+        else:
+            vendor = self.resolve_vendor(tenant_id=tenant_id, vendor_ref=str(purchase.vendor_id))
         if not (purchase.currency or "").strip():
             raise ProcurementError(
                 "ProcessContext.purchase.currency is missing",
@@ -244,20 +249,26 @@ class ProcurementService:
                 "ProcessContext.purchase.amount is missing",
                 error_code="MISSING_REQUIRED_EXECUTION_CONTEXT",
             )
-        items = [
-            LineItemInput(
-                description=item.description or purchase.description or "Purchase request item",
-                quantity=item.quantity or Decimal("1"),
-                unit_price=item.unit_amount or purchase.amount,
+        items = []
+        for item in purchase.items or []:
+            if not (item.description or item.quantity or item.unit_amount):
+                continue
+            qty = item.quantity or Decimal("1")
+            unit = item.unit_amount
+            if unit is None and purchase.amount is not None and qty:
+                unit = (purchase.amount / qty).quantize(Decimal("0.01"))
+            items.append(
+                LineItemInput(
+                    description=item.description or purchase.description or "Purchase request item",
+                    quantity=qty,
+                    unit_price=unit or purchase.amount,
+                )
             )
-            for item in (purchase.items or [])
-            if item.description or item.quantity or item.unit_amount
-        ]
         return self.create_purchase_order(
             CreatePurchaseOrderInput(
                 tenant_id=tenant_id,
                 process_id=process_id,
-                vendor_ref=str(purchase.vendor_id),
+                vendor_ref=str(vendor.vendor_id),
                 currency=str(purchase.currency),
                 amount=purchase.amount,
                 workflow_plan_id=workflow_plan_id,

@@ -35,6 +35,7 @@ from app.api.v1.deps import (
     get_workflow_planner,
 )
 from app.core.security import get_current_user
+from app.core.tenancy import deny_foreign_process, process_visible_to_user
 from app.schemas.auth import CurrentUser
 from app.schemas.exception import ExceptionResponse, exception_from_record
 from app.schemas.process import (
@@ -93,9 +94,10 @@ async def list_processes(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> list[ProcessResponse]:
     try:
-        return await repository.list_processes()
+        records = await repository.list_processes()
     except DatabasePersistenceError as exc:
         raise _database_error() from exc
+    return [row for row in records if process_visible_to_user(row, current_user)]
 
 
 @router.post("", response_model=ProcessResponse, status_code=status.HTTP_201_CREATED)
@@ -178,11 +180,13 @@ async def get_process(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> ProcessResponse:
     try:
-        return await repository.get_process(process_id)
+        process = await repository.get_process(process_id)
     except ProcessNotFoundError as exc:
         raise _not_found() from exc
     except DatabasePersistenceError as exc:
         raise _database_error() from exc
+    deny_foreign_process(process, current_user)
+    return process
 
 
 @router.post("/{process_id}/start", response_model=ProcessStartResponse)
@@ -197,7 +201,8 @@ async def start_process(
     Agent 1 unavailability is a controlled response, not HTTP 500.
     """
     try:
-        await repository.get_process(process_id)
+        process = await repository.get_process(process_id)
+        deny_foreign_process(process, current_user)
         result = await workflow.start_existing_process(process_id)
         process = await repository.get_process(process_id)
     except ProcessNotFoundError as exc:
@@ -250,23 +255,32 @@ async def advance_process(
     """
     from app.core.config import settings
 
-    tenant_id = current_user.tenant_id
-    if payload.resource_planning and payload.resource_planning.tenant_id:
-        if tenant_id is None:
-            tenant_id = payload.resource_planning.tenant_id
-        elif (
-            settings.is_production
-            and tenant_id != payload.resource_planning.tenant_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Tenant context must come from the authenticated session",
-            )
+    if current_user.tenant_id is not None:
+        tenant_id = current_user.tenant_id
+    elif settings.is_production:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant context must come from the authenticated session",
+        )
+    else:
+        tenant_id = (
+            payload.resource_planning.tenant_id
+            if payload.resource_planning is not None
+            else None
+        )
     if tenant_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Tenant context is required for process advancement",
         )
+
+    try:
+        process = await repository.get_process(process_id)
+        deny_foreign_process(process, current_user)
+    except ProcessNotFoundError as exc:
+        raise _not_found() from exc
+    except DatabasePersistenceError as exc:
+        raise _database_error() from exc
 
     if payload.reconcile_stale:
         await engine.reconcile(
@@ -322,26 +336,24 @@ async def plan_resources(
     """DISCOVERING → RESOURCE_PLANNING, call real Agent 3, then → RISK_REVIEW.
 
     tenant_id on the Agent 3 message comes from the verified JWT
-    app_metadata when present. The request-body tenant_id is only a
-    fallback for callers whose token has no tenant claim (tests / local).
-    Body tenant_id never overrides a JWT tenant.
+    app_metadata. Body tenant_id is a non-production fallback only and never
+    overrides a JWT tenant.
     """
     from app.core.config import settings
 
-    tenant_id = current_user.tenant_id or payload.tenant_id
+    if current_user.tenant_id is not None:
+        tenant_id = current_user.tenant_id
+    elif settings.is_production:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant context must come from the authenticated session",
+        )
+    else:
+        tenant_id = payload.tenant_id
     if tenant_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Tenant context is required for resource planning",
-        )
-    if (
-        settings.is_production
-        and current_user.tenant_id is None
-        and payload.tenant_id is not None
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Tenant context must come from the authenticated session",
         )
     try:
         return await workflow.run_resource_planning(
@@ -367,6 +379,7 @@ async def risk_review(
     process_id: UUID,
     payload: RiskReviewRequest,
     workflow: Agent4Workflow = Depends(get_agent4_workflow),
+    repository: ProcessRepository = Depends(get_process_repository),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> WorkflowResult:
     """Run the deterministic risk engine at RISK_REVIEW.
@@ -374,6 +387,13 @@ async def risk_review(
     Opens a human approval gate (→ AWAITING_HUMAN_APPROVAL) or, with no
     approval-level findings, advances to WORKFLOW_EXECUTION.
     """
+    try:
+        process = await repository.get_process(process_id)
+        deny_foreign_process(process, current_user)
+    except ProcessNotFoundError as exc:
+        raise _not_found() from exc
+    except DatabasePersistenceError as exc:
+        raise _database_error() from exc
     context = RiskEvaluationContext(
         purchase_amount=(
             Decimal(str(payload.purchase_amount))
@@ -424,6 +444,7 @@ async def execute_workflow(
     _ = current_user
     try:
         process = await repository.get_process(process_id)
+        deny_foreign_process(process, current_user)
     except ProcessNotFoundError as exc:
         raise _not_found() from exc
     except DatabasePersistenceError as exc:
@@ -461,10 +482,13 @@ async def complete_invoice_matching(
     process_id: UUID,
     payload: InvoiceMatchingCompleteRequest,
     workflow: Agent4Workflow = Depends(get_agent4_workflow),
+    repository: ProcessRepository = Depends(get_process_repository),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> WorkflowResult:
     """Match persisted invoice to persisted PO then COMPLETED, or EXCEPTION on mismatch."""
     try:
+        process = await repository.get_process(process_id)
+        deny_foreign_process(process, current_user)
         return await workflow.complete_invoice_matching(
             process_id,
             invoice_number=payload.invoice_number,

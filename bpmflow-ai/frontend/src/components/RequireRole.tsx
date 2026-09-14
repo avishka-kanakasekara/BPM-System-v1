@@ -10,7 +10,7 @@ type RequireRoleProps = {
   message?: string
 }
 
-/** Route guard matching backend require_roles RBAC. */
+/** UX route guard. Backend require_roles remains the authorization source of truth. */
 export function RequireRole({ roles, children, message }: RequireRoleProps) {
   const { user, loading } = useAuth()
 

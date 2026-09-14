@@ -32,6 +32,7 @@ class AuditLogRecord(BaseModel):
     old_values: dict | None = None
     new_values: dict | None = None
     timestamp: datetime
+    tenant_id: UUID | None = None
 
 
 def audit_from_orm(row: AuditLog) -> AuditLogRecord:
@@ -44,6 +45,7 @@ def audit_from_orm(row: AuditLog) -> AuditLogRecord:
         old_values=row.old_values,
         new_values=row.new_values,
         timestamp=row.timestamp,
+        tenant_id=getattr(row, "tenant_id", None),
     )
 
 
@@ -58,6 +60,7 @@ def audit_from_rest(row: dict) -> AuditLogRecord:
             "old_values": row.get("old_values"),
             "new_values": row.get("new_values"),
             "timestamp": row["timestamp"],
+            "tenant_id": row.get("tenant_id"),
         }
     )
 
@@ -67,9 +70,10 @@ def _list_audit_rest(
     entity_id: UUID | None,
     limit: int,
     offset: int,
+    tenant_id: UUID | None = None,
 ) -> list[AuditLogRecord]:
     params: dict[str, str] = {
-        "select": "id,entity_type,entity_id,action,performed_by,old_values,new_values,timestamp",
+        "select": "id,entity_type,entity_id,action,performed_by,old_values,new_values,timestamp,tenant_id",
         "order": "timestamp.desc",
         "limit": str(limit),
         "offset": str(offset),
@@ -78,6 +82,8 @@ def _list_audit_rest(
         params["entity_type"] = f"eq.{entity_type}"
     if entity_id is not None:
         params["entity_id"] = f"eq.{entity_id}"
+    if tenant_id is not None:
+        params["tenant_id"] = f"eq.{tenant_id}"
     return [audit_from_rest(row) for row in rest_select("audit_logs", params)]
 
 
@@ -91,6 +97,7 @@ class AuditRepository(ABC):
         entity_id: UUID | None = None,
         limit: int = DEFAULT_AUDIT_LIMIT,
         offset: int = 0,
+        tenant_id: UUID | None = None,
     ) -> list[AuditLogRecord]:
         """Return audit rows newest first, with bounded pagination."""
 
@@ -110,12 +117,15 @@ class InMemoryAuditRepository(AuditRepository):
         entity_id: UUID | None = None,
         limit: int = DEFAULT_AUDIT_LIMIT,
         offset: int = 0,
+        tenant_id: UUID | None = None,
     ) -> list[AuditLogRecord]:
         records = list(self._records)
         if entity_type is not None:
             records = [row for row in records if row.entity_type == entity_type]
         if entity_id is not None:
             records = [row for row in records if row.entity_id == entity_id]
+        if tenant_id is not None:
+            records = [row for row in records if row.tenant_id == tenant_id]
         records.sort(key=lambda row: row.timestamp, reverse=True)
         return records[offset : offset + limit]
 
@@ -132,6 +142,7 @@ class SqlAlchemyAuditRepository(AuditRepository):
         entity_id: UUID | None = None,
         limit: int = DEFAULT_AUDIT_LIMIT,
         offset: int = 0,
+        tenant_id: UUID | None = None,
     ) -> list[AuditLogRecord]:
         bounded_limit = min(max(limit, 1), MAX_AUDIT_LIMIT)
         bounded_offset = max(offset, 0)
@@ -142,6 +153,7 @@ class SqlAlchemyAuditRepository(AuditRepository):
                 entity_id,
                 bounded_limit,
                 bounded_offset,
+                tenant_id,
             )
         try:
             stmt = select(AuditLog).order_by(AuditLog.timestamp.desc())
@@ -149,6 +161,8 @@ class SqlAlchemyAuditRepository(AuditRepository):
                 stmt = stmt.where(AuditLog.entity_type == entity_type)
             if entity_id is not None:
                 stmt = stmt.where(AuditLog.entity_id == entity_id)
+            if tenant_id is not None:
+                stmt = stmt.where(AuditLog.tenant_id == tenant_id)
             stmt = stmt.limit(bounded_limit).offset(bounded_offset)
             result = await self._session.execute(stmt)
             rows = result.scalars().all()
@@ -161,6 +175,7 @@ class SqlAlchemyAuditRepository(AuditRepository):
                         entity_id,
                         bounded_limit,
                         bounded_offset,
+                        tenant_id,
                     )
                 except Exception:
                     pass

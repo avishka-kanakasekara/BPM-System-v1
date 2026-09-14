@@ -32,7 +32,7 @@ function formatAuditTitle(action: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-/** Merge audit logs, autonomous advancement actions, and receipts into one timeline. */
+/** Merge audit logs, recorded stage transitions, and receipts into one timeline. */
 export function buildCorrelationTimeline(input: {
   audit: AuditLogRecord[]
   autonomousActions: AdvancementAction[]

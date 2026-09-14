@@ -59,12 +59,12 @@ export default function Agent2RecommendationsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Agent 2 — Optimizations"
-        description="Govern optimization recommendations. Approve or reject before applying operational changes."
+        title="Agent 2 Optimization Recommendations"
+        description="These are Agent 2 execution/optimization recommendations and are separate from BPMFlow AI TO-BE process recommendations."
       />
       <Alert tone="warning">
-        Recommendations with status <strong>PENDING_APPROVAL</strong> are proposals only — they do
-        not modify official workflows until a human explicitly approves them.
+        Not TO-BE Process Recommendations. Agent 2 suggestions come from execution analytics. TO-BE process
+        recommendations live under Operations → TO-BE Recommendations.
       </Alert>
       {error ? <Alert tone="error">{error}</Alert> : null}
       {message ? <Alert tone="success">{message}</Alert> : null}

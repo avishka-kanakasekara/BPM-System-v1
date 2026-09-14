@@ -23,6 +23,7 @@ def test_production_rejects_mock_llm():
         GEMINI_API_KEY="real-key",
         MOCK_LLM=True,
         GEMINI_OFFLINE=False,
+        DEBUG=False,
         EMAIL_DRY_RUN=False,
         EMAIL_PROVIDER="resend",
         EMAIL_API_KEY="re_key",
@@ -47,6 +48,19 @@ def test_correlation_id_header_on_requests():
     response = client.get("/health/live", headers={"X-Correlation-ID": "corr-test-123"})
     assert response.status_code == 200
     assert response.headers.get("X-Correlation-ID") == "corr-test-123"
+
+
+def test_health_demo_lists_migration_0024_without_secrets():
+    client = TestClient(app)
+    response = client.get("/health/demo")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["migration_0024_on_disk"] is True
+    assert any(name.startswith("0024") for name in body["migrations_on_disk"])
+    blob = json.dumps(body)
+    assert "service_role" not in blob.lower()
+    assert "eyJ" not in blob
+    assert "sk-" not in blob
 
 
 def test_rate_limiter_blocks_burst():

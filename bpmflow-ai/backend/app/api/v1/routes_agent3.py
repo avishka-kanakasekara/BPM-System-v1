@@ -9,8 +9,7 @@ Security:
 - All endpoints require trusted tenant context from authentication
 - Request body tenant_id must match trusted context tenant_id
 - Cross-tenant access returns 404 (not 403 to avoid information leakage)
-- Trusted-context tenant matching is implemented
-- Production JWT authentication and RLS tenant policies remain pending
+- JWT tenant comes from verified app_metadata; RLS policies apply on tenant-scoped tables
 
 Error Mapping:
 - 201: allocation calculated and persisted

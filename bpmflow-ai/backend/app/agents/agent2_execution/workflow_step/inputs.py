@@ -76,12 +76,25 @@ def build_tool_parameters(
     }
     action = (step.required_action or "").strip().upper()
     if action == "CREATE_PURCHASE_ORDER":
+        vendor_id = purchase.vendor_id
+        if vendor_id in (None, "") and purchase.vendor_name and context.tenant_id is not None:
+            try:
+                from app.procurement.exceptions import VendorNotFoundError
+                from app.procurement.service import get_procurement
+
+                vendor_id = str(
+                    get_procurement().resolve_vendor(
+                        tenant_id=context.tenant_id, vendor_ref=str(purchase.vendor_name)
+                    ).vendor_id
+                )
+            except VendorNotFoundError:
+                vendor_id = None
         missing = [
             name
             for name, value in (
                 ("purchase.amount", purchase.amount),
                 ("purchase.currency", purchase.currency),
-                ("purchase.vendor_id", purchase.vendor_id),
+                ("purchase.vendor_id", vendor_id),
             )
             if value in (None, "")
         ]
@@ -91,7 +104,7 @@ def build_tool_parameters(
             )
         params["amount"] = float(purchase.amount)
         params["currency"] = str(purchase.currency).strip().upper()
-        params["vendor_id"] = str(purchase.vendor_id)
+        params["vendor_id"] = str(vendor_id)
         params["items_summary"] = purchase.description or ""
         params["notes"] = f"workflow_step:{step.step_key}"
         if context.budget.available_amount is not None:
@@ -101,7 +114,15 @@ def build_tool_parameters(
                 {
                     "description": item.description or purchase.description or "Purchase request item",
                     "quantity": float(item.quantity or 1),
-                    "unit_price": float(item.unit_amount or purchase.amount),
+                    "unit_price": float(
+                        item.unit_amount
+                        if item.unit_amount is not None
+                        else (
+                            purchase.amount / (item.quantity or 1)
+                            if purchase.amount is not None and (item.quantity or 1)
+                            else purchase.amount
+                        )
+                    ),
                 }
                 for item in purchase.items
             ]

@@ -7,19 +7,39 @@ type NavItem = { to: string; label: string; end?: boolean; roles?: Array<'reques
 const PRIMARY_NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/processes', label: 'Processes' },
+  { to: '/discover', label: 'Discovery' },
   { to: '/tasks', label: 'My Tasks', roles: ['requester', 'admin'] },
+]
+
+const GOVERNANCE_NAV: NavItem[] = [
   { to: '/approvals', label: 'Approvals', roles: ['approver', 'admin'] },
+  { to: '/exceptions', label: 'Exceptions' },
   { to: '/policies', label: 'Company Policies', roles: ['admin'] },
-  { to: '/agent3/allocations/new', label: 'Resources', roles: ['requester', 'approver', 'admin'] },
   { to: '/audit', label: 'Audit Trail' },
 ]
 
+const OPERATIONS_NAV: NavItem[] = [
+  { to: '/monitoring', label: 'Monitoring' },
+  { to: '/recommendations', label: 'TO-BE Recommendations' },
+]
+
+const PROCUREMENT_NAV: NavItem[] = [
+  { to: '/vendors', label: 'Vendors' },
+  { to: '/quotations', label: 'Quotations' },
+  { to: '/purchase-orders', label: 'Purchase Orders' },
+  { to: '/invoices', label: 'Invoices' },
+]
+
+const ADMINISTRATION_NAV: NavItem[] = [
+  { to: '/directory', label: 'Company Directory' },
+  { to: '/tools', label: 'Tool Registry' },
+  { to: '/admin/system', label: 'System Health', roles: ['admin'] },
+]
+
 const AGENT2_NAV: NavItem[] = [
-  { to: '/agent2', label: 'Execution dashboard', end: true },
-  { to: '/agent2/tools', label: 'Tools & actions' },
+  { to: '/agent2', label: 'Execution telemetry', end: true },
   { to: '/agent2/receipts', label: 'Execution history' },
-  { to: '/agent2/kpis', label: 'KPI analysis' },
-  { to: '/agent2/recommendations', label: 'Optimizations' },
+  { to: '/agent2/kpis', label: 'Agent 2 KPIs' },
 ]
 
 const SECONDARY_NAV: NavItem[] = [{ to: '/settings', label: 'Settings' }]
@@ -27,6 +47,7 @@ const SECONDARY_NAV: NavItem[] = [{ to: '/settings', label: 'Settings' }]
 const PAGE_TITLES: Array<{ match: RegExp; title: string }> = [
   { match: /^\/$/, title: 'Dashboard' },
   { match: /^\/processes\/new/, title: 'Create Process' },
+  { match: /^\/processes\/[^/]+\/monitoring/, title: 'Process monitoring' },
   { match: /^\/processes\/[^/]+/, title: 'Process detail' },
   { match: /^\/processes/, title: 'Processes' },
   { match: /^\/workflows\/[^/]+/, title: 'Process detail' },
@@ -34,17 +55,37 @@ const PAGE_TITLES: Array<{ match: RegExp; title: string }> = [
   { match: /^\/tasks/, title: 'My Tasks' },
   { match: /^\/approvals\/[^/]+/, title: 'Approval detail' },
   { match: /^\/approvals/, title: 'Approvals' },
-  { match: /^\/audit/, title: 'Audit Trail' },
+  { match: /^\/vendors\/[^/]+/, title: 'Vendor' },
+  { match: /^\/vendors/, title: 'Vendors' },
+  { match: /^\/quotations/, title: 'Quotations' },
+  { match: /^\/purchase-orders\/[^/]+/, title: 'Purchase order' },
+  { match: /^\/purchase-orders/, title: 'Purchase orders' },
+  { match: /^\/invoices\/[^/]+/, title: 'Invoice' },
+  { match: /^\/invoices/, title: 'Invoices' },
+  { match: /^\/exceptions\/[^/]+/, title: 'Exception' },
+  { match: /^\/exceptions/, title: 'Exceptions' },
+  { match: /^\/monitoring/, title: 'Monitoring' },
+  { match: /^\/recommendations\/[^/]+/, title: 'TO-BE recommendation' },
+  { match: /^\/recommendations/, title: 'TO-BE recommendations' },
+  { match: /^\/directory\/employees\/[^/]+/, title: 'Employee' },
+  { match: /^\/directory\/employees/, title: 'Employees' },
+  { match: /^\/directory\/departments/, title: 'Departments' },
+  { match: /^\/directory\/authorities/, title: 'Approval authorities' },
+  { match: /^\/directory/, title: 'Company Directory' },
+  { match: /^\/tools\/[^/]+/, title: 'Tool' },
+  { match: /^\/tools/, title: 'Tool Registry' },
+  { match: /^\/admin\/system/, title: 'System health' },
   { match: /^\/policies/, title: 'Company Policies' },
   { match: /^\/settings/, title: 'Settings' },
   { match: /^\/sign-in/, title: 'Sign in' },
   { match: /^\/sign-up/, title: 'Sign up' },
   { match: /^\/discover/, title: 'Process Discovery' },
+  { match: /^\/discovery/, title: 'Process Discovery' },
   { match: /^\/agent2\/tools/, title: 'Agent 2 tools' },
   { match: /^\/agent2\/executions/, title: 'Execution detail' },
   { match: /^\/agent2\/kpis/, title: 'Process KPIs' },
   { match: /^\/agent2\/receipts/, title: 'Execution history' },
-  { match: /^\/agent2\/recommendations/, title: 'Optimizations' },
+  { match: /^\/agent2\/recommendations/, title: 'Agent 2 Optimization Recommendations' },
   { match: /^\/agent2\/?$/, title: 'Agent 2 dashboard' },
   { match: /^\/agent3\/allocations/, title: 'Resource Planning' },
   { match: /^\/agent3\/recommendations/, title: 'Resource Recommendations' },
@@ -100,9 +141,11 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
 function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const { user, session, signOut } = useAuth()
   const role = (user?.role || '').toLowerCase()
-  const primaryItems = PRIMARY_NAV.filter(
-    (item) => !item.roles || (role && item.roles.includes(role as 'requester' | 'approver' | 'admin')),
-  )
+  const visible = (items: NavItem[]) =>
+    items.filter((item) => !item.roles || (role && item.roles.includes(role as 'requester' | 'approver' | 'admin')))
+  const primaryItems = visible(PRIMARY_NAV)
+  const governanceItems = visible(GOVERNANCE_NAV)
+  const adminItems = visible(ADMINISTRATION_NAV)
 
   return (
     <div className="flex h-full flex-col bg-base-100">
@@ -127,7 +170,83 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
 
         <div>
           <p className="mx-3 mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/45">
-            Agent 2
+            Governance
+          </p>
+          <div className="space-y-0.5">
+            {governanceItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={navClassName}
+                onClick={onNavigate}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="mx-3 mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/45">
+            Procurement
+          </p>
+          <div className="space-y-0.5">
+            {PROCUREMENT_NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={navClassName}
+                onClick={onNavigate}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="mx-3 mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/45">
+            Operations
+          </p>
+          <div className="space-y-0.5">
+            {OPERATIONS_NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={navClassName}
+                onClick={onNavigate}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="mx-3 mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/45">
+            Administration
+          </p>
+          <div className="space-y-0.5">
+            {adminItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={navClassName}
+                onClick={onNavigate}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="mx-3 mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-base-content/45">
+            Agent 2 telemetry
           </p>
           <div className="space-y-0.5">
             {AGENT2_NAV.map((item) => (
@@ -225,22 +344,6 @@ function TopHeader({
         </div>
 
         <div className="flex items-center gap-1 sm:gap-2">
-          <button
-            type="button"
-            className="btn btn-ghost btn-square btn-sm"
-            aria-label="Notifications"
-            title="Notifications"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.75}
-                d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2c0 .5-.2 1-.6 1.4L4 17h5m6 0a3 3 0 11-6 0"
-              />
-            </svg>
-          </button>
-
           <div className="dropdown dropdown-end">
             <div
               tabIndex={0}
